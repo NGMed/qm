@@ -305,7 +305,7 @@
         <span class="tag emerald">Vapi</span>
         <span class="tag emerald">Deepgram nova-2</span>
         <span class="tag emerald">ElevenLabs</span>
-        <span class="tag emerald">Claude Haiku · Sonnet 4.6 · Opus 4.7</span>
+        <span class="tag emerald">Claude Haiku 4.5 · Sonnet 4.6 · Opus 4.7</span>
         <span class="tag emerald">Voyage voyage-3</span>
         <span class="tag amber">Vercel · Next.js</span>
         <span class="tag violet">Supabase + pgvector</span>
@@ -533,7 +533,7 @@
           <text x="60" y="1135" fill="#a78bfa" font-size="11" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">05</text>
 
           <rect x="140" y="1040" width="1020" height="190" rx="12" fill="rgba(76, 29, 149, 0.1)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
-          <text x="160" y="1062" fill="#a78bfa" font-size="11" font-weight="700" font-family="'JetBrains Mono', monospace">Stage 05 · Estimation Engine — Claude Opus 4.7 · generateText + tools · maxSteps:10</text>
+          <text x="160" y="1062" fill="#a78bfa" font-size="11" font-weight="700" font-family="'JetBrains Mono', monospace">Stage 05 · Estimation Engine — Claude Opus 4.7 · generateText + tools · stopWhen: stepCountIs(10)</text>
           <text x="160" y="1076" fill="#94a3b8" font-size="9" font-family="'JetBrains Mono', monospace">LLM reasoning + deterministic tool execution. Opus never invents prices — every line item comes from a tool result.</text>
 
           <!-- Opus -->
@@ -565,7 +565,7 @@
           <rect x="408" y="1190" width="200" height="32" rx="4" fill="#0f172a"/>
           <rect x="408" y="1190" width="200" height="32" rx="4" fill="rgba(6, 78, 59, 0.3)" stroke="#34d399" stroke-width="1.2"/>
           <text x="508" y="1205" fill="white" font-size="10" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">flag_inspection_needed()</text>
-          <text x="508" y="1217" fill="#94a3b8" font-size="8" text-anchor="middle">switchboard · EV · faults</text>
+          <text x="508" y="1217" fill="#94a3b8" font-size="8" text-anchor="middle">switchboard · EV · faults · reno</text>
 
           <!-- Lookup tables (vertical stack) -->
           <rect x="638" y="1085" width="220" height="32" rx="4" fill="#0f172a"/>
@@ -905,7 +905,7 @@
           <rect x="600" y="65" width="160" height="50" rx="6" fill="#0f172a"/>
           <rect x="600" y="65" width="160" height="50" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
           <text x="680" y="86" fill="white" font-size="11" font-weight="700" text-anchor="middle">code node (anyway)</text>
-          <text x="680" y="102" fill="#fda4af" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">tools + maxSteps</text>
+          <text x="680" y="102" fill="#fda4af" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">tools + stopWhen</text>
 
           <line x1="760" y1="90" x2="800" y2="90" stroke="#fb7185" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#arrow3-rose)"/>
 
@@ -941,7 +941,7 @@
           <rect x="560" y="200" width="280" height="50" rx="6" fill="#0f172a"/>
           <rect x="560" y="200" width="280" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
           <text x="700" y="221" fill="white" font-size="11" font-weight="700" text-anchor="middle">Vercel route · Opus generateText + tools</text>
-          <text x="700" y="237" fill="#34d399" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">maxSteps:10 · LLM picks tool order</text>
+          <text x="700" y="237" fill="#34d399" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">stopWhen: stepCountIs(10) · LLM picks tool order</text>
 
           <line x1="840" y1="225" x2="900" y2="225" stroke="#34d399" stroke-width="2" marker-end="url(#arrow3)"/>
 
@@ -973,8 +973,8 @@
         <div class="n8n-card">
           <div class="n8n-card-num">REASON · 03</div>
           <h3>Stage 05 needs LLM tool agency.</h3>
-          <p><code>generateText({ tools, maxSteps: 10 })</code> lets Opus choose which of four tools to call, in which order, based on what the prior tool returned. n8n can chain HTTP calls in a fixed graph, but it <strong>cannot give the LLM agency to pick the next tool mid-loop</strong>. That agency is the whole architectural point — money-touching steps must be tool-calls, never free text.</p>
-          <span class="n8n-card-tag">tool-use loop · maxSteps · LLM-decided routing</span>
+          <p><code>generateText({ tools, stopWhen: stepCountIs(10) })</code> lets Opus choose which of four tools to call, in which order, based on what the prior tool returned. n8n can chain HTTP calls in a fixed graph, but it <strong>cannot give the LLM agency to pick the next tool mid-loop</strong>. That agency is the whole architectural point — money-touching steps must be tool-calls, never free text.</p>
+          <span class="n8n-card-tag">tool-use loop · stopWhen · LLM-decided routing</span>
         </div>
       </div>
 

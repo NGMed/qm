@@ -299,23 +299,12 @@
 
   <section class="intro">
     <div class="container">
-
-      <div class="callout warn" style="margin-bottom: 2rem;">
-        <div class="callout-label">v3+ scope · Read before building</div>
-        <p>
-          <strong>This SOP describes the voice-first pipeline.</strong> Per <a href="strategy.md">docs/strategy.md</a> and <a href="../CLAUDE.md">CLAUDE.md</a>, the QuoteMate <strong>v1 wedge is portal-first</strong> (typed intake) — voice is deferred to the v3+ premium tier on COGS grounds. <strong>Stages 04 and 05 are stack-identical for portal and voice</strong> — only Stage 03 changes. If you're building v1, do Foundation 1 + 2 + Stages 04 and 05, replace Stage 02 (Twilio) and Stage 03 (Vapi) with a typed form that POSTs to <code>/api/intake/structure</code>, and skip <a href="architecture.html#why-no-n8n">the no-Twilio path</a> in the architecture doc.
-        </p>
-      </div>
-
       <h2>Before you start, read this once.</h2>
       <p>
-        You're going to build a phone-answering AI. By the end, a homeowner can dial a number, have a conversation with an AI receptionist, and a draft quote will appear in your database 45 seconds after they hang up. The build is split into <strong>the first 5 of 10 stages</strong> from the architecture diagram, plus two <strong>foundation blocks</strong> in between that wire the plumbing.
+        You're going to build a phone-answering AI. By the end, a homeowner can dial a number, have a conversation with an AI receptionist, and a draft quote will appear in your database 45 seconds after they hang up. The build is split into <strong>5 stages</strong> from the architecture diagram, plus two <strong>foundation blocks</strong> in between that wire the plumbing.
       </p>
       <p>
-        <strong>What's deliberately NOT in this SOP:</strong> stages 06–10 of the wireframe — confidence routing, customer Good/Better/Best portal, availability nudge, follow-up engine, job-won. See <a href="wireframe.html">wireframe.html</a> for those. Of the four QuoteMate agents (<em>Quote Drafter</em>, <em>Quote Reviewer</em>, <em>Inspection Coordinator</em>, <em>Conversion Engine</em>), only <strong>Quote Drafter</strong> is built here — the other three live in the v2/v3 stages this guide skips.
-      </p>
-      <p>
-        This guide pairs with three reference docs: <a href="architecture.html">architecture.html</a> shows the system shape; <a href="build-guide.html">build-guide.html</a> has the full code blocks; <a href="wireframe.html">wireframe.html</a> shows the full 10-stage product flow and the 4-agent decomposition. <strong>This file is the click-by-click order.</strong> Open it in one browser tab and keep building in the other.
+        This guide pairs with two reference docs: <a href="architecture.html">architecture.html</a> shows you the system shape; <a href="build-guide.html">build-guide.html</a> has the full code blocks. <strong>This file is the click-by-click order.</strong> Open it in one browser tab and keep building in the other.
       </p>
       <p>
         <strong>Important rules of thumb:</strong>
@@ -734,7 +723,7 @@ git push -u origin main</code></pre>
         <li><span class="click-title">Start ngrok</span>
           <pre><code>ngrok http 3000</code></pre>
           You'll see a screen with a "Forwarding" line like:
-          <pre><code>Forwarding   https://abc123.ngrok.app -&gt; http://localhost:3000</code></pre>
+          <pre><code>Forwarding   https://abc123.ngrok.app -> http://localhost:3000</code></pre>
         </li>
         <li><span class="click-title">Copy the https URL</span>The <code>https://abc123.ngrok.app</code> part. Paste it somewhere — you'll use it in Stage 03.</li>
         <li><span class="click-title">Leave ngrok running</span>Don't close this terminal. If you close it, the URL changes and you'll have to re-paste it into Vapi.</li>
@@ -1030,8 +1019,7 @@ $$;</code></pre>
       <ol class="clicks">
         <li><span class="click-title">Create embed.ts</span>Inside <code>lib/intake</code>, create file <span class="field">embed.ts</span>.</li>
         <li><span class="click-title">Paste the embedIntake function</span>From <a href="build-guide.html#step-7">build-guide.html step 7</a>, copy the embed block.</li>
-        <li><span class="click-title">Heads-up: this file genuinely deviates from the build-guide</span>The build-guide originally wrote <code>anthropic.embedding('voyage-3')</code>, but the <code>@ai-sdk/anthropic</code> provider has no <code>.embedding()</code> method (Anthropic doesn't sell embeddings — Voyage AI is a separate vendor they recommend). The current build-guide and the deployed <code>lib/intake/embed.ts</code> instead call Voyage's REST API directly and fall back to a deterministic 1536-dim stub when <code>VOYAGE_API_KEY</code> isn't set, so the pipeline still completes end-to-end during local testing. Read the comment block at the top of <code>lib/intake/embed.ts</code> for the full deviation rationale.</li>
-        <li><span class="click-title">Voyage vs OpenAI</span>If you'd prefer to use OpenAI for embeddings instead of Voyage, swap the implementation per the note at the bottom of step 7 — OpenAI's <code>text-embedding-3-small</code> outputs 1536 dims natively, so no padding is needed.</li>
+        <li><span class="click-title">Voyage vs OpenAI</span>If you'd prefer to use OpenAI for embeddings instead of Voyage, swap the model line per the note at the bottom of step 7. Otherwise leave it as voyage-3.</li>
       </ol>
 
       <h3>S4.4 — Build the API route</h3>
@@ -1077,7 +1065,7 @@ $$;</code></pre>
       <ol class="clicks">
         <li><span class="click-title">Create the folder</span>Inside <code>lib</code>, create folder <span class="field">estimate</span>.</li>
         <li><span class="click-title">Create tools.ts</span>Inside <code>lib/estimate</code>, create file <span class="field">tools.ts</span>.</li>
-        <li><span class="click-title">Paste the four tools</span>From <a href="build-guide.html#step-8">build-guide.html step 8</a>, copy the block that defines <code>lookupAssembly</code>, <code>lookupMaterial</code>, <code>applyMarkup</code>, <code>flagInspectionNeeded</code>. Each tool uses <code>inputSchema:</code> (AI SDK v5 rename of the older <code>parameters:</code>) — if you find a copy of the snippet that says <code>parameters: z.object(...)</code> it's stale and won't compile.</li>
+        <li><span class="click-title">Paste the four tools</span>From <a href="build-guide.html#step-8">build-guide.html step 8</a>, copy the block that defines <code>lookupAssembly</code>, <code>lookupMaterial</code>, <code>applyMarkup</code>, <code>flagInspectionNeeded</code>.</li>
         <li><span class="click-title">Save</span></li>
       </ol>
 
@@ -1091,7 +1079,7 @@ $$;</code></pre>
       <h3>S5.3 — Create the runner</h3>
       <ol class="clicks">
         <li><span class="click-title">Create run.ts</span>Inside <code>lib/estimate</code>, create file <span class="field">run.ts</span>.</li>
-        <li><span class="click-title">Paste the runEstimation function</span>From <a href="build-guide.html#step-8">build-guide.html step 8</a>, copy the runner block. The key part is <code>generateText({ ..., tools, stopWhen: stepCountIs(10) })</code> — that's what gives Claude the agency to call tools in a loop. <strong>Two AI SDK v5+ details to be aware of:</strong> (1) the import is <code>import { generateText, stepCountIs } from 'ai'</code> — older docs may show <code>maxSteps: 10</code>, which was renamed in v5 (the default is <code>stepCountIs(1)</code>, so without this Opus would never enter the tool loop); (2) the deployed runner contains a <code>parseJsonFromText</code> helper that finds the first balanced <code>{ ... }</code> block in Opus's response — Opus often prefixes its JSON with reasoning prose like <em>"Calculation: …"</em>, which a naive <code>JSON.parse(result.text)</code> would choke on.</li>
+        <li><span class="click-title">Paste the runEstimation function</span>From <a href="build-guide.html#step-8">build-guide.html step 8</a>, copy the runner block. The key part is <code>generateText({ ..., tools, maxSteps: 10 })</code> — that's what gives Claude the agency to call tools in a loop.</li>
         <li><span class="click-title">Save</span></li>
       </ol>
 
@@ -1222,7 +1210,7 @@ $$;</code></pre>
       <ul>
         <li>Tools returned empty (your seeded library is too sparse — Opus called <code>flag_inspection_needed</code> instead). For testing, use the seeded "easy 5" job types.</li>
         <li>Opus output was malformed JSON. Check the dev-server logs for parse errors. Switch from <code>generateText</code> to <code>generateObject</code> with a Zod schema if it's persistent.</li>
-        <li><code>stopWhen: stepCountIs(10)</code> exhausted — Opus tried more than 10 tool calls. Either increase the limit or simplify the prompt.</li>
+        <li><code>maxSteps: 10</code> exhausted — Opus tried more than 10 tool calls. Either increase the limit or simplify the prompt.</li>
       </ul>
 
       <h3>GST math looks wrong (everything off by 10%)</h3>

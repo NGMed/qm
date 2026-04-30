@@ -589,6 +589,17 @@
   <!-- ═══════════════ INTRO ═══════════════ -->
   <section class="intro">
     <div class="container">
+
+      <div class="callout warn" style="margin-bottom: 2rem;">
+        <div class="callout-label">v3+ scope · Read before building</div>
+        <p>
+          <strong>This guide describes the voice-first pipeline.</strong> Per <a href="strategy.md">docs/strategy.md</a> and <a href="../CLAUDE.md">CLAUDE.md</a>, the QuoteMate <strong>v1 wedge is portal-first</strong> (typed intake on a webpage) — voice is deferred to the v3+ premium tier on COGS grounds (~$0.50–0.75 per call vs ~$0.07 for typed). The good news: <strong>Stages 04 (Intake Engine) and 05 (Estimation Engine) are stack-identical for portal and voice</strong> — the only thing that changes is Stage 03. Build the engines first; plug Vapi in front later when voice unit economics make sense.
+        </p>
+        <p style="margin-top: 0.6rem;">
+          <strong>If you're building v1 right now,</strong> follow Foundation 1 + 2 + Stages 04 and 05 in this guide, but skip Stage 02 (Twilio) and Stage 03 (Vapi). Replace them with a typed-intake form that POSTs to <code>/api/intake/structure</code> directly. See the <a href="architecture.html">architecture diagram</a> for the portal-vs-voice path comparison.
+        </p>
+      </div>
+
       <h2>What we're building, in one paragraph.</h2>
       <p>
         A homeowner picks up the phone and calls a tradie's QuoteMate-provisioned number. <strong>An AI receptionist answers.</strong> It has a natural conversation: "What kind of job?" → "Where?" → "When?" → asks for photos via SMS if helpful. The conversation ends. A second AI <strong>structures everything that was said</strong> into clean fields — measurements, scope, risks, confidence score. A third AI <strong>looks up assemblies and prices</strong> and writes a draft quote with line items and exclusions.
@@ -654,12 +665,12 @@
       <header class="step-header">
         <div class="step-num">Strategy · <strong>What to scope first</strong></div>
         <h2 class="step-title">Pilot scope — auto-quote vs inspection-only.</h2>
-        <p class="step-summary">v1 ships against <strong>5 bounded electrical job types</strong> where photos + structured intake are sufficient to draft a quote. The other 4 always trigger a paid site inspection — they're safety-critical or load-dependent and cannot be auto-quoted.</p>
+        <p class="step-summary">The pilot ships against <strong>5 bounded electrical job types</strong> where photos + structured intake are sufficient to draft a quote (the "easy 5"). The other 5 always trigger a paid site inspection — they're safety-critical or load-dependent and cannot be auto-quoted (the "hard 5"). This split applies to both v1 (portal-typed intake) and v3+ (voice receptionist) — only the front-end channel changes; the routing rules are identical.</p>
       </header>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 2rem 0;">
         <div style="padding: 1.5rem; border: 1px solid #d1fae5; border-left: 4px solid #16a34a; background: #f0fdf4; border-radius: 4px;">
-          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: #16a34a; font-weight: 700; margin-bottom: 0.75rem;">v1 · Auto-quote candidates</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: #16a34a; font-weight: 700; margin-bottom: 0.75rem;">Auto-quote candidates · easy 5</div>
           <ol style="margin-left: 1.25rem; line-height: 1.8;">
             <li>Downlights / lighting</li>
             <li>Power points (GPOs)</li>
@@ -671,15 +682,15 @@
         </div>
 
         <div style="padding: 1.5rem; border: 1px solid #fee2e2; border-left: 4px solid #dc2626; background: #fef2f2; border-radius: 4px;">
-          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: #dc2626; font-weight: 700; margin-bottom: 0.75rem;">v1 · Inspection-only routes</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: #dc2626; font-weight: 700; margin-bottom: 0.75rem;">Inspection-only routes · hard 5</div>
           <ol style="margin-left: 1.25rem; line-height: 1.8;">
             <li>Switchboard work</li>
             <li>Fault finding</li>
             <li>EV chargers</li>
-            <li>Underground cabling</li>
+            <li>Underground cabling <em style="font-size: 0.85em; color: #991b1b; opacity: 0.7;">(classified as <code>renovation</code> in the schema)</em></li>
             <li>Complex renovations (multi-trade / mains)</li>
           </ol>
-          <p style="font-size: 0.85rem; color: #991b1b; margin-top: 1rem; line-height: 1.55;">Hidden state can't be photographed. Surface as indicative range only and trigger the $199 paid site visit.</p>
+          <p style="font-size: 0.85rem; color: #991b1b; margin-top: 1rem; line-height: 1.55;">Hidden state can't be photographed. Surface as indicative range only and trigger the $199 paid site visit. Note: the <code>job_type</code> Zod enum has 11 values; underground cabling is folded into <code>renovation</code> at classification time, then surfaces with its own risk flag at intake.</p>
         </div>
       </div>
 
@@ -1245,7 +1256,7 @@ $$;</code></pre>
           <ul>
             <li><strong>Transcriber:</strong> Deepgram (model <code>nova-2</code>, language <code>en-AU</code>)</li>
             <li><strong>Voice:</strong> ElevenLabs — pick an Australian or neutral English voice. Test it.</li>
-            <li><strong>Model:</strong> Anthropic Claude Haiku (fast and cheap, perfect for the live conversation loop)</li>
+            <li><strong>Model:</strong> Anthropic Claude Haiku 4.5 (the live-conversation model — fast and cheap; in Vapi's dashboard pick the option whose full ID is <code>claude-haiku-4-5-20251001</code>)</li>
             <li><strong>First message:</strong> "G'day, you've reached [electrician/business name]'s quoting line. I'm an AI assistant — I can take down all the details for your electrical job and have a quote sent through. This call may be recorded for quality and quote-drafting purposes. Sound good?"</li>
           </ul>
         </li>
@@ -1474,21 +1485,27 @@ final pricing."
 <span class="k">export async function</span> <span class="v">POST</span>(req: Request) {
   <span class="k">const</span> payload = <span class="k">await</span> req.json()
 
-  <span class="c">// Vapi sends an event with type 'end-of-call-report'</span>
+  <span class="c">// Vapi sends many event types — status-update, transcript, function-call,</span>
+  <span class="c">// hang, end-of-call-report. We only act on end-of-call-report.</span>
   <span class="k">if</span> (payload.message?.type !== <span class="s">'end-of-call-report'</span>) {
-    <span class="k">return</span> Response.json({ ok: <span class="k">true</span> })
+    <span class="k">return</span> Response.json({ ok: <span class="k">true</span>, ignored: payload.message?.type })
   }
 
   <span class="k">const</span> call = payload.message.call
+  <span class="k">if</span> (!call?.id) {
+    console.error(<span class="s">'[vapi/webhook] end-of-call-report had no call.id'</span>, payload.message)
+    <span class="k">return</span> Response.json({ ok: <span class="k">false</span>, error: <span class="s">'missing call.id'</span> }, { status: 400 })
+  }
 
-  <span class="c">// Vapi sends durationSeconds as a float (e.g. 32.053). Our duration_seconds</span>
-  <span class="c">// column is `int`, so round before inserting. Also use upsert (not insert)</span>
-  <span class="c">// so Vapi retrying the same end-of-call event is idempotent.</span>
+  <span class="c">// Vapi sends durationSeconds as a float (e.g. 32.053). Our `duration_seconds`</span>
+  <span class="c">// column is `int`, so round before inserting.</span>
   <span class="k">const</span> durationSeconds =
     <span class="k">typeof</span> payload.message.durationSeconds === <span class="s">'number'</span>
       ? Math.round(payload.message.durationSeconds)
       : <span class="k">null</span>
 
+  <span class="c">// Upsert (not insert) so Vapi retrying the same end-of-call event is idempotent.</span>
+  <span class="c">// The unique constraint on vapi_call_id otherwise fires on retry → null callRow.</span>
   <span class="k">const</span> { data: callRow, error } = <span class="k">await</span> supabase
     .from(<span class="s">'calls'</span>)
     .upsert(
@@ -1506,17 +1523,31 @@ final pricing."
     .single()
 
   <span class="k">if</span> (error || !callRow) {
-    console.error(<span class="s">'[vapi/webhook] failed to upsert call row:'</span>, error)
-    <span class="k">return</span> Response.json({ ok: <span class="k">false</span>, error: error?.message }, { status: 500 })
+    console.error(<span class="s">'[vapi/webhook] failed to upsert call row:'</span>, {
+      message: error?.message,
+      code: error?.code,
+      details: error?.details,
+      hint: error?.hint,
+      vapi_call_id: call.id,
+    })
+    <span class="k">return</span> Response.json(
+      { ok: <span class="k">false</span>, error: error?.message ?? <span class="s">'upsert returned no row'</span> },
+      { status: 500 }
+    )
   }
 
-  <span class="c">// Kick off Stage 04 — the Intake Engine — without blocking Vapi's webhook</span>
+  <span class="c">// Fire-and-forget hand-off to the Intake Engine. Don't await — Vapi expects</span>
+  <span class="c">// a fast response from the webhook, and a slow downstream call shouldn't</span>
+  <span class="c">// make Vapi mark the webhook as failed.</span>
   fetch(<span class="s">`${process.env.APP_URL}/api/intake/structure`</span>, {
     method: <span class="s">'POST'</span>,
-    body: JSON.stringify({ callId: callRow!.id }),
+    headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
+    body: JSON.stringify({ callId: callRow.id }),
+  }).catch((e) =&gt; {
+    console.error(<span class="s">'[vapi/webhook] failed to dispatch intake/structure:'</span>, e)
   })
 
-  <span class="k">return</span> Response.json({ ok: <span class="k">true</span> })
+  <span class="k">return</span> Response.json({ ok: <span class="k">true</span>, callId: callRow.id })
 }</code></pre>
         </li>
         <li>
@@ -1656,19 +1687,54 @@ or switchboard work.`</span>,
         <li>
           <span class="instr-title">Build the embedding helper for pgvector</span>
           Create <code>lib/intake/embed.ts</code>:
-          <pre><code><span class="k">import</span> { anthropic } <span class="k">from</span> <span class="s">'@ai-sdk/anthropic'</span>
-<span class="k">import</span> { embed } <span class="k">from</span> <span class="s">'ai'</span>
+          <pre><code><span class="c">// Embeds the structured intake into a 1536-dim vector for pgvector.</span>
+<span class="c">// Note: the @ai-sdk/anthropic provider has no .embedding() method —</span>
+<span class="c">// Voyage AI is a separate vendor Anthropic recommends. Voyage's voyage-3</span>
+<span class="c">// outputs 1024 dims, so we pad/truncate to fit our vector(1536) column.</span>
 <span class="k">import</span> <span class="k">type</span> { <span class="v">Intake</span> } <span class="k">from</span> <span class="s">'./schema'</span>
+
+<span class="k">const</span> <span class="v">VOYAGE_API_KEY</span> = process.env.<span class="v">VOYAGE_API_KEY</span>
+<span class="k">const</span> <span class="v">TARGET_DIM</span> = 1536
 
 <span class="k">export async function</span> <span class="v">embedIntake</span>(intake: <span class="v">Intake</span>) {
   <span class="k">const</span> summary = <span class="s">`${intake.job_type} count=${intake.scope.item_count ?? '?'} new=${intake.scope.is_new_install ?? '?'} ${intake.scope.indoor_outdoor ?? ''} ${intake.risks.join(' ')}`</span>
-  <span class="k">const</span> { embedding } = <span class="k">await</span> embed({
-    model: anthropic.embedding(<span class="s">'voyage-3'</span>),
-    value: summary,
+
+  <span class="k">if</span> (!<span class="v">VOYAGE_API_KEY</span>) <span class="k">return</span> stubEmbedding(summary)
+
+  <span class="k">const</span> res = <span class="k">await</span> fetch(<span class="s">'https://api.voyageai.com/v1/embeddings'</span>, {
+    method: <span class="s">'POST'</span>,
+    headers: { Authorization: <span class="s">`Bearer ${VOYAGE_API_KEY}`</span>, <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
+    body: JSON.stringify({ input: [summary], model: <span class="s">'voyage-3'</span> }),
   })
-  <span class="k">return</span> embedding
+  <span class="k">if</span> (!res.ok) <span class="k">return</span> stubEmbedding(summary)
+  <span class="k">const</span> data = <span class="k">await</span> res.json()
+  <span class="k">return</span> resizeToTargetDim(data.data?.[0]?.embedding ?? [])
+}
+
+<span class="k">function</span> <span class="v">resizeToTargetDim</span>(v: number[]): number[] {
+  <span class="k">if</span> (v.length === <span class="v">TARGET_DIM</span>) <span class="k">return</span> v
+  <span class="k">if</span> (v.length &gt; <span class="v">TARGET_DIM</span>) <span class="k">return</span> v.slice(0, <span class="v">TARGET_DIM</span>)
+  <span class="k">return</span> [...v, ...<span class="k">new</span> Array(<span class="v">TARGET_DIM</span> - v.length).fill(0)]
+}
+
+<span class="c">// Deterministic per-summary 1536-dim vector — not semantic, but stable.</span>
+<span class="c">// Replace with real embeddings when you set VOYAGE_API_KEY or wire OpenAI.</span>
+<span class="k">function</span> <span class="v">stubEmbedding</span>(text: string): number[] {
+  <span class="k">let</span> h = 2166136261 &gt;&gt;&gt; 0
+  <span class="k">for</span> (<span class="k">let</span> i = 0; i &lt; text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619) &gt;&gt;&gt; 0
+  }
+  <span class="k">const</span> out = <span class="k">new</span> Array(<span class="v">TARGET_DIM</span>)
+  <span class="k">for</span> (<span class="k">let</span> i = 0; i &lt; <span class="v">TARGET_DIM</span>; i++) {
+    h ^= h &lt;&lt; 13; h &gt;&gt;&gt;= 0
+    h ^= h &gt;&gt; 17; h &gt;&gt;&gt;= 0
+    h ^= h &lt;&lt; 5;  h &gt;&gt;&gt;= 0
+    out[i] = (h / 0xffffffff) * 2 - 1
+  }
+  <span class="k">return</span> out
 }</code></pre>
-          <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--muted);">Note: Anthropic recommends Voyage AI for embeddings. If you'd rather, OpenAI's <code>text-embedding-3-small</code> works fine too — just swap the model line.</p>
+          <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--muted);">Embedding vendor: <strong>Voyage AI</strong> (Anthropic's recommended embeddings provider — they're a separate vendor; <code>@ai-sdk/anthropic</code> has no <code>.embedding()</code> method despite what older docs may say). The stub fallback runs when <code>VOYAGE_API_KEY</code> isn't set so the pipeline still completes end-to-end during local testing — just don't expect <code>match_intakes()</code> similarity search to return useful results until you sign up for a real key. <strong>OpenAI alternative:</strong> <code>pnpm add @ai-sdk/openai</code>, then swap the fetch block for <code>openai.embedding('text-embedding-3-small')</code> via the AI SDK's <code>embed()</code> helper — that model natively outputs 1536 dims so no resize needed.</p>
         </li>
         <li>
           <span class="instr-title">Build the API route that ties it together</span>
@@ -1773,7 +1839,7 @@ or switchboard work.`</span>,
 
 <span class="k">export const</span> <span class="v">lookupAssembly</span> = tool({
   description: <span class="s">'Search the electrical assembly library (e.g. "install LED downlight", "replace double GPO", "hardwire smoke alarm")'</span>,
-  parameters: z.object({ query: z.string() }),
+  inputSchema: z.object({ query: z.string() }),
   execute: <span class="k">async</span> ({ query }) =&gt; {
     <span class="k">const</span> { data } = <span class="k">await</span> supabase
       .from(<span class="s">'shared_assemblies'</span>)
@@ -1786,7 +1852,7 @@ or switchboard work.`</span>,
 
 <span class="k">export const</span> <span class="v">lookupMaterial</span> = tool({
   description: <span class="s">'Search electrical materials (downlights, GPOs, smoke alarms, ceiling fans, RCBOs, cabling, sundries) by name or brand'</span>,
-  parameters: z.object({ query: z.string() }),
+  inputSchema: z.object({ query: z.string() }),
   execute: <span class="k">async</span> ({ query }) =&gt; {
     <span class="k">const</span> { data } = <span class="k">await</span> supabase
       .from(<span class="s">'shared_materials'</span>)
@@ -1799,7 +1865,7 @@ or switchboard work.`</span>,
 
 <span class="k">export const</span> <span class="v">applyMarkup</span> = tool({
   description: <span class="s">'Apply the tradie\'s markup percentage to a base material price. Always pass markupPct explicitly using pricingBook.default_markup_pct (default falls back to 28% — the AU electrical median — only as a safety net).'</span>,
-  parameters: z.object({ basePrice: z.number(), markupPct: z.number().optional() }),
+  inputSchema: z.object({ basePrice: z.number(), markupPct: z.number().optional() }),
   execute: <span class="k">async</span> ({ basePrice, markupPct }) =&gt; {
     <span class="k">const</span> pct = markupPct ?? 28                                <span class="c">// matches pricing_book default</span>
     <span class="k">return</span> { final: +(basePrice * (1 + pct / 100)).toFixed(2), markupPct: pct }
@@ -1808,7 +1874,7 @@ or switchboard work.`</span>,
 
 <span class="k">export const</span> <span class="v">flagInspectionNeeded</span> = tool({
   description: <span class="s">'Flag that this job is too complex to quote without a site visit'</span>,
-  parameters: z.object({ reason: z.string() }),
+  inputSchema: z.object({ reason: z.string() }),
   execute: <span class="k">async</span> ({ reason }) =&gt; ({ flagged: <span class="k">true</span>, reason }),
 })</code></pre>
         </li>
@@ -2037,7 +2103,7 @@ CONSISTENCY CHECK BEFORE EMITTING
           <span class="instr-title">Build the agent runner</span>
           Create <code>lib/estimate/run.ts</code>:
           <pre><code><span class="k">import</span> { anthropic } <span class="k">from</span> <span class="s">'@ai-sdk/anthropic'</span>
-<span class="k">import</span> { generateText } <span class="k">from</span> <span class="s">'ai'</span>
+<span class="k">import</span> { generateText, stepCountIs } <span class="k">from</span> <span class="s">'ai'</span>
 <span class="k">import</span> { systemPrompt } <span class="k">from</span> <span class="s">'./prompt'</span>
 <span class="k">import</span> * <span class="k">as</span> tools <span class="k">from</span> <span class="s">'./tools'</span>
 
@@ -2047,11 +2113,40 @@ CONSISTENCY CHECK BEFORE EMITTING
     system: systemPrompt(pricingBook),
     prompt: <span class="s">`Draft a quote for this intake:\n\n${JSON.stringify(intake, null, 2)}`</span>,
     tools,
-    maxSteps: 10,
+    stopWhen: stepCountIs(10),
   })
-  <span class="k">return</span> JSON.parse(result.text)
+  <span class="k">return</span> parseJsonFromText(result.text)
+}
+
+<span class="c">// Opus often prefixes its JSON with reasoning text or wraps it in</span>
+<span class="c">// ```json fences. Find and parse the first balanced { ... } block.</span>
+<span class="k">function</span> <span class="v">parseJsonFromText</span>(text: string): <span class="k">any</span> {
+  <span class="k">const</span> direct = text.trim().replace(/^```(?:json)?\s*/i, <span class="s">''</span>).replace(/```\s*$/, <span class="s">''</span>).trim()
+  <span class="k">try</span> { <span class="k">return</span> JSON.parse(direct) } <span class="k">catch</span> {}
+
+  <span class="k">const</span> start = text.indexOf(<span class="s">'{'</span>)
+  <span class="k">if</span> (start &lt; 0) <span class="k">throw new</span> Error(<span class="s">`No JSON in Opus output: ${text.slice(0, 300)}`</span>)
+
+  <span class="k">let</span> depth = 0, inStr = <span class="k">false</span>, esc = <span class="k">false</span>
+  <span class="k">for</span> (<span class="k">let</span> i = start; i &lt; text.length; i++) {
+    <span class="k">const</span> c = text[i]
+    <span class="k">if</span> (esc) { esc = <span class="k">false</span>; <span class="k">continue</span> }
+    <span class="k">if</span> (c === <span class="s">'\\'</span>) { esc = <span class="k">true</span>; <span class="k">continue</span> }
+    <span class="k">if</span> (c === <span class="s">'"'</span>) { inStr = !inStr; <span class="k">continue</span> }
+    <span class="k">if</span> (inStr) <span class="k">continue</span>
+    <span class="k">if</span> (c === <span class="s">'{'</span>) depth++
+    <span class="k">else if</span> (c === <span class="s">'}'</span>) {
+      depth--
+      <span class="k">if</span> (depth === 0) <span class="k">return</span> JSON.parse(text.slice(start, i + 1))
+    }
+  }
+  <span class="k">throw new</span> Error(<span class="s">`Unbalanced braces in Opus output: ${text.slice(0, 300)}`</span>)
 }</code></pre>
-          <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--muted);">The <code>maxSteps: 10</code> lets Claude call multiple tools in sequence — look up an assembly, then a material, then apply markup — before writing the final answer.</p>
+          <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--muted);">The <code>stopWhen: stepCountIs(10)</code> lets Claude call multiple tools in sequence — look up an assembly, then a material, then apply markup — before writing the final answer. The default is <code>stepCountIs(1)</code>, so without this Opus would never enter the tool-use loop. The <code>parseJsonFromText</code> helper survives Opus prefixing its response with reasoning prose like <em>"Calculation: …"</em> before the JSON block — a common failure mode the build-guide originally swallowed.</p>
+          <div class="callout note">
+            <div class="callout-label">AI SDK API note</div>
+            <p>This block was updated in 2026-04 for AI SDK v5+/v6. If you're on an older AI SDK, the older API used <code>parameters:</code> on tools and <code>maxSteps: 10</code> here — both renamed in the v5 release.</p>
+          </div>
         </li>
         <li>
           <span class="instr-title">Build the API route</span>
