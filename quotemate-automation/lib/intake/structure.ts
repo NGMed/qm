@@ -4,7 +4,7 @@ import { IntakeSchema } from './schema'
 
 export async function structureIntake(transcript: string, photoUrls: string[] = []) {
   const { object } = await generateObject({
-    model: anthropic('claude-sonnet-4-6'),
+    model: anthropic('claude-opus-4-7'),
     schema: IntakeSchema,
     maxRetries: 0, // wrapper handles retries with logging — no double-retry
     system: `You extract structured intake data from electrical quoting calls.

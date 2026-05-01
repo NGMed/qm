@@ -1,3 +1,17 @@
+// Incomplete-call SMS — sent when the intake quality gate fires.
+// Triggered by `evaluateIntakeQuality(intake) === 'empty'`: caller hung up
+// before giving usable info OR the transcript was unintelligible. We send
+// a short, apologetic callback prompt INSTEAD OF the photo-request SMS
+// and the quote SMS — never both. Designed to fit in 1 GSM-7 segment.
+export function buildIncompleteCallSms(opts: { firstName?: string }): string {
+  const first = (opts.firstName ?? '').split(' ')[0] || ''
+  const greeting = first ? `Hi ${first}, ` : 'Hi, '
+  const body = `${greeting}thanks for calling QuoteMate. We didn't quite catch enough on that call to put a quote together - please give us a quick callback when you've got a moment.\n\n- QuoteMate`
+  return body
+    .replace(/[‐-―−]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
+}
+
 // Photo-request SMS — sent immediately after the call ends, in parallel
 // with the intake/estimate chain. ASCII-only, GSM-7 safe, single segment.
 export function buildPhotoRequestSms(opts: { firstName?: string; uploadUrl: string }): string {

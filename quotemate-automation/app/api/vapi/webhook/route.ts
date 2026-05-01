@@ -1,8 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { after } from 'next/server'
 import { pipelineLog } from '@/lib/log/pipeline'
-import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
-import { buildPhotoRequestSms } from '@/lib/sms/templates'
 import { generateShareToken } from '@/lib/stripe/checkout'
 
 export const maxDuration = 60
@@ -11,6 +9,12 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+// Calls with transcripts shorter than this are treated as hangups before
+// any usable content was captured — webhook returns 200 to Vapi but does
+// not dispatch the chain. Both the photo-request SMS and the quote-with-
+// pay-links SMS are suppressed in this branch.
+const MIN_TRANSCRIPT_CHARS = 50
 
 export async function POST(req: Request) {
   const log = pipelineLog('webhook')
@@ -38,10 +42,13 @@ export async function POST(req: Request) {
       ? Math.round(payload.message.durationSeconds)
       : null
 
+  const transcript = payload.message.transcript ?? null
+  const transcriptChars = transcript?.length ?? 0
+
   log.step('upserting calls row', {
     vapi_call_id: call.id,
     caller_number: call.customer?.number ?? 'null',
-    transcript_chars: payload.message.transcript?.length ?? 0,
+    transcript_chars: transcriptChars,
     duration_s: durationSeconds ?? 'null',
   })
 
@@ -54,7 +61,7 @@ export async function POST(req: Request) {
         vapi_call_id: call.id,
         caller_number: call.customer?.number ?? null,
         duration_seconds: durationSeconds,
-        transcript: payload.message.transcript ?? null,
+        transcript,
         recording_url: payload.message.recordingUrl ?? null,
         ended_at: new Date().toISOString(),
       },
@@ -73,8 +80,20 @@ export async function POST(req: Request) {
 
   log.ok('calls row upserted', { call_id: callRow.id })
 
-  // Generate a one-shot upload token + persist on the call. Used in the
-  // photo-request SMS that fires next.
+  // Early-skip gate: caller hung up before saying anything meaningful.
+  // Skip the entire chain — no SMS, no estimation, no photo prompt.
+  if (transcriptChars < MIN_TRANSCRIPT_CHARS) {
+    log.ok('transcript too short — skipping chain entirely (no SMS, no estimation)', {
+      chars: transcriptChars,
+      threshold: MIN_TRANSCRIPT_CHARS,
+    })
+    log.done('webhook handler done — chain skipped (empty call)', { call_id: callRow.id })
+    return Response.json({ ok: true, callId: callRow.id, skipped: 'transcript_too_short' })
+  }
+
+  // Generate a one-shot upload token + persist on the call. Used downstream
+  // by the photo-request SMS that fires from /api/intake/structure once the
+  // intake quality gate confirms the call had usable content.
   const photoRequestToken = generateShareToken()
   await supabase
     .from('calls')
@@ -82,32 +101,12 @@ export async function POST(req: Request) {
     .eq('id', callRow.id)
   log.ok('photo_request_token generated', { token: photoRequestToken.slice(0, 8) + '…' })
 
-  const callerNumber = call.customer?.number ?? null
-  const callerName = call.customer?.name ?? null
-
-  // Background work after the response goes back to Vapi:
-  //   (a) dispatch photo-request SMS to the caller
-  //   (b) dispatch the intake/structure → estimate/draft chain (independent of photos)
+  // Dispatch to /api/intake/structure. The intake handler now owns BOTH
+  // the photo-request SMS (suppressed when intake quality is empty) and
+  // the dispatch to /api/estimate/draft (also suppressed when empty).
+  // Webhook used to fire the photo SMS itself; that was moved to keep the
+  // gate centralised — a single decision point per call.
   after(async () => {
-    const photoLog = pipelineLog('dispatch', callRow.id)
-    photoLog.step('dispatching photo-request SMS')
-    if (!callerNumber) {
-      photoLog.err('no caller_number — skipping photo SMS', null, { call_id: callRow.id })
-    } else {
-      try {
-        const uploadUrl = `${process.env.APP_URL}/upload/${photoRequestToken}`
-        const body = buildPhotoRequestSms({ firstName: callerName ?? undefined, uploadUrl })
-        const result = await dispatchQuoteMessage({ to: callerNumber, text: body })
-        if (result.ok) {
-          photoLog.ok('photo-request SMS sent', { channel: result.channel, sid: result.sid })
-        } else {
-          photoLog.err('photo-request SMS failed', null, { sms_code: result.smsAttempt.code, wa_code: result.waAttempt?.code })
-        }
-      } catch (e) {
-        photoLog.err('photo SMS dispatch threw', e)
-      }
-    }
-
     const dispatch = pipelineLog('webhook', callRow.id)
     dispatch.step('dispatching to /api/intake/structure')
     try {
