@@ -1,3 +1,13 @@
+// Photo-request SMS — sent immediately after the call ends, in parallel
+// with the intake/estimate chain. ASCII-only, GSM-7 safe, single segment.
+export function buildPhotoRequestSms(opts: { firstName?: string; uploadUrl: string }): string {
+  const first = (opts.firstName ?? '').split(' ')[0] || 'there'
+  const body = `Hi ${first}, thanks for calling QuoteMate. Tap here to add 1-2 photos so we can finalise your quote: ${opts.uploadUrl}\n\n(Optional but helps a lot.)`
+  return body
+    .replace(/[‐-―−]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
+}
+
 // SMS body builder for the customer-facing quote dispatch.
 // Output is plain ASCII to stay in GSM-7 encoding (160 chars/segment instead
 // of 70 for UCS-2). Sanitised against em-dashes, smart quotes, ellipsis.

@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 import { after } from 'next/server'
 import { pipelineLog } from '@/lib/log/pipeline'
+import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { buildPhotoRequestSms } from '@/lib/sms/templates'
+import { generateShareToken } from '@/lib/stripe/checkout'
 
 export const maxDuration = 60
 
@@ -70,10 +73,41 @@ export async function POST(req: Request) {
 
   log.ok('calls row upserted', { call_id: callRow.id })
 
-  // Hand off to the Intake Engine after the response is sent. `after()` keeps
-  // the serverless function alive until the dispatch completes — fire-and-forget
-  // would be cancelled the moment the response returns.
+  // Generate a one-shot upload token + persist on the call. Used in the
+  // photo-request SMS that fires next.
+  const photoRequestToken = generateShareToken()
+  await supabase
+    .from('calls')
+    .update({ photo_request_token: photoRequestToken })
+    .eq('id', callRow.id)
+  log.ok('photo_request_token generated', { token: photoRequestToken.slice(0, 8) + '…' })
+
+  const callerNumber = call.customer?.number ?? null
+  const callerName = call.customer?.name ?? null
+
+  // Background work after the response goes back to Vapi:
+  //   (a) dispatch photo-request SMS to the caller
+  //   (b) dispatch the intake/structure → estimate/draft chain (independent of photos)
   after(async () => {
+    const photoLog = pipelineLog('dispatch', callRow.id)
+    photoLog.step('dispatching photo-request SMS')
+    if (!callerNumber) {
+      photoLog.err('no caller_number — skipping photo SMS', null, { call_id: callRow.id })
+    } else {
+      try {
+        const uploadUrl = `${process.env.APP_URL}/upload/${photoRequestToken}`
+        const body = buildPhotoRequestSms({ firstName: callerName ?? undefined, uploadUrl })
+        const result = await dispatchQuoteMessage({ to: callerNumber, text: body })
+        if (result.ok) {
+          photoLog.ok('photo-request SMS sent', { channel: result.channel, sid: result.sid })
+        } else {
+          photoLog.err('photo-request SMS failed', null, { sms_code: result.smsAttempt.code, wa_code: result.waAttempt?.code })
+        }
+      } catch (e) {
+        photoLog.err('photo SMS dispatch threw', e)
+      }
+    }
+
     const dispatch = pipelineLog('webhook', callRow.id)
     dispatch.step('dispatching to /api/intake/structure')
     try {
