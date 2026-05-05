@@ -55,6 +55,10 @@ type Quote = {
   needs_inspection?: boolean | null
   /** Required when needs_inspection is true. Customer-facing reason. */
   inspection_reason?: string | null
+  /** Public quote-view URL — `${APP_URL}/q/${share_token}`. When set, both
+   *  templates render a "View full quote" line near the top so the customer
+   *  can see scope, line items, risks, and CTAs in one place. */
+  quote_view_url?: string | null
 }
 
 const JOB_TYPE_LABEL: Record<string, string> = {
@@ -139,6 +143,10 @@ export function buildQuoteSms(intake: Intake, quote: Quote): string {
   lines.push('')
   lines.push(`Your QuoteMate quote for ${job}${timeframe ? ` (${timeframe})` : ''}.`)
   lines.push('')
+  if (quote.quote_view_url) {
+    lines.push(`View full quote: ${quote.quote_view_url}`)
+    lines.push('')
+  }
   if (hasPayLinks && depositPct > 0) {
     lines.push(`3 OPTIONS (inc 10% GST - ${depositPct}% deposit to confirm):`)
   } else {
@@ -200,6 +208,10 @@ function buildInspectionQuoteSms(intake: Intake, quote: Quote): string {
   lines.push('')
   lines.push(`Your QuoteMate quote for ${job} needs a quick site visit before we can give you a real price.`)
   lines.push('')
+  if (quote.quote_view_url) {
+    lines.push(`View full quote: ${quote.quote_view_url}`)
+    lines.push('')
+  }
   lines.push(`Every site is different — we can't price this safely without seeing the work in person.`)
   lines.push('')
   if (inspectionUrl) {

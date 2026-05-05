@@ -35,7 +35,7 @@ const TARGET = args.target === "local"
 
 const ENDPOINT = `${TARGET}/api/sms/inbound`;
 
-const FROM = args.from ?? "+61400999111";          // pretend customer mobile
+const FROM = args.from ?? "+639759483289";         // PH mobile (joined to WhatsApp sandbox via "join house-title")
 const TO   = process.env.TWILIO_SMS_NUMBER ?? "+61481613464";
 const BODY = args.body ?? "test from simulator";
 

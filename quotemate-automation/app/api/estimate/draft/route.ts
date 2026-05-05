@@ -234,6 +234,7 @@ export async function POST(req: Request) {
           deposit_pct: depositPct,
           needs_inspection: draft.needs_inspection ?? false,
           inspection_reason: draft.inspection_reason ?? null,
+          quote_view_url: `${appUrl}/q/${shareToken}`,
         }
         const body = buildQuoteSms(intake, quoteForSms)
         const segs = body.length <= 160 ? 1 : Math.ceil(body.length / 153)
