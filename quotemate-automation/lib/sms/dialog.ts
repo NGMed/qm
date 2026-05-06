@@ -66,6 +66,34 @@ NON-NEGOTIABLE RULES
    questions, plumbing/handyman/other-trade work, general advice).
    Acknowledge in 1 short phrase ("Cheers — we're sparkies") and
    immediately ask for the next missing required field.
+9. FIRST-TURN INTRO — when INBOUND TURN COUNT = 1 (this is the customer's
+   very first message), reply_to_send MUST open with a short greeting +
+   gratitude + identification, then transition into the next required
+   step. From turn 2 onward, drop the intro and go straight to the
+   question (don't re-introduce yourself every reply). The intro stays
+   inside the 320-char budget — keep it ONE compact sentence.
+
+   First-turn intro template (adapt to context):
+     "G'day, thanks for messaging QuoteMate — I'm the AI quoting
+      assistant. <transition into the question or escalation>"
+
+   Concrete first-turn examples (each well under 320 chars):
+     • Customer states an easy-5 job + count + room:
+       "G'day, thanks for messaging QuoteMate — I'm the AI quoting
+        assistant. Quick few details and I'll get a quote across.
+        First — what's your first name?"
+     • Customer just says "Hi" (no job stated):
+       "G'day, thanks for messaging QuoteMate — I'm the AI quoting
+        assistant. What electrical work did you need? (downlights,
+        GPOs, ceiling fans, smoke alarms, outdoor lighting)"
+     • Customer's first message contains an inspection trigger:
+       "G'day, thanks for messaging QuoteMate — I'm the AI quoting
+        assistant. For that I'll need to send a sparky for a quick
+        look. Want me to text you a $199 inspection booking?"
+     • Customer's first message is off-topic (e.g. plumbing):
+       "G'day, thanks for messaging QuoteMate — I'm the AI quoting
+        assistant for an electrical contractor. We don't do plumbing
+        — did you have any electrical work you needed quoted?"
 
 REQUIRED FIELDS — must all be captured in the SMS thread before quoting
 The Intake Agent reads the FULL conversation transcript and extracts
@@ -82,7 +110,10 @@ ${ALL_RULES_TEXT}
 UNIVERSAL INSPECTION TRIGGERS (any of these → escalate immediately)
 ${UNIVERSAL_INSPECTION_TRIGGERS.map(t => `  - ${t}`).join('\n')}
 
-DECISION GUIDE — apply in this order, top-down
+DECISION GUIDE — apply in this order, top-down.
+Reply examples below are written for turn 2+. On turn 1, prepend the
+greeting + gratitude per Rule 9 (e.g. "G'day, thanks for messaging
+QuoteMate — I'm the AI quoting assistant. <reply>").
 
 1. INSPECTION TRIGGER fires (any universal trigger word in the message):
    action='escalate_inspection'. Reply:
@@ -154,6 +185,9 @@ export async function decideNextTurn(args: {
     system: SYSTEM_PROMPT,
     prompt: [
       `INBOUND TURN COUNT (customer messages so far, including latest): ${args.inboundCount}`,
+      args.inboundCount === 1
+        ? `THIS IS THE CUSTOMER'S FIRST MESSAGE — Rule 9 applies: prepend the greeting + gratitude + identification before the question/escalation.`
+        : `THIS IS A FOLLOW-UP TURN — DO NOT re-introduce yourself; reply directly per the Decision Guide.`,
       `CONVERSATION HISTORY (oldest first):`,
       formatHistory(args.history),
       ``,

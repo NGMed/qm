@@ -717,46 +717,59 @@
   <section class="section" id="phase5">
     <div class="container">
       <div class="section-head">
-        <div class="section-num">Phase 5 · <strong>Production hardening (operational, no engineering)</strong></div>
+        <div class="section-num">Phase 5 · <strong>Production hardening (deploy steps, no engineering)</strong></div>
         <h2 class="section-title">Deploy prerequisites and post-launch hygiene.</h2>
-        <p class="section-summary">All code is shipped. The remaining items are deploy-environment configuration that needs to land in prod before the SMS Agent's Phase 4 features go live for customers.</p>
+        <p class="section-summary">All code is shipped, committed, and would build cleanly today. Phase 5 is the small set of <strong>one-off operational commands</strong> someone needs to run in the production environment (Supabase prod DB + Vercel env vars) so the new features actually function for real customers. No new code, no new features — just &quot;run these commands once&quot;.</p>
+      </div>
+
+      <div class="callout tip">
+        <div class="callout-label">✓ Migrations 003–005 applied 2026-05-06</div>
+        <p>All three SQL migrations are now live in prod Supabase. Verified at run-time — every required column / index landed. Two Vercel env steps remain (set <code>CRON_SECRET</code> and verify the <code>TRADIE_NOTIFY_*</code> vars), then redeploy. Once those land, Phase 5 is fully shipped.</p>
       </div>
 
       <ul class="stages">
         <li>
           <span class="stage-id">prod-001</span>
-          <span class="stage-pill next">NEXT</span>
+          <span class="stage-pill done">DONE</span>
           <div class="stage-body">
             <strong>Run migration 003 (sms_messages.photo_urls)</strong>
-            <p><code>node --env-file=.env.local scripts/run-sms-photos-migration.mjs</code>. Adds the JSONB column needed for inbound MMS photos. Idempotent — safe to re-run. Without this, MMS extraction silently no-ops.</p>
+            <p>Applied to prod Supabase 2026-05-06. <code>photo_urls jsonb default '[]'::jsonb</code> column verified present. Inbound MMS attachments now persist to <code>sms_messages.photo_urls</code> per message.</p>
           </div>
         </li>
         <li>
           <span class="stage-id">prod-002</span>
-          <span class="stage-pill next">NEXT</span>
+          <span class="stage-pill done">DONE</span>
           <div class="stage-body">
             <strong>Run migration 004 (unique inbound MessageSid index)</strong>
-            <p><code>node --env-file=.env.local scripts/run-sms-unique-sid-migration.mjs</code>. Adds a partial unique index that catches concurrent retry races. Defence-in-depth alongside the application-layer idempotency check.</p>
+            <p>Applied to prod Supabase 2026-05-06. Partial unique index <code>sms_messages_unique_inbound_sid_idx</code> verified present. Concurrent-retry race window now closed at the DB layer.</p>
           </div>
         </li>
         <li>
           <span class="stage-id">prod-003</span>
-          <span class="stage-pill next">NEXT</span>
+          <span class="stage-pill done">DONE</span>
           <div class="stage-body">
-            <strong>Set CRON_SECRET in Vercel env</strong>
-            <p>Required for the daily abandoned-conversation cleanup cron in production. Without it, the cron returns 401. Generate any unguessable string (e.g. <code>openssl rand -hex 32</code>) and add to Vercel env for production.</p>
+            <strong>Run migration 005 (sms_conversations photo columns)</strong>
+            <p>Applied to prod Supabase 2026-05-06. All four columns verified present: <code>photo_request_token</code>, <code>photo_request_sent_at</code>, <code>photos_completed_at</code>, <code>photo_urls</code>. Photo-request SMS feature (voice-parity) is now DB-ready.</p>
           </div>
         </li>
         <li>
           <span class="stage-id">prod-004</span>
           <span class="stage-pill next">NEXT</span>
           <div class="stage-body">
-            <strong>Verify TRADIE_NOTIFY_NUMBER + TRADIE_NOTIFY_WHATSAPP in prod</strong>
-            <p>Phase 4 tradie notify is gated on these env vars. If unset, the route logs "tradie notify skipped — no env" and continues. Confirm both are set in Vercel for the production environment so the tradie ping fires on every SMS-sourced draft.</p>
+            <strong>Set CRON_SECRET in Vercel env (manual — Vercel CLI requires interactive login)</strong>
+            <p>Generated value ready to paste: <code>30cd05eeb04697c052b8f9a803891659d0bf3ab03437af8917548dd37fd6ef40</code>. In Vercel dashboard → Project Settings → Environment Variables → Add: name <code>CRON_SECRET</code>, value above, environment <strong>Production</strong>, then redeploy. Vercel Cron auto-injects this as a Bearer token to <code>/api/cron/sms-cleanup</code>.</p>
           </div>
         </li>
         <li>
           <span class="stage-id">prod-005</span>
+          <span class="stage-pill next">NEXT</span>
+          <div class="stage-body">
+            <strong>Verify TRADIE_NOTIFY_NUMBER + TRADIE_NOTIFY_WHATSAPP in prod</strong>
+            <p>Phase 4 tradie notify is gated on these env vars. In Vercel dashboard → Project Settings → Environment Variables, confirm both are set for the <strong>Production</strong> environment. If unset, the route logs "tradie notify skipped — no env" and continues silently.</p>
+          </div>
+        </li>
+        <li>
+          <span class="stage-id">prod-006</span>
           <span class="stage-pill future">OPTIONAL</span>
           <div class="stage-body">
             <strong>Promote deposit_pct to a column on quotes</strong>
@@ -764,7 +777,7 @@
           </div>
         </li>
         <li>
-          <span class="stage-id">prod-006</span>
+          <span class="stage-id">prod-007</span>
           <span class="stage-pill future">OPTIONAL</span>
           <div class="stage-body">
             <strong>Tenant-scope the pricing_book lookup</strong>
@@ -783,8 +796,11 @@
         <h2 class="section-title">What shipped, in chronological order.</h2>
       </div>
 
-      <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--ink); margin: 1rem 0 0.5rem;">2026-05-06 (today) · SMS Agent end-to-end + hardening</h3>
+      <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--ink); margin: 1rem 0 0.5rem;">2026-05-06 (today) · SMS Agent end-to-end + hardening + Phase 5 ship</h3>
       <ul class="timeline">
+        <li><span class="when">today</span><span class="what"><strong>Phase 5 ship</strong> — migrations 003 / 004 / 005 applied to prod Supabase. CRON_SECRET generated, ready to paste into Vercel env. Two manual Vercel env steps remaining.</span></li>
+        <li><span class="when">today</span><span class="what"><strong>Photo-request SMS parity</strong> — SMS Agent now sends <code>${'${APP_URL}'}/upload/${'${token}'}</code> link when easy-5 job_type is identified, same as voice agent's <code>send_sms_photo_link</code>. Migration 005 + token generation + dual-source aggregation in <code>structureIntake</code>.</span></li>
+        <li><span class="when">today</span><span class="what"><strong>First-turn intro + gratitude</strong> — Haiku now opens with "G'day, thanks for messaging QuoteMate — I'm the AI quoting assistant…" before the first question. Subsequent turns stay direct.</span></li>
         <li><span class="when">today</span><span class="what"><strong>Migration 004</strong> — unique partial index on inbound <code>MessageSid</code> (defence-in-depth for the duplicate-reply fix)</span></li>
         <li><span class="when">today</span><span class="what">Inbound route hardened — application-layer idempotency check + fast-ack via <code>after()</code> + <code>maxDuration=60</code> + race-loser <code>23505</code> handling</span></li>
         <li><span class="when">today</span><span class="what"><strong>Mocked tier photos</strong> — <code>lib/quote/tier-photos.ts</code> + <code>TierCard</code> hero on <code>/q/[token]</code></span></li>
