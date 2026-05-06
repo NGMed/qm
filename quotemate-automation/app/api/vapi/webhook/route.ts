@@ -91,15 +91,22 @@ export async function POST(req: Request) {
     return Response.json({ ok: true, callId: callRow.id, skipped: 'transcript_too_short' })
   }
 
-  // Generate a one-shot upload token + persist on the call. Used downstream
-  // by the photo-request SMS that fires from /api/intake/structure once the
-  // intake quality gate confirms the call had usable content.
-  const photoRequestToken = generateShareToken()
-  await supabase
-    .from('calls')
-    .update({ photo_request_token: photoRequestToken })
-    .eq('id', callRow.id)
-  log.ok('photo_request_token generated', { token: photoRequestToken.slice(0, 8) + '…' })
+  // Generate a one-shot upload token + persist on the call IF NOT ALREADY SET.
+  // The in-call `send_sms_photo_link` tool may have created the row mid-call
+  // and set its own token + already SMS'd it to the customer. Overwriting
+  // here would break the link the customer is about to tap.
+  if (!callRow.photo_request_token) {
+    const photoRequestToken = generateShareToken()
+    await supabase
+      .from('calls')
+      .update({ photo_request_token: photoRequestToken })
+      .eq('id', callRow.id)
+    log.ok('photo_request_token generated', { token: photoRequestToken.slice(0, 8) + '…' })
+  } else {
+    log.ok('photo_request_token already set by in-call tool — preserving', {
+      token: callRow.photo_request_token.slice(0, 8) + '…',
+    })
+  }
 
   // Dispatch to /api/intake/structure. The intake handler now owns BOTH
   // the photo-request SMS (suppressed when intake quality is empty) and

@@ -48,6 +48,10 @@ export async function POST(req: Request) {
   let photoUrls: string[] = []
   let callId: string | null = null
   let conversationId: string | null = null
+  // True when the in-call `send_sms_photo_link` Vapi tool already fired the
+  // photo-request SMS during the live conversation. The post-call SMS in
+  // after() is skipped in that case to avoid sending the customer two links.
+  let photoRequestAlreadySent = false
   let callerNumber: string | null = null
   let photoRequestToken: string | null = null
 
@@ -120,6 +124,7 @@ export async function POST(req: Request) {
     photoUrls = call.photo_urls ?? []
     callerNumber = call.caller_number ?? null
     photoRequestToken = call.photo_request_token ?? null
+    photoRequestAlreadySent = !!call.photo_request_sent_at
   }
 
   log.step('running Opus vision (Claude 4.7) — typically ~35s, up to 3 attempts')
@@ -252,7 +257,9 @@ export async function POST(req: Request) {
     if (sourceChannel === 'voice') {
       const photoLog = pipelineLog('dispatch', logId)
       photoLog.step('dispatching photo-request SMS')
-      if (!callerNumber) {
+      if (photoRequestAlreadySent) {
+        photoLog.ok('photo SMS already sent in-call by send_sms_photo_link tool — skipping post-call dispatch', { call_id: callId })
+      } else if (!callerNumber) {
         photoLog.err('no caller_number — skipping photo SMS', null, { call_id: callId })
       } else if (!photoRequestToken) {
         photoLog.err('no photo_request_token on call — skipping photo SMS', null, { call_id: callId })
