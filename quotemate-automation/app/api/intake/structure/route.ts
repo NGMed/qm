@@ -15,25 +15,109 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-export async function POST(req: Request) {
-  const { callId } = await req.json()
-  const log = pipelineLog('intake', callId)
-  log.step('received', { callId })
+// Channel-agnostic intake handler.
+//   • Voice path: { callId } — loads transcript + photos from `calls` row.
+//   • SMS path:   { conversationId, sourceChannel: 'sms' } — stitches the
+//     dialog into a transcript and prepends the agent's silent assumptions
+//     so structureIntake can incorporate them.
+// Everything downstream (Opus structuring, embedding, intakes insert,
+// quality gate, post-response dispatches) is shared.
+type Body =
+  | { callId: string; sourceChannel?: 'voice' }
+  | { conversationId: string; sourceChannel: 'sms' }
 
-  log.step('loading transcript from calls')
-  const { data: call } = await supabase.from('calls').select('*').eq('id', callId).single()
-  if (!call) {
-    log.err('call not found in DB', null, { callId })
-    return Response.json({ error: 'call not found' }, { status: 404 })
+export async function POST(req: Request) {
+  const body = (await req.json()) as Body
+
+  // Identify the source. Use callId for voice or a synthetic id for SMS so
+  // pipeline logs stay correlatable end-to-end.
+  const sourceChannel: 'voice' | 'sms' =
+    'sourceChannel' in body && body.sourceChannel === 'sms' ? 'sms' : 'voice'
+  const logId =
+    sourceChannel === 'sms'
+      ? `sms:${(body as { conversationId: string }).conversationId}`
+      : (body as { callId: string }).callId
+
+  const log = pipelineLog('intake', logId)
+  log.step('received', { sourceChannel, ...(sourceChannel === 'sms'
+    ? { conversationId: (body as { conversationId: string }).conversationId }
+    : { callId: (body as { callId: string }).callId }) })
+
+  // Per-source input fields the rest of the handler depends on.
+  let transcript = ''
+  let photoUrls: string[] = []
+  let callId: string | null = null
+  let conversationId: string | null = null
+  let callerNumber: string | null = null
+  let photoRequestToken: string | null = null
+
+  if (sourceChannel === 'sms') {
+    // ─────────────── SMS PATH ───────────────
+    conversationId = (body as { conversationId: string }).conversationId
+    log.step('loading sms_conversation + messages', { conversationId })
+
+    const { data: convo } = await supabase
+      .from('sms_conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .single()
+    if (!convo) {
+      log.err('sms conversation not found in DB', null, { conversationId })
+      return Response.json({ error: 'sms conversation not found' }, { status: 404 })
+    }
+
+    const { data: messages } = await supabase
+      .from('sms_messages')
+      .select('direction, body, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+
+    transcript = (messages ?? [])
+      .map(m => `${m.direction === 'inbound' ? 'Customer' : 'Agent'}: ${m.body}`)
+      .join('\n')
+
+    // Pre-pend the assumptions the dialog agent applied so structureIntake
+    // can incorporate them rather than re-deriving from message text alone.
+    if (Array.isArray(convo.assumptions_made) && convo.assumptions_made.length) {
+      transcript =
+        `Assumptions agent applied during dialog:\n` +
+        (convo.assumptions_made as string[]).map(a => `  - ${a}`).join('\n') +
+        `\n\nFull SMS conversation:\n` + transcript
+    }
+
+    callerNumber = convo.from_number ?? null
+    photoUrls = []                  // SMS path has no photos until Phase 4 (MMS)
+    photoRequestToken = null         // SMS conversations don't issue photo tokens
+
+    log.ok('SMS conversation stitched', {
+      messages: messages?.length ?? 0,
+      assumptions: (convo.assumptions_made as string[] | null)?.length ?? 0,
+      transcript_chars: transcript.length,
+    })
+  } else {
+    // ─────────────── VOICE PATH (unchanged) ───────────────
+    callId = (body as { callId: string }).callId
+    log.step('loading transcript from calls')
+
+    const { data: call } = await supabase.from('calls').select('*').eq('id', callId).single()
+    if (!call) {
+      log.err('call not found in DB', null, { callId })
+      return Response.json({ error: 'call not found' }, { status: 404 })
+    }
+    log.ok('transcript loaded', {
+      chars: call.transcript?.length ?? 0,
+      photo_count: (call.photo_urls ?? []).length,
+    })
+
+    transcript = call.transcript ?? ''
+    photoUrls = call.photo_urls ?? []
+    callerNumber = call.caller_number ?? null
+    photoRequestToken = call.photo_request_token ?? null
   }
-  log.ok('transcript loaded', {
-    chars: call.transcript?.length ?? 0,
-    photo_count: (call.photo_urls ?? []).length,
-  })
 
   log.step('running Opus vision (Claude 4.7) — typically ~35s, up to 3 attempts')
   const intake = await withRetry(
-    () => structureIntake(call.transcript, call.photo_urls),
+    () => structureIntake(transcript, photoUrls),
     {
       maxAttempts: 3,
       baseDelayMs: 2000,
@@ -59,8 +143,8 @@ export async function POST(req: Request) {
   log.ok('embedding complete', { dims: embedding.length })
 
   log.step('inserting intakes row')
-  const { data: intakeRow } = await supabase.from('intakes').insert({
-    call_id: callId,
+  const { data: intakeRow, error: insertErr } = await supabase.from('intakes').insert({
+    call_id: callId,                  // null for SMS rows; that's OK
     job_type: intake.job_type,
     address: intake.address,
     suburb: intake.suburb,
@@ -75,7 +159,23 @@ export async function POST(req: Request) {
     confidence_reason: intake.confidence_reason,
     embedding,
   }).select().single()
-  log.ok('intakes row inserted', { intake_id: intakeRow!.id })
+
+  if (insertErr || !intakeRow) {
+    log.err('intakes insert failed', insertErr ?? null)
+    return Response.json({ error: 'insert failed' }, { status: 500 })
+  }
+  log.ok('intakes row inserted', { intake_id: intakeRow.id })
+
+  // Link the intake back to the SMS conversation and mark it 'done' so a
+  // future inbound creates a fresh conversation rather than reusing this one.
+  if (sourceChannel === 'sms' && conversationId) {
+    log.step('linking intake_id back to sms_conversations + status=done')
+    const { error: linkErr } = await supabase
+      .from('sms_conversations')
+      .update({ intake_id: intakeRow.id, status: 'done', updated_at: new Date().toISOString() })
+      .eq('id', conversationId)
+    if (linkErr) log.err('sms_conversations update failed', linkErr)
+  }
 
   // Quality gate — decides whether downstream SMS dispatches and the
   // estimation engine should run at all.
@@ -88,22 +188,21 @@ export async function POST(req: Request) {
     job_type: intake.job_type,
   })
 
-  const callerNumber = call.caller_number ?? null
   const callerFirstName = (intake.caller?.name ?? '').split(' ')[0] || undefined
 
   if (quality === 'empty') {
-    // Empty intake — call captured nothing usable. Send a brief callback
-    // request SMS, suppress photo-request and estimation entirely.
+    // Empty intake — call/dialog captured nothing usable. Send a brief
+    // callback-request SMS, suppress photo-request and estimation entirely.
     after(async () => {
-      const ds = pipelineLog('dispatch', callId)
+      const ds = pipelineLog('dispatch', logId)
       ds.step('intake gated as empty — sending callback-request SMS')
       if (!callerNumber) {
-        ds.err('no caller_number — cannot send callback request', null, { intake_id: intakeRow!.id })
+        ds.err('no caller_number — cannot send callback request', null, { intake_id: intakeRow.id })
         return
       }
       try {
-        const body = buildIncompleteCallSms({ firstName: callerFirstName })
-        const result = await dispatchQuoteMessage({ to: callerNumber, text: body })
+        const text = buildIncompleteCallSms({ firstName: callerFirstName })
+        const result = await dispatchQuoteMessage({ to: callerNumber, text })
         if (result.ok) {
           ds.ok('callback-request SMS sent', { channel: result.channel, sid: result.sid })
         } else {
@@ -118,54 +217,60 @@ export async function POST(req: Request) {
     })
 
     log.done('intake handler done — quality gate fired (no estimation, no photo SMS)', {
-      intake_id: intakeRow!.id,
+      intake_id: intakeRow.id,
       gated_reason: 'empty_intake',
+      sourceChannel,
     })
     return Response.json({
       ok: true,
-      intakeId: intakeRow!.id,
+      intakeId: intakeRow.id,
       gated: 'empty_intake',
     })
   }
 
-  // Quality is 'usable' — fire the photo-request SMS AND dispatch estimate.
-  // Both run in after() so the response goes back to the caller (webhook)
-  // immediately and the work survives the function lifetime.
+  // Quality is 'usable' — fire the photo-request SMS (voice only) AND
+  // dispatch estimate. Both run in after() so the response goes back to
+  // the caller (webhook) immediately and the work survives the function
+  // lifetime.
   after(async () => {
-    // Photo-request SMS (was previously fired from webhook; moved here so it
-    // can be suppressed cleanly when the quality gate fires)
-    const photoLog = pipelineLog('dispatch', callId)
-    photoLog.step('dispatching photo-request SMS')
-    if (!callerNumber) {
-      photoLog.err('no caller_number — skipping photo SMS', null, { call_id: callId })
-    } else if (!call.photo_request_token) {
-      photoLog.err('no photo_request_token on call — skipping photo SMS', null, { call_id: callId })
-    } else {
-      try {
-        const uploadUrl = `${process.env.APP_URL}/upload/${call.photo_request_token}`
-        const body = buildPhotoRequestSms({ firstName: callerFirstName, uploadUrl })
-        const result = await dispatchQuoteMessage({ to: callerNumber, text: body })
-        if (result.ok) {
-          photoLog.ok('photo-request SMS sent', { channel: result.channel, sid: result.sid })
-        } else {
-          photoLog.err('photo-request SMS failed', null, {
-            sms_code: result.smsAttempt.code,
-            wa_code: result.waAttempt?.code,
-          })
+    // Photo-request SMS only fires on the voice path. The SMS path has the
+    // customer already in a text thread; a separate photo-request SMS would
+    // be duplicative. (Phase 4 adds inbound MMS so customers can attach
+    // photos to the existing thread instead.)
+    if (sourceChannel === 'voice') {
+      const photoLog = pipelineLog('dispatch', logId)
+      photoLog.step('dispatching photo-request SMS')
+      if (!callerNumber) {
+        photoLog.err('no caller_number — skipping photo SMS', null, { call_id: callId })
+      } else if (!photoRequestToken) {
+        photoLog.err('no photo_request_token on call — skipping photo SMS', null, { call_id: callId })
+      } else {
+        try {
+          const uploadUrl = `${process.env.APP_URL}/upload/${photoRequestToken}`
+          const text = buildPhotoRequestSms({ firstName: callerFirstName, uploadUrl })
+          const result = await dispatchQuoteMessage({ to: callerNumber, text })
+          if (result.ok) {
+            photoLog.ok('photo-request SMS sent', { channel: result.channel, sid: result.sid })
+          } else {
+            photoLog.err('photo-request SMS failed', null, {
+              sms_code: result.smsAttempt.code,
+              wa_code: result.waAttempt?.code,
+            })
+          }
+        } catch (e) {
+          photoLog.err('photo-request SMS threw', e)
         }
-      } catch (e) {
-        photoLog.err('photo-request SMS threw', e)
       }
     }
 
-    // Dispatch to /api/estimate/draft
-    const dispatch = pipelineLog('intake', callId)
-    dispatch.step('dispatching to /api/estimate/draft', { intake_id: intakeRow!.id })
+    // Dispatch to /api/estimate/draft (shared for voice + SMS).
+    const dispatch = pipelineLog('intake', logId)
+    dispatch.step('dispatching to /api/estimate/draft', { intake_id: intakeRow.id })
     try {
       const res = await fetch(`${process.env.APP_URL}/api/estimate/draft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intakeId: intakeRow!.id }),
+        body: JSON.stringify({ intakeId: intakeRow.id }),
       })
       if (res.ok) {
         dispatch.ok('estimate/draft dispatched', { http: res.status })
@@ -177,6 +282,6 @@ export async function POST(req: Request) {
     }
   })
 
-  log.done('intake handler done', { intake_id: intakeRow!.id })
-  return Response.json({ ok: true, intakeId: intakeRow!.id })
+  log.done('intake handler done', { intake_id: intakeRow.id, sourceChannel })
+  return Response.json({ ok: true, intakeId: intakeRow.id })
 }
