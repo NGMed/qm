@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { systemPrompt } from './prompt'
 import * as tools from './tools'
 import { buildCandidatePrices, validateQuoteGrounding, type GroundingFailure, type PricingBookForValidation } from './validate'
+import { pipelineLog } from '@/lib/log/pipeline'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -25,15 +26,44 @@ export type EstimationResult = {
 }
 
 export async function runEstimation(intake: any, pricingBook: any): Promise<EstimationResult> {
+  const cacheLog = pipelineLog('estimate', intake?.id ?? null)
+
+  // Anthropic prompt caching: the system prompt + pricing-book derivation
+  // is identical across estimations until pricing_book changes, so we mark
+  // it as ephemeral. First call inside the 5-min cache window pays full
+  // price (cacheCreationInputTokens > 0); subsequent calls read at ~10%
+  // cost (cacheReadInputTokens > 0). Cache invalidates automatically when
+  // any pricing_book field changes (different prompt content → different key).
   const result = await generateText({
     model: anthropic('claude-opus-4-7'),
-    system: systemPrompt(pricingBook),
-    prompt: `Draft a quote for this intake:\n\n${JSON.stringify(intake, null, 2)}`,
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt(pricingBook),
+        providerOptions: {
+          anthropic: { cacheControl: { type: 'ephemeral' } },
+        },
+      },
+      {
+        role: 'user',
+        content: `Draft a quote for this intake:\n\n${JSON.stringify(intake, null, 2)}`,
+      },
+    ],
     tools,
     stopWhen: stepCountIs(10),  // build-guide says `maxSteps: 10`; AI SDK v5+ renamed it to stopWhen+stepCountIs
     maxRetries: 0,              // wrapper handles retries with logging — no double-retry
     temperature: 0,             // determinism: same intake → same draft quote
   })
+
+  const cacheMeta = (result.providerMetadata as any)?.anthropic
+  if (cacheMeta) {
+    cacheLog.ok('Opus call complete (cache stats)', {
+      cache_creation_input_tokens: cacheMeta.cacheCreationInputTokens ?? 0,
+      cache_read_input_tokens: cacheMeta.cacheReadInputTokens ?? 0,
+      input_tokens: cacheMeta.usage?.inputTokens ?? null,
+      output_tokens: cacheMeta.usage?.outputTokens ?? null,
+    })
+  }
 
   const draft = parseJsonFromText(result.text)
 
