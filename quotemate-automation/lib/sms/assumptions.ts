@@ -1,0 +1,162 @@
+// ═════════════════════════════════════════════════════════════════════
+// SMS dialog · assumption rules per "easy 5" job type
+//
+// The dialog agent (lib/sms/dialog.ts) loads this file into its system
+// prompt. Each entry tells the agent:
+//   safeDefaults  — fields it can fill silently when not stated
+//   mustAsk       — fields that genuinely change the quote and have no
+//                   safe default → ask in plain English over SMS
+//   inspectionTriggers — phrases or conditions that force inspection mode
+//                        regardless of how confident the agent is
+//
+// EDIT THIS FILE WHEN A TRADIE CORRECTS THE AGENT.
+// Every "I had to fix downlights to assume raked ceiling" is feedback
+// that goes into safeDefaults or mustAsk for that job type.
+// ═════════════════════════════════════════════════════════════════════
+
+export type JobType =
+  | 'downlights'
+  | 'power_points'
+  | 'ceiling_fans'
+  | 'smoke_alarms'
+  | 'outdoor_lighting'
+
+export type AssumptionRule = {
+  safeDefaults: Record<string, string>
+  mustAsk: string[]
+  inspectionTriggers: string[]
+}
+
+export const ASSUMPTION_RULES: Record<JobType, AssumptionRule> = {
+  downlights: {
+    safeDefaults: {
+      'access.ceiling_type': 'flat',
+      'access.wall_type':    'plaster',
+      'access.roof_access':  'true',
+      'scope.indoor_outdoor':'indoor',
+      'scope.existing_wiring': 'true (assume yes when "replace" is mentioned)',
+      'property.pre_1970':   'false (assume modern unless customer says old/period)',
+    },
+    mustAsk: [
+      'how many downlights',
+      'which room or area (one short phrase, e.g. "kitchen")',
+    ],
+    inspectionTriggers: [
+      'raked ceiling', 'high ceiling', 'cathedral ceiling',
+      'no roof access', 'no manhole',
+      'first time installing downlights in this room (no existing wiring)',
+      'pre-1970 house', 'asbestos', 'old wiring',
+    ],
+  },
+
+  power_points: {
+    safeDefaults: {
+      'scope.is_new_install':'false (assume replacement of existing GPO)',
+      'access.wall_type':    'plaster',
+      'scope.indoor_outdoor':'indoor',
+      'property.pre_1970':   'false',
+    },
+    mustAsk: [
+      'how many GPOs',
+      'which room',
+    ],
+    inspectionTriggers: [
+      'new circuit', 'add a circuit', 'no power there now',
+      'outdoor', 'weatherproof',
+      'kitchen near sink', 'bathroom',
+      'three-phase', 'switchboard',
+      'pre-1970 house', 'old wiring', 'ceramic fuse',
+    ],
+  },
+
+  ceiling_fans: {
+    safeDefaults: {
+      'scope.existing_wiring': 'true (assume existing ceiling rose)',
+      'access.ceiling_type':   'flat',
+      'scope.indoor_outdoor':  'indoor',
+      'property.pre_1970':     'false',
+      'scope.fan_supplied_by_customer': 'true (default — customer will supply)',
+    },
+    mustAsk: [
+      'how many fans',
+      'which room',
+      'do you already have the fan, or do you want us to supply it',
+    ],
+    inspectionTriggers: [
+      'no existing fan or light at that spot',
+      'raked ceiling', 'high ceiling',
+      'no roof access',
+      'pre-1970 house',
+    ],
+  },
+
+  smoke_alarms: {
+    safeDefaults: {
+      'scope.is_new_install':'false (assume like-for-like replacement)',
+      'access.ceiling_type': 'flat',
+      'access.wall_type':    'plaster',
+      'property.pre_1970':   'false',
+    },
+    mustAsk: [
+      'how many alarms (or how many bedrooms if doing a full compliance install)',
+      'replacing existing alarms, or first installation',
+    ],
+    inspectionTriggers: [
+      'no existing alarms anywhere',
+      'pre-1970 house', 'asbestos', 'asbestos ceiling',
+      'ceramic fuse', 'old switchboard',
+      'rental compliance certificate required',
+    ],
+  },
+
+  outdoor_lighting: {
+    safeDefaults: {
+      'scope.indoor_outdoor': 'outdoor',
+      'access.wall_type':    'plaster (interior side of exterior wall)',
+      'scope.existing_wiring': 'true (assume there is an outdoor circuit nearby)',
+      'property.pre_1970':   'false',
+    },
+    mustAsk: [
+      'how many fittings',
+      'where (eaves, deck, garden path, etc.)',
+      'do you want a sensor or always-on',
+    ],
+    inspectionTriggers: [
+      'no power outside currently',
+      'underground cabling', 'bury cable',
+      'garden lights along path', 'string lights across yard',
+      'three-phase',
+      'pre-1970 house',
+    ],
+  },
+}
+
+// Universal escalation — applies regardless of job type. Any of these in
+// the customer's message immediately routes to inspection mode.
+export const UNIVERSAL_INSPECTION_TRIGGERS = [
+  'burning smell', 'smoke', 'sparks', 'sparking', 'electric shock', 'shocked',
+  'switchboard', 'fuse box', 'ceramic fuse', 'old fuses',
+  'ev charger', 'tesla wall', 'wall connector',
+  'tripping breaker', 'breaker keeps tripping', 'fault finding', 'fault find',
+  'rewire', 'renovation', 'extension',
+  'three-phase', 'three phase',
+  'water damage', 'flooded',
+  'pre-1970', 'asbestos',
+]
+
+// Helper used by the dialog system prompt — produces a compact, readable
+// summary of the rules for a given job type.
+export function rulesAsText(jobType: JobType): string {
+  const r = ASSUMPTION_RULES[jobType]
+  const defaults = Object.entries(r.safeDefaults)
+    .map(([k, v]) => `  - ${k}: ${v}`).join('\n')
+  return [
+    `JOB TYPE: ${jobType}`,
+    `SAFE DEFAULTS (apply silently if customer didn't state otherwise):`,
+    defaults,
+    `MUST ASK (no safe default — short SMS question):`,
+    `  - ${r.mustAsk.join('\n  - ')}`,
+    `INSPECTION TRIGGERS (force inspection_required=true if any of these match):`,
+    `  - ${r.inspectionTriggers.join('\n  - ')}`,
+  ].join('\n')
+}
