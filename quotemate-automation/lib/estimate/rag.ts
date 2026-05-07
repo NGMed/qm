@@ -92,9 +92,14 @@ export async function fetchSimilarPastQuotesContext(
 
   const log = pipelineLog('estimate', intake.id ?? undefined)
 
+  // Pre-filter by job_type at the SQL layer — a "downlights" query never
+  // even sees smoke alarm or GPO history. Sharper candidate pool, fewer
+  // wasted Voyage Rerank API calls. job_type_filter=null disables the
+  // filter (back-compat for cases where intake.job_type is missing).
   const { data: matches, error: matchErr } = await supabase.rpc('match_intakes', {
     query_embedding: queryEmbedding,
     match_count: VECTOR_FETCH_COUNT,
+    job_type_filter: intake.job_type ?? null,
   })
 
   if (matchErr || !Array.isArray(matches) || matches.length === 0) {
