@@ -131,19 +131,19 @@ export async function runEstimation(intake: any, pricingBook: any): Promise<Esti
 }
 
 /**
- * Load every shared_materials.default_unit_price_ex_gst and
- * shared_assemblies.default_unit_price_ex_gst, then expand each into
- * raw + marked-up forms so the validator can do O(n) membership checks.
+ * Load every shared_materials and shared_assemblies row (name + price) and
+ * expand each into raw + marked-up candidate prices so the validator can
+ * enforce both price-grounding AND semantic-category-grounding.
  */
 async function loadCandidatePrices(pricingBook: any) {
   const [{ data: materials }, { data: assemblies }] = await Promise.all([
-    supabase.from('shared_materials').select('default_unit_price_ex_gst'),
-    supabase.from('shared_assemblies').select('default_unit_price_ex_gst'),
+    supabase.from('shared_materials').select('name, default_unit_price_ex_gst'),
+    supabase.from('shared_assemblies').select('name, default_unit_price_ex_gst'),
   ])
 
   return buildCandidatePrices(
-    (materials ?? []).map((r: any) => r.default_unit_price_ex_gst),
-    (assemblies ?? []).map((r: any) => r.default_unit_price_ex_gst),
+    (materials ?? []).map((r: any) => ({ name: r.name, price: r.default_unit_price_ex_gst })),
+    (assemblies ?? []).map((r: any) => ({ name: r.name, price: r.default_unit_price_ex_gst })),
     pricingBook,
   )
 }
