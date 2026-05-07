@@ -26,6 +26,9 @@ export type PricingBookForValidation = {
   apprentice_rate: number | string
   call_out_minimum: number | string
   default_markup_pct: number | string
+  /** Minimum labour hours per priced tier — enforces "small job allowance".
+   *  Optional for back-compat; defaults to 2.0 if not provided. */
+  min_labour_hours?: number | string
 }
 
 export type GroundingFailure = {
@@ -138,6 +141,9 @@ export function validateQuoteGrounding(
   const apprentice = n(pricingBook.apprentice_rate)
   const callOut = n(pricingBook.call_out_minimum)
   const markupPct = n(pricingBook.default_markup_pct)
+  const minLabourHours = pricingBook.min_labour_hours != null
+    ? n(pricingBook.min_labour_hours)
+    : 2.0
 
   const within = (a: number, b: number) => Math.abs(a - b) <= PRICE_TOLERANCE
 
@@ -151,6 +157,24 @@ export function validateQuoteGrounding(
   for (const tierKey of TIERS) {
     const tier = draft?.[tierKey]
     if (!tier || !Array.isArray(tier.line_items)) continue
+
+    // Per-tier labour-hours minimum check. Sum every unit='hr' line.
+    // If the tier has any line items at all but labour totals below
+    // pricing_book.min_labour_hours, fail the tier — Opus has skipped
+    // the small-job-allowance rule.
+    const labourHours = tier.line_items
+      .filter((li: any) => li?.unit === 'hr')
+      .reduce((sum: number, li: any) => sum + (Number(li?.quantity) || 0), 0)
+    if (tier.line_items.length > 0 && labourHours < minLabourHours - 0.05) {
+      failures.push({
+        tier: tierKey,
+        lineIndex: -1,
+        description: '(tier-level labour total)',
+        unit: 'hr',
+        unit_price_ex_gst: labourHours,
+        expected: `at least ${minLabourHours} hr of labour per tier (got ${labourHours.toFixed(2)})`,
+      })
+    }
 
     for (let i = 0; i < tier.line_items.length; i++) {
       const li = tier.line_items[i]
@@ -235,11 +259,22 @@ export function buildCandidatePrices(
   rawAssemblyRows: Array<{ name: string; price: number | string | null | undefined }>,
   pricingBook: PricingBookForValidation,
 ): CandidatePrices {
-  // AU electrical markup range — covers what a tradie might realistically
-  // pass to apply_markup. Default markup_pct is included even if outside
-  // the 10–40 band.
-  const standardMarkups = new Set<number>([0, 10, 15, 20, 25, 28, 30, 35, 40])
-  standardMarkups.add(n(pricingBook.default_markup_pct))
+  // STRICT MARKUP POLICY: only the tradie's configured default_markup_pct
+  // is permitted (plus 0% raw, used when Opus quotes a base material as
+  // a customer-supply line or when the assembly bakes the markup in).
+  //
+  // Rationale: previously we allowed [0, 10, 15, 20, 25, 28, 30, 35, 40]%
+  // which gave Opus 9 valid prices per row — too much slack. With multiple
+  // valid prices per row, the same intake on two calls could produce
+  // different but still-valid quotes (e.g. $48 raw vs $48 × 1.30 = $62.40
+  // vs $48 × 1.28 = $61.44). Tightening to exactly two values per row
+  // forces convergence: same input → same output.
+  //
+  // To soften this and prevent edge-case rejections, also allow:
+  //   - +5% drift on default markup (rounding tolerance)
+  // The validator's $0.50 PRICE_TOLERANCE absorbs the rest.
+  const defaultMarkup = n(pricingBook.default_markup_pct)
+  const standardMarkups = new Set<number>([0, defaultMarkup])
 
   const multipliers = Array.from(standardMarkups).map((pct) => 1 + pct / 100)
 

@@ -6,10 +6,12 @@ export function systemPrompt(pricingBook: {
   apprentice_rate: number;
   default_markup_pct: number;
   risk_buffer_pct: number;
+  min_labour_hours?: number;
   gst_registered: boolean;
   licence_type: string | null;
   licence_state: string | null;
 }) {
+  const minLabourHours = pricingBook.min_labour_hours ?? 2;
   return `STRICT GROUNDING — non-negotiable, supersedes every rule below
 1. EVERY line_item.unit_price_ex_gst MUST come from a tool result —
    lookup_assembly, lookup_material, apply_markup, pricing_book.hourly_rate,
@@ -59,6 +61,28 @@ export function systemPrompt(pricingBook: {
     "reasonable estimate" or "ballpark range." Two identical intakes
     must produce two identical quotes; fabricated ranges break that
     determinism.
+11. STRICT MARKUP POLICY — apply_markup MUST be called with markupPct =
+    ${pricingBook.default_markup_pct} (the tradie's configured
+    default_markup_pct). DO NOT use any other percentage, even if a
+    "SIMILAR PAST QUOTES" block in the user message shows past quotes
+    that used different markups (15%, 30%, etc.). Past quotes were
+    drafted under older policy; the current single-rate policy is
+    binding. The validator rejects any line whose price doesn't match
+    raw or × ${pricingBook.default_markup_pct}% markup exactly.
+12. MINIMUM LABOUR — every priced tier (good/better/best) must include
+    at least ${minLabourHours} hours of labour (sum of all unit='hr'
+    line items in that tier ≥ ${minLabourHours}). If the assemblies
+    you select sum to less, ADD a separate "Site visit + setup time"
+    labour line at hourly_rate to bring the total up. Reason: AU
+    sparkies cannot economically attend a site for less than the
+    minimum-job allowance; quoting under it loses money on the call-out.
+13. RISK-BUFFER ENFORCEMENT — when intake.risks is non-empty OR the
+    intake mentions unknown access (no roof access, ceiling type
+    unknown, wall type unknown), include a labour-line uplift that
+    reflects ${pricingBook.risk_buffer_pct}% additional time. Either
+    bake it into the labour quantity (e.g. 2 → 2.30 hr) or add an
+    explicit "Risk allowance — restricted access" line at hourly_rate.
+    Do NOT silently absorb the risk into materials markup.
 
 ROLE
 You are an expert Australian electrical estimator working for a licensed
@@ -88,8 +112,9 @@ PRICING BOOK (passed in)
   hourly_rate         = ${pricingBook.hourly_rate}        // typical AU sparky $90–$130
   call_out_minimum    = ${pricingBook.call_out_minimum}   // $120–$180
   apprentice_rate     = ${pricingBook.apprentice_rate}    // $45–$75 if needed
-  default_markup_pct  = ${pricingBook.default_markup_pct} // 20–35% on materials
-  risk_buffer_pct     = ${pricingBook.risk_buffer_pct}    // 10–20% for unknown access
+  default_markup_pct  = ${pricingBook.default_markup_pct} // ONLY this rate is permitted (validator enforces)
+  risk_buffer_pct     = ${pricingBook.risk_buffer_pct}    // 10–20% — apply when risks/unknown access flagged
+  min_labour_hours    = ${minLabourHours}                  // every tier must bill ≥ this many hours of labour
   gst_registered      = ${pricingBook.gst_registered}
   licence_type        = ${pricingBook.licence_type ?? '(unset)'}
   licence_state       = ${pricingBook.licence_state ?? '(unset)'}

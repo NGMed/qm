@@ -22,13 +22,23 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // Number of similar intakes to ask match_intakes for. We over-fetch by 1
 // because the current intake itself is usually the top match (similarity
 // = 1.0) and we filter it out before formatting.
-const MATCH_FETCH_COUNT = 6
+//
+// Tightened 2026-05-06 from 6 → 4. Empirically the 5th and 6th matches
+// were sitting near the similarity floor and introducing noise into the
+// anchoring set — same intake on two calls would sometimes pick up
+// different "borderline" past quotes and shift Opus's pricing slightly.
+// 4 keeps the top-3 stable matches plus 1 in reserve after self-filtering.
+const MATCH_FETCH_COUNT = 4
 
 // Bottom threshold below which a match is too weak to anchor pricing on.
-// Cosine similarity 0.0 = orthogonal, 1.0 = identical. 0.55 is roughly
-// "same job_type with similar scope phrasing" — empirically tight enough
-// that we don't anchor to dissimilar past jobs.
-const MIN_SIMILARITY = 0.55
+// Cosine similarity 0.0 = orthogonal, 1.0 = identical.
+//
+// Tightened 2026-05-06 from 0.55 → 0.65. 0.55 was admitting "same job_type
+// but different scope" matches (e.g. 6 downlights replace + 12 downlights
+// new install would both surface in each other's RAG) which Opus would
+// then anchor to inappropriately. 0.65 corresponds to "same scope shape,
+// not just same trade" — much tighter anchoring.
+const MIN_SIMILARITY = 0.65
 
 type MatchedIntake = {
   id: string
