@@ -248,7 +248,7 @@ export async function POST(req: Request) {
         return
       }
       try {
-        const text = buildIncompleteCallSms({ firstName: callerFirstName })
+        const text = buildIncompleteCallSms({ firstName: callerFirstName, source: sourceChannel })
         // SMS-sourced empty intake → reply from TWILIO_SMS_NUMBER so the
         // callback request lands in the same thread as the dialog turns
         // (single conversation on the customer's phone). Voice path falls
@@ -301,7 +301,7 @@ export async function POST(req: Request) {
       } else {
         try {
           const uploadUrl = `${process.env.APP_URL}/upload/${photoRequestToken}`
-          const text = buildPhotoRequestSms({ firstName: callerFirstName, uploadUrl })
+          const text = buildPhotoRequestSms({ firstName: callerFirstName, uploadUrl, source: 'voice' })
           const result = await dispatchQuoteMessage({ to: callerNumber, text })
           if (result.ok) {
             photoLog.ok('photo-request SMS sent', { channel: result.channel, sid: result.sid })

@@ -201,6 +201,21 @@ NON-NEGOTIABLE RULES
    question (don't re-introduce yourself every reply). The intro stays
    inside the 320-char budget — keep it ONE compact sentence.
 
+   ★ CRITICAL CHANNEL WORDING ★
+   You are an SMS agent. The customer TEXTED us — they did NOT call.
+   Use "messaging" / "texting" / "reaching out" — NEVER "calling".
+   FORBIDDEN openers (these are bugs from voice-context templates):
+     ✗ "Thanks for calling …"
+     ✗ "Thanks for ringing …"
+     ✗ "Thanks for the call …"
+     ✗ "Sorry we missed your call …"
+     ✗ "We didn't catch that on the call …"
+   REQUIRED openers (any of these forms):
+     ✓ "Thanks for messaging …"
+     ✓ "Thanks for the message …"
+     ✓ "Thanks for reaching out …"
+     ✓ "G'day, thanks for the text …"
+
    First-turn intro template (adapt to context):
      "G'day, thanks for messaging QuoteMate — I'm the AI quoting
       assistant. <transition into the question or escalation>"
@@ -305,6 +320,20 @@ function formatHistory(history: ConversationTurn[]): string {
   }).join('\n')
 }
 
+// Deterministic post-process scrub — defence-in-depth in case Haiku
+// drifts and produces voice-context wording in an SMS reply (e.g.
+// "thanks for calling" instead of "thanks for messaging"). Pure string
+// replacement, runs after the LLM call. Cheap, safe, idempotent.
+function scrubVoiceWording(reply: string): string {
+  return reply
+    .replace(/\bthanks for calling\b/gi, 'thanks for messaging')
+    .replace(/\bthanks for ringing\b/gi, 'thanks for messaging')
+    .replace(/\bthanks for the call\b/gi, 'thanks for the message')
+    .replace(/\bsorry we missed your call\b/gi, 'sorry we missed your message')
+    .replace(/\bon (?:that |the |your )?call\b/gi, 'in your message')
+    .replace(/\bgive (?:us )?a (?:quick )?callback\b/gi, 'send us a quick reply')
+}
+
 export async function decideNextTurn(args: {
   history: ConversationTurn[]
   inboundCount: number      // number of customer messages so far (inclusive of latest)
@@ -316,7 +345,7 @@ export async function decideNextTurn(args: {
     prompt: [
       `INBOUND TURN COUNT (customer messages so far, including latest): ${args.inboundCount}`,
       args.inboundCount === 1
-        ? `THIS IS THE CUSTOMER'S FIRST MESSAGE — Rule 9 applies: prepend the greeting + gratitude + identification before the question/escalation.`
+        ? `THIS IS THE CUSTOMER'S FIRST MESSAGE — Rule 9 applies: prepend the greeting + gratitude + identification before the question/escalation. The customer TEXTED us — never use "calling" / "call" / "ringing" wording.`
         : `THIS IS A FOLLOW-UP TURN — DO NOT re-introduce yourself; reply directly per the Decision Guide.`,
       `CONVERSATION HISTORY (oldest first):`,
       formatHistory(args.history),
@@ -324,5 +353,10 @@ export async function decideNextTurn(args: {
       `Decide the next action and produce the SMS reply.`,
     ].join('\n'),
   })
-  return object
+  // Deterministic scrub — even if Haiku drifts and produces voice-context
+  // wording, we replace it before the customer ever sees it.
+  return {
+    ...object,
+    reply_to_send: scrubVoiceWording(object.reply_to_send),
+  }
 }

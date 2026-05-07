@@ -380,7 +380,7 @@ export async function POST(req: Request) {
           // inbound turn that looks like a name (1-3 words, mostly letters)
           // OR fall back to a generic greeting.
           const firstName = guessFirstName(turns)
-          const photoBody = buildPhotoRequestSms({ firstName, uploadUrl })
+          const photoBody = buildPhotoRequestSms({ firstName, uploadUrl, source: 'sms' })
           const photoDispatch = await dispatchQuoteMessage({
             to: fromNumber,
             from: toNumber,

@@ -40,15 +40,21 @@ export function buildTradieInspectionNotification(opts: {
     .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
 }
 
-// Incomplete-call SMS — sent when the intake quality gate fires.
+// Incomplete-intake SMS — sent when the intake quality gate fires.
 // Triggered by `evaluateIntakeQuality(intake) === 'empty'`: caller hung up
-// before giving usable info OR the transcript was unintelligible. We send
-// a short, apologetic callback prompt INSTEAD OF the photo-request SMS
-// and the quote SMS — never both. Designed to fit in 1 GSM-7 segment.
-export function buildIncompleteCallSms(opts: { firstName?: string }): string {
+// or texter dropped before giving usable info, OR the transcript was
+// unintelligible. We send a short, apologetic prompt INSTEAD OF the
+// photo-request and quote SMSes — never both. Designed to fit in 1 GSM-7
+// segment. Wording adapts to the channel (voice vs SMS).
+export function buildIncompleteCallSms(opts: {
+  firstName?: string
+  source?: 'voice' | 'sms'
+}): string {
   const first = (opts.firstName ?? '').split(' ')[0] || ''
   const greeting = first ? `Hi ${first}, ` : 'Hi, '
-  const body = `${greeting}thanks for calling QuoteMate. We didn't quite catch enough on that call to put a quote together - please give us a quick callback when you've got a moment.\n\n- QuoteMate`
+  const body = opts.source === 'sms'
+    ? `${greeting}thanks for messaging QuoteMate. We didn't quite catch enough to put a quote together - reply with a quick description of the work and we'll get back to you.\n\n- QuoteMate`
+    : `${greeting}thanks for calling QuoteMate. We didn't quite catch enough on that call to put a quote together - please give us a quick callback when you've got a moment.\n\n- QuoteMate`
   return body
     .replace(/[‐-―−]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
@@ -111,11 +117,20 @@ export function buildTradieBookingNotification(opts: {
     .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
 }
 
-// Photo-request SMS — sent immediately after the call ends, in parallel
-// with the intake/estimate chain. ASCII-only, GSM-7 safe, single segment.
-export function buildPhotoRequestSms(opts: { firstName?: string; uploadUrl: string }): string {
+// Photo-request SMS — sent during/after the customer's first contact, in
+// parallel with the intake/estimate chain. ASCII-only, GSM-7 safe, single
+// segment. The wording adapts to the channel so an SMS-sourced customer
+// doesn't see "thanks for calling" in their text thread.
+export function buildPhotoRequestSms(opts: {
+  firstName?: string
+  uploadUrl: string
+  source?: 'voice' | 'sms'
+}): string {
   const first = (opts.firstName ?? '').split(' ')[0] || 'there'
-  const body = `Hi ${first}, thanks for calling QuoteMate. Tap here to add 1-2 photos so we can finalise your quote: ${opts.uploadUrl}\n\n(Optional but helps a lot.)`
+  const opener = opts.source === 'sms'
+    ? `Hi ${first}, thanks for messaging QuoteMate.`
+    : `Hi ${first}, thanks for calling QuoteMate.`
+  const body = `${opener} Tap here to add 1-2 photos so we can finalise your quote: ${opts.uploadUrl}\n\n(Optional but helps a lot.)`
   return body
     .replace(/[‐-―−]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .replace(/…/g, '...').replace(/·/g, '-').replace(/[^\x20-\x7E\n]/g, '')
