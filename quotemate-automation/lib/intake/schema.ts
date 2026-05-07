@@ -22,6 +22,19 @@ export const IntakeSchema = z.object({
     existing_wiring: z.boolean().optional(),                                 // is wiring already there?
     indoor_outdoor: z.enum(['indoor', 'outdoor', 'both', 'unknown']).optional(),
     description: z.string(),
+    // Structured pricing-critical specs — extracted by the intake agent
+    // and passed straight into lookup_material/lookup_assembly filters at
+    // estimation time. Keeping them as discrete fields (not buried in the
+    // freeform description) means the estimation engine can deterministically
+    // pick the right SKU instead of re-parsing prose.
+    specs: z.object({
+      color_temp: z.enum(['warm_white', 'cool_white', 'tri_colour', 'unknown']).optional(),
+      dimmable: z.boolean().optional(),
+      smart: z.boolean().optional(),                  // Wi-Fi / app control / smart-home compatible
+      weatherproof: z.boolean().optional(),           // IP-rated for outdoor / wet-area use
+      supplied_by: z.enum(['tradie', 'customer']).optional(),  // who provides the fitting itself
+      brand_preference: z.string().optional(),        // free text, e.g. "Clipsal Iconic"
+    }).optional(),
   }),
   access: z.object({
     roof_access: z.boolean().optional(),

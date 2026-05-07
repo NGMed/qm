@@ -7,28 +7,92 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// ─────────────────────────────────────────────────────────────────
+// Property filters — Opus passes these through from intake.scope.specs
+// to narrow the lookup result set deterministically.
+//
+//   color_temp       — material.properties.color_options must contain it
+//                      OR row has no color_options set (generic)
+//   dimmable=true    — strict: row.properties.dimmable must be true
+//   smart=true       — strict: row.properties.smart must be true
+//   weatherproof=true — strict: row.properties.weatherproof must be true
+//   supplied_by      — strict: row.properties.supplied_by must match
+//
+// Filters with `false` or `undefined` are NOT applied (no-op).
+// This means asking for a "non-dimmable" doesn't reject dimmable rows
+// — Opus picks based on tier, not exclusion. Whereas asking for
+// dimmable=true DOES exclude non-dimmable rows.
+// ─────────────────────────────────────────────────────────────────
+
+const PropertyFilters = z.object({
+  color_temp: z.enum(['warm_white', 'cool_white', 'tri_colour']).optional(),
+  dimmable: z.boolean().optional(),
+  smart: z.boolean().optional(),
+  weatherproof: z.boolean().optional(),
+  supplied_by: z.enum(['tradie', 'customer']).optional(),
+}).partial()
+
+type PropertyFilters = z.infer<typeof PropertyFilters>
+
+function applyPropertyFilters(query: any, f: PropertyFilters) {
+  // color_temp — special-case: row supports the requested temp via the
+  // color_options array, OR the row has no color_options set (generic).
+  if (f.color_temp) {
+    query = query.or(
+      `properties->color_options.cs.["${f.color_temp}"],properties->color_options.is.null`
+    )
+  }
+  // Strict-true filters — request true requires row.true.
+  if (f.dimmable === true)     query = query.eq('properties->>dimmable', 'true')
+  if (f.smart === true)        query = query.eq('properties->>smart', 'true')
+  if (f.weatherproof === true) query = query.eq('properties->>weatherproof', 'true')
+  // supplied_by is exact-match either way.
+  if (f.supplied_by)           query = query.eq('properties->>supplied_by', f.supplied_by)
+  return query
+}
+
 export const lookupAssembly = tool({
-  description: 'Search the electrical assembly library (e.g. "install LED downlight", "replace double GPO", "hardwire smoke alarm")',
-  inputSchema: z.object({ query: z.string() }),
-  execute: async ({ query }) => {
-    const { data } = await supabase
-      .from('shared_assemblies')
-      .select('*')
-      .ilike('name', `%${query}%`)
-      .limit(5)
+  description:
+    'Search the electrical assembly library by name plus optional property filters. ' +
+    'When intake.scope.specs has values (color_temp, dimmable, smart, weatherproof, supplied_by), ' +
+    'PASS THEM THROUGH so only matching assemblies are returned. ' +
+    'Example: lookupAssembly({ query: "outdoor light", weatherproof: true }) returns only outdoor-rated assemblies.',
+  inputSchema: z.object({
+    query: z.string(),
+    color_temp: z.enum(['warm_white', 'cool_white', 'tri_colour']).optional(),
+    dimmable: z.boolean().optional(),
+    smart: z.boolean().optional(),
+    weatherproof: z.boolean().optional(),
+    supplied_by: z.enum(['tradie', 'customer']).optional(),
+  }),
+  execute: async ({ query, ...filters }) => {
+    let q = supabase.from('shared_assemblies').select('*').ilike('name', `%${query}%`)
+    q = applyPropertyFilters(q, filters)
+    const { data } = await q.limit(5)
     return data ?? []
   },
 })
 
 export const lookupMaterial = tool({
-  description: 'Search electrical materials (downlights, GPOs, smoke alarms, ceiling fans, RCBOs, cabling, sundries) by name or brand',
-  inputSchema: z.object({ query: z.string() }),
-  execute: async ({ query }) => {
-    const { data } = await supabase
-      .from('shared_materials')
-      .select('*')
-      .or(`name.ilike.%${query}%,brand.ilike.%${query}%`)
-      .limit(5)
+  description:
+    'Search electrical materials by name or brand plus optional property filters. ' +
+    'When intake.scope.specs has values, PASS THEM THROUGH. ' +
+    'Example: lookupMaterial({ query: "downlight", color_temp: "warm_white", dimmable: true }) ' +
+    'returns only warm-white-capable, dimmable downlights.',
+  inputSchema: z.object({
+    query: z.string(),
+    color_temp: z.enum(['warm_white', 'cool_white', 'tri_colour']).optional(),
+    dimmable: z.boolean().optional(),
+    smart: z.boolean().optional(),
+    weatherproof: z.boolean().optional(),
+    supplied_by: z.enum(['tradie', 'customer']).optional(),
+  }),
+  execute: async ({ query, ...filters }) => {
+    let q = supabase.from('shared_materials').select('*').or(
+      `name.ilike.%${query}%,brand.ilike.%${query}%`
+    )
+    q = applyPropertyFilters(q, filters)
+    const { data } = await q.limit(5)
     return data ?? []
   },
 })

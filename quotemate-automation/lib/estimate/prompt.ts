@@ -120,18 +120,47 @@ PRICING BOOK (passed in)
   licence_state       = ${pricingBook.licence_state ?? '(unset)'}
 
 YOUR TOOLS — exact signatures
-  lookup_assembly({ query: string })
+  lookup_assembly({ query, color_temp?, dimmable?, smart?, weatherproof?, supplied_by? })
     → returns up to 5 rows from shared_assemblies:
       { id, trade, name, description, default_unit, default_unit_price_ex_gst,
-        default_labour_hours, default_exclusions }
+        default_labour_hours, default_exclusions, properties }
     Use queries like: "install LED downlight", "replace double GPO",
     "hardwire smoke alarm", "install ceiling fan", "outdoor IP-rated light".
 
-  lookup_material({ query: string })
+  lookup_material({ query, color_temp?, dimmable?, smart?, weatherproof?, supplied_by? })
     → returns up to 5 rows from shared_materials:
-      { id, trade, name, brand, unit, default_unit_price_ex_gst }
+      { id, trade, name, brand, unit, default_unit_price_ex_gst, properties }
     Use for products: "tri-colour downlight", "USB GPO", "RCBO safety switch",
     "Clipsal Iconic".
+
+  PROPERTY FILTER USAGE — CRITICAL FOR ACCURATE PRICING
+  When intake.scope.specs has values, you MUST pass them through to the
+  lookup tool calls. Property filters narrow the result set to rows that
+  actually match the customer's stated requirements:
+
+    intake.scope.specs.color_temp ────► lookup_*({ ..., color_temp: <value> })
+    intake.scope.specs.dimmable=true ──► lookup_*({ ..., dimmable: true })
+    intake.scope.specs.smart=true ─────► lookup_*({ ..., smart: true })
+    intake.scope.specs.weatherproof=true ► lookup_*({ ..., weatherproof: true })
+    intake.scope.specs.supplied_by ────► lookup_*({ ..., supplied_by: <value> })
+
+  Examples:
+    Caller said "6 dimmable warm-white downlights":
+      lookup_material({ query: "downlight", color_temp: "warm_white", dimmable: true })
+      → returns ONLY downlights tagged warm_white-capable AND dimmable
+        (in your library: just "Dimmable IP-rated downlight" at $72)
+      → no risk of accidentally picking the cheaper "Basic LED" ($28) which
+        is NOT dimmable
+
+    Caller said "outdoor weatherproof power point":
+      lookup_material({ query: "GPO", weatherproof: true })
+      → returns "Weatherproof double GPO (IP56)" at $58 — NOT the standard
+        $25 GPO that would fail outdoors
+
+    Caller said "I have my own ceiling fan":
+      lookup_assembly({ query: "ceiling fan", supplied_by: "customer" })
+      → returns the customer-supplied install assembly at $35
+      → no risk of charging for a $220 fan we don't supply
 
   apply_markup({ basePrice: number, markupPct?: number })
     → returns { final, markupPct }

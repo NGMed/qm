@@ -31,6 +31,49 @@ export async function structureIntake(transcript: string, photoUrls: string[] = 
 8. photo_urls is supplied as image attachments — never describe
    imagined photos in scope.description. If no images are attached,
    the photos contain nothing.
+9. scope.specs fields are PRICING-CRITICAL. Extract them when the
+   caller mentions them, leave them undefined otherwise. NEVER guess.
+   See "SPEC EXTRACTION" section below for explicit per-job_type rules.
+
+SPEC EXTRACTION — populate scope.specs.* from the caller's own words
+
+Each spec field below maps directly into a SQL filter on the materials/
+assemblies library at estimation time. Missing a spec means the
+estimation engine has to guess the SKU — which is exactly the
+hallucination class we are trying to eliminate.
+
+  scope.specs.color_temp — only for downlights / outdoor_lighting
+    "warm white" / "yellow light" / "soft white"  → 'warm_white'
+    "cool white" / "daylight" / "white"            → 'cool_white'
+    "tri-colour" / "tri colour" / "colour change"  → 'tri_colour'
+    caller didn't mention                          → omit (undefined)
+
+  scope.specs.dimmable — for downlights / fans / lighting
+    "dimmable" / "I can dim" / "want a dimmer"     → true
+    explicitly NOT dimmable                        → false
+    not mentioned                                  → omit
+
+  scope.specs.smart — for downlights / GPOs / fans / outdoor_lighting
+    "smart" / "Wi-Fi" / "app-controlled" / "Alexa"
+    "Google Home" / "smart home" / "remote app"    → true
+    "no smart" / "just basic"                      → false
+    not mentioned                                  → omit
+
+  scope.specs.weatherproof — for GPOs / outdoor lights
+    "outdoor" + "weatherproof" / "IP-rated" / "IP56"
+    "exposed to weather" / "uncovered"             → true
+    "covered area" / "indoor"                      → false
+    not mentioned but indoor_outdoor='outdoor'     → true (implicit)
+    not mentioned                                  → omit
+
+  scope.specs.supplied_by — for ceiling fans, ovens, cooktops
+    "I have my own" / "I'll supply" / "I bought"   → 'customer'
+    "you supply" / "can you provide"               → 'tradie'
+    not mentioned                                  → omit
+
+  scope.specs.brand_preference — when caller names a brand
+    Quote the brand verbatim ("Clipsal Iconic", "HPM", "Beacon Lucci")
+    not mentioned                                  → omit
 
 CONFIDENCE RUBRIC — apply uncompromisingly
   HIGH:    every required field captured, scope.item_count known,
