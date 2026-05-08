@@ -59,7 +59,10 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     .maybeSingle()
 
   if (!quote) return { status: 'skipped', reason: 'quote not found' }
-  if (quote.needs_inspection) return { status: 'skipped', reason: 'inspection-only quote' }
+  // Note: inspection-required quotes still get previews. The customer
+  // uploaded photos of the site; visualising the proposed work helps
+  // them confirm scope ahead of the in-person visit. The price tiers
+  // are nulled out elsewhere — this only renders an image of the room.
   if (quote.preview_status === 'ready' || quote.preview_status === 'generating') {
     return { status: 'skipped', reason: `already ${quote.preview_status}` }
   }

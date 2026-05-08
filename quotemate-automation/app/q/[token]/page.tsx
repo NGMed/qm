@@ -149,8 +149,11 @@ export default async function PublicQuotePage(props: {
         .filter((u): u is string => !!u)
     : []
 
-  const needsPreview = previewStatus === 'idle' && photoPaths.length > 0 && !quote.needs_inspection
-  const needsSamples = samplesStatus === 'idle' && !quote.needs_inspection
+  // Inspection-required quotes still get preview + samples — the customer
+  // uploaded photos of the site, so visualising the proposed work is just
+  // as useful before the on-site visit as it is for an auto-priced quote.
+  const needsPreview = previewStatus === 'idle' && photoPaths.length > 0
+  const needsSamples = samplesStatus === 'idle'
   if (needsPreview || needsSamples) {
     after(async () => {
       try {
@@ -251,16 +254,18 @@ export default async function PublicQuotePage(props: {
         {/* ─── Customer-supplied photos ──────────────────── */}
         <CustomerPhotos urls={customerPhotoUrls} />
 
-        {/* ─── AI preview + sample gallery ───────────────── */}
-        {!isInspection ? (
-          <PreviewSection
-            shareToken={token}
-            initialPreviewStatus={previewStatus}
-            initialPreviewImageUrls={previewImageUrls}
-            initialSamplesStatus={samplesStatus}
-            initialSampleImageUrls={sampleImageUrls}
-          />
-        ) : null}
+        {/* ─── AI preview + sample gallery ─────────────────
+            Renders for BOTH auto-priced and inspection-required quotes.
+            For inspection-only flows, the visuals still help the customer
+            picture the proposed install before the on-site visit. The
+            $199 booking CTA still dominates below — see InspectionBlock. */}
+        <PreviewSection
+          shareToken={token}
+          initialPreviewStatus={previewStatus}
+          initialPreviewImageUrls={previewImageUrls}
+          initialSamplesStatus={samplesStatus}
+          initialSampleImageUrls={sampleImageUrls}
+        />
 
         {/* ─── Inspection-only block OR tier cards ──────── */}
         {isInspection ? (

@@ -57,7 +57,9 @@ export async function generateSampleImages(quoteId: string): Promise<SamplesResu
     .maybeSingle()
 
   if (!quote) return { status: 'skipped', reason: 'quote not found' }
-  if (quote.needs_inspection) return { status: 'skipped', reason: 'inspection-only quote' }
+  // Note: inspection-required quotes still get sample images. They're
+  // job-type driven (no customer-photo dependency) and help the
+  // customer picture the install before the on-site visit.
   if (quote.samples_status === 'ready' || quote.samples_status === 'generating') {
     return { status: 'skipped', reason: `already ${quote.samples_status}` }
   }
