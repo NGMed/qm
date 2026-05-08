@@ -183,14 +183,26 @@ export async function updateCustomerFromIntake(opts: {
  */
 export function formatCustomerContext(c: CustomerProfile | null): string | null {
   if (!c) return null
-  const known: string[] = []
-  if (c.first_name) known.push(`first_name: ${c.first_name}`)
-  if (c.full_name && c.full_name !== c.first_name) known.push(`full_name: ${c.full_name}`)
-  if (c.suburb) known.push(`suburb: ${c.suburb}`)
-  if (c.address) known.push(`address: ${c.address}`)
-  if (c.email) known.push(`email: ${c.email}`)
+
+  // CRITICAL: only inject the KNOWN CUSTOMER MEMORY block when we have
+  // ACTUAL contact details to skip questions for (name / suburb / address
+  // / email). total_quotes alone is metadata — including it on its own
+  // misleads Haiku into hallucinating "we know this customer's address"
+  // and producing phantom address-confirmation handshakes ("still at the
+  // same place you've quoted with us before?") when no address is on file.
+  const contactKnown: string[] = []
+  if (c.first_name) contactKnown.push(`first_name: ${c.first_name}`)
+  if (c.full_name && c.full_name !== c.first_name) contactKnown.push(`full_name: ${c.full_name}`)
+  if (c.suburb) contactKnown.push(`suburb: ${c.suburb}`)
+  if (c.address) contactKnown.push(`address: ${c.address}`)
+  if (c.email) contactKnown.push(`email: ${c.email}`)
+
+  if (contactKnown.length === 0) return null
+
+  // Now safe to also note total_quotes for context — but ONLY because
+  // we already have at least one contact field above.
+  const known = [...contactKnown]
   if (c.total_quotes > 0) known.push(`total_quotes_with_us: ${c.total_quotes}`)
-  if (known.length === 0) return null
 
   const suburbExample = c.suburb ?? 'Bondi'
   const nameExample = c.first_name ?? 'Sam'

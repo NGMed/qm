@@ -297,24 +297,30 @@ export async function POST(req: Request) {
   // Link the intake back to the SMS conversation and mark it 'done' so a
   // future inbound creates a fresh conversation rather than reusing this one.
   //
-  // ALSO clear the photo buffer — photos have been snapshotted onto
-  // intakes.photo_paths above, so the conversation row no longer needs to
-  // carry them. This is critical for the "second-quote bleed" bug: if the
-  // same conversation is ever reused (e.g. customer texts again before
-  // status='done' propagates), the next quote starts with a clean photo
-  // state instead of inheriting old photos / a stale photo_request_sent_at.
+  // NOTE: Photo state (photo_urls / photo_paths / photo_request_sent_at /
+  // photos_completed_at) is NOT cleared here. We used to clear it to
+  // prevent a "second-quote bleed" bug, but that broke the recovery flow:
+  // when quality='empty' fires and we re-prompt the customer for a missing
+  // field, the second pass through structureIntake re-aggregates photos
+  // from sms_conversations.photo_urls — which we'd just wiped, so the
+  // recovery quote drafted with no photos AND fired a duplicate photo
+  // SMS (because !photoRequestAlreadySent was now true again).
+  //
+  // The photo clear is now deferred to the 'usable' branch below — only
+  // performed when the quote is actually drafting. The original bleed-bug
+  // protection still holds: by the time status='done', the next inbound
+  // would either reuse this conversation (within 5 min done-grace, where
+  // photos correctly carry over) or create a fresh one (after 5 min,
+  // where the existing PHOTO_RESET_IDLE_MS check in inbound/route.ts
+  // resets the photo state).
   if (sourceChannel === 'sms' && conversationId) {
-    log.step('linking intake_id back to sms_conversations + status=done + clearing photo buffer')
+    log.step('linking intake_id back to sms_conversations + status=done')
     const { error: linkErr } = await supabase
       .from('sms_conversations')
       .update({
         intake_id: intakeRow.id,
         status: 'done',
         updated_at: new Date().toISOString(),
-        photo_urls: [],
-        photo_paths: [],
-        photo_request_sent_at: null,
-        photos_completed_at: null,
       })
       .eq('id', conversationId)
     if (linkErr) log.err('sms_conversations update failed', linkErr)
@@ -419,10 +425,33 @@ export async function POST(req: Request) {
     })
   }
 
-  // Quality is 'usable' — fire the photo-request SMS (voice only) AND
-  // dispatch estimate. Both run in after() so the response goes back to
-  // the caller (webhook) immediately and the work survives the function
-  // lifetime.
+  // Quality is 'usable' — quote is going to draft. NOW we can clear the
+  // photo buffer on the conversation row, since:
+  //   1. The photos are snapshotted onto intakes.photo_paths (the public
+  //      quote view re-signs from there).
+  //   2. The quote is drafting, so the customer has reached the end of
+  //      this request — any subsequent inbound for a NEW request should
+  //      start with a clean photo state to prevent "second-quote bleed".
+  // This is the original protection the link-back used to do; we just
+  // moved it here so the recovery flow above can preserve photo state
+  // across its second pass.
+  if (sourceChannel === 'sms' && conversationId) {
+    const { error: clearErr } = await supabase
+      .from('sms_conversations')
+      .update({
+        photo_urls: [],
+        photo_paths: [],
+        photo_request_sent_at: null,
+        photos_completed_at: null,
+      })
+      .eq('id', conversationId)
+    if (clearErr) log.err('photo buffer clear failed', clearErr)
+    else log.ok('photo buffer cleared (quote drafting)')
+  }
+
+  // Fire the photo-request SMS (voice only) AND dispatch estimate. Both
+  // run in after() so the response goes back to the caller (webhook)
+  // immediately and the work survives the function lifetime.
   after(async () => {
     // Photo-request SMS only fires on the voice path. The SMS path has the
     // customer already in a text thread; a separate photo-request SMS would
