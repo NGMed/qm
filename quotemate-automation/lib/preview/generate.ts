@@ -23,10 +23,19 @@ const supabase = createClient(
 
 const BUCKET = 'intake-photos'
 
-// Default model name. Override via env if Google promotes / renames the
-// preview model. Known Gemini 2.5 image-generation aliases at time of
-// writing: gemini-2.5-flash-image-preview / gemini-2.5-flash-image.
-const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image-preview'
+// Default model: gemini-2.5-flash-image (GA — the rebadged "Nano Banana"
+// model, stable and supported via generateContent on v1beta).
+//
+// Override via GEMINI_IMAGE_MODEL env when you want to upgrade. Known
+// alternatives that work with this exact request shape (text+image
+// input → image output, generateContent method):
+//   - gemini-3.1-flash-image-preview  (newest flash image gen)
+//   - gemini-3-pro-image-preview      (higher quality, more expensive)
+//   - nano-banana-pro-preview         (preview-tier codename)
+//
+// The old `gemini-2.5-flash-image-preview` name returns 404 on the live
+// API and was the source of the original failures.
+const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image'
 
 const GEMINI_ENDPOINT = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`

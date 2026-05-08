@@ -227,6 +227,49 @@ export async function POST(req: Request) {
       ageSeconds: Math.round(ageMs / 1000),
       reason: isReuseOpenLike ? 'open/structuring within window' : 'done within grace',
     })
+
+    // Photo-state freshness check — fixes the "second-quote photo bleed" bug.
+    //
+    // When we re-engage a conversation that's been idle long enough that the
+    // customer is plausibly starting a new job (not just adding to a current
+    // upload session), wipe the stale photo buffer + photo_request_sent_at
+    // so the new request gets its own clean photo cycle. Without this, the
+    // 2nd quote silently inherits the 1st quote's photos and skips the
+    // photo-request SMS because photo_request_sent_at is already set.
+    //
+    // Threshold: 15 minutes of idle. Anything shorter and the customer is
+    // probably mid-upload or mid-thought; anything longer and we treat the
+    // re-engagement as a new session.
+    const PHOTO_RESET_IDLE_MS = 15 * 60 * 1000
+    const hasStalePhotoState = !!(conversation.photo_request_sent_at)
+      && ageMs >= PHOTO_RESET_IDLE_MS
+    if (hasStalePhotoState) {
+      const photoToken = randomBytes(16).toString('hex')
+      await supabase
+        .from('sms_conversations')
+        .update({
+          photo_request_token: photoToken,    // fresh token = fresh upload bucket
+          photo_request_sent_at: null,
+          photos_completed_at: null,
+          photo_urls: [],
+          photo_paths: [],
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversation.id)
+      conversation = {
+        ...conversation,
+        photo_request_token: photoToken,
+        photo_request_sent_at: null,
+        photos_completed_at: null,
+        photo_urls: [],
+        photo_paths: [],
+      }
+      console.log('[sms/inbound] step 3 — reset stale photo state on reused conversation', {
+        conversationId: conversation.id,
+        idleMinutes: Math.round(ageMs / 60000),
+      })
+    }
+
     // For done-grace reuse, flip status back to 'open' so the dialog appends
     // normally. We don't flip 'structuring' (it's mid-flight, leave it).
     if (conversation.status === 'done' && isReuseDoneGrace) {

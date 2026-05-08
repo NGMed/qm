@@ -215,11 +215,26 @@ export async function POST(req: Request) {
 
   // Link the intake back to the SMS conversation and mark it 'done' so a
   // future inbound creates a fresh conversation rather than reusing this one.
+  //
+  // ALSO clear the photo buffer — photos have been snapshotted onto
+  // intakes.photo_paths above, so the conversation row no longer needs to
+  // carry them. This is critical for the "second-quote bleed" bug: if the
+  // same conversation is ever reused (e.g. customer texts again before
+  // status='done' propagates), the next quote starts with a clean photo
+  // state instead of inheriting old photos / a stale photo_request_sent_at.
   if (sourceChannel === 'sms' && conversationId) {
-    log.step('linking intake_id back to sms_conversations + status=done')
+    log.step('linking intake_id back to sms_conversations + status=done + clearing photo buffer')
     const { error: linkErr } = await supabase
       .from('sms_conversations')
-      .update({ intake_id: intakeRow.id, status: 'done', updated_at: new Date().toISOString() })
+      .update({
+        intake_id: intakeRow.id,
+        status: 'done',
+        updated_at: new Date().toISOString(),
+        photo_urls: [],
+        photo_paths: [],
+        photo_request_sent_at: null,
+        photos_completed_at: null,
+      })
       .eq('id', conversationId)
     if (linkErr) log.err('sms_conversations update failed', linkErr)
   }

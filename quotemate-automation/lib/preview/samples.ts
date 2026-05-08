@@ -19,7 +19,10 @@ const supabase = createClient(
 )
 
 const BUCKET = 'intake-photos'
-const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image-preview'
+// Default: gemini-2.5-flash-image (GA, stable). Override via env to
+// gemini-3.1-flash-image-preview (newer) or gemini-3-pro-image-preview
+// (higher quality). See lib/preview/generate.ts for the full list.
+const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image'
 const GEMINI_ENDPOINT = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
 

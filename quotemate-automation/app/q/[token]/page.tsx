@@ -100,33 +100,27 @@ export default async function PublicQuotePage(props: {
       .maybeSingle(),
   ])
 
-  // Photo aggregation — handle the late-upload race condition.
-  const intakePhotoPaths = Array.isArray(intake?.photo_paths)
+  // Photo rendering — STRICT per-quote scoping.
+  //
+  // Only render photos snapshotted onto intakes.photo_paths at intake/structure
+  // time. We deliberately DO NOT pull from the live calls.photo_paths or
+  // sms_conversations.photo_paths at render time, because:
+  //
+  //   1. The live source rows can be reused across multiple quotes for the
+  //      same customer (4h open window, 5min done-grace). If we read live,
+  //      photos from one quote bleed into another.
+  //   2. The intake snapshot is the canonical "what was uploaded for THIS
+  //      quote" record — it's what Opus vision already saw when drafting,
+  //      and what the customer agreed was attached when the quote was sent.
+  //
+  // Trade-off: late uploads (after intake/structure has run) won't appear
+  // on the quote page. That's the right call — if the customer wants those
+  // photos to influence the quote, they should send a fresh request and
+  // re-upload during the new dialog. Strict per-quote scoping over live
+  // updates.
+  const photoPaths = Array.isArray(intake?.photo_paths)
     ? (intake.photo_paths as string[]).filter((p): p is string => typeof p === 'string' && p.length > 0)
     : []
-
-  let sourcePhotoPaths: string[] = []
-  if (intake?.call_id) {
-    const { data: callRow } = await supabase
-      .from('calls')
-      .select('photo_paths')
-      .eq('id', intake.call_id)
-      .maybeSingle()
-    sourcePhotoPaths = Array.isArray(callRow?.photo_paths)
-      ? (callRow.photo_paths as string[]).filter((p): p is string => typeof p === 'string' && p.length > 0)
-      : []
-  } else if (intake?.id) {
-    const { data: convoRow } = await supabase
-      .from('sms_conversations')
-      .select('photo_paths')
-      .eq('intake_id', intake.id)
-      .maybeSingle()
-    sourcePhotoPaths = Array.isArray(convoRow?.photo_paths)
-      ? (convoRow.photo_paths as string[]).filter((p): p is string => typeof p === 'string' && p.length > 0)
-      : []
-  }
-
-  const photoPaths = Array.from(new Set([...intakePhotoPaths, ...sourcePhotoPaths]))
 
   const customerPhotoUrls: string[] = photoPaths.length === 0 ? [] : (
     await Promise.all(photoPaths.map(p => refreshSignedUrl(p).catch(() => null)))
