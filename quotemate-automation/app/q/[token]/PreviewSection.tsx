@@ -2,49 +2,53 @@
 
 // ════════════════════════════════════════════════════════════════════
 // AI preview + sample gallery on the public quote page.
-// Restyled to the Maintain Technology brand (dark canvas, orange accent,
-// numbered card pattern, JetBrains Mono labels).
+// Maintain Technology brand styling — dark canvas, orange accent,
+// numbered card pattern, JetBrains Mono labels.
 //
 // Two visual surfaces:
-//   1. PREVIEW — Gemini edits the customer's own uploaded photo
-//      (single image, 4:3 aspect, full-width)
-//   2. SAMPLES — 3 generic Gemini text-to-image renders showing
-//      typical examples of similar work (3 images, 4:3 each, stacked
-//      on mobile / 3-up on desktop)
+//   1. PREVIEW — One Gemini-edited image PER uploaded customer photo
+//                (1 photo = 1 preview, 2 photos = 2 previews, 3 = 3).
+//                Adaptive grid: 1-up / 2-up / 3-up.
+//   2. SAMPLES — 3 generic Gemini renders showing wide / close-up /
+//                in-use views of similar work. When customer photos
+//                exist, samples are tailored to the customer's room
+//                (visually consistent with the preview).
 //
-// Polls /api/q/[token]/preview-status every 5s while either is
-// generating, up to 90s total. Each section hides silently on
-// permanent failure / no_photos.
+// Every image is wrapped in a click-to-enlarge link that opens the
+// full-size signed URL in a new browser tab.
+//
+// Polling: /api/q/[token]/preview-status every 5s while either surface
+// is still generating, up to 90s total.
 // ════════════════════════════════════════════════════════════════════
 
 import { useEffect, useState } from 'react'
 
-type PreviewStatus = 'idle' | 'no_photos' | 'generating' | 'ready' | 'failed'
+type PreviewStatus = 'idle' | 'no_photos' | 'generating' | 'ready' | 'partial' | 'failed'
 type SamplesStatus = 'idle' | 'generating' | 'ready' | 'partial' | 'failed'
 
 const POLL_INTERVAL_MS = 5_000
 const POLL_TIMEOUT_MS = 90_000
 
 type StatusResponse = {
-  preview: { status: PreviewStatus; image_url: string | null }
+  preview: { status: PreviewStatus; image_urls: string[] }
   samples: { status: SamplesStatus; image_urls: string[] }
 }
 
 export function PreviewSection({
   shareToken,
   initialPreviewStatus,
-  initialPreviewImageUrl,
+  initialPreviewImageUrls,
   initialSamplesStatus,
   initialSampleImageUrls,
 }: {
   shareToken: string
   initialPreviewStatus: PreviewStatus
-  initialPreviewImageUrl: string | null
+  initialPreviewImageUrls: string[]
   initialSamplesStatus: SamplesStatus
   initialSampleImageUrls: string[]
 }) {
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>(initialPreviewStatus)
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(initialPreviewImageUrl)
+  const [previewImageUrls, setPreviewImageUrls] = useState<string[]>(initialPreviewImageUrls)
   const [samplesStatus, setSamplesStatus] = useState<SamplesStatus>(initialSamplesStatus)
   const [sampleImageUrls, setSampleImageUrls] = useState<string[]>(initialSampleImageUrls)
   const [polledForMs, setPolledForMs] = useState(0)
@@ -65,7 +69,7 @@ export function PreviewSection({
         }
         const json = await res.json() as StatusResponse
         setPreviewStatus(json.preview.status)
-        if (json.preview.image_url) setPreviewImageUrl(json.preview.image_url)
+        if (json.preview.image_urls.length > 0) setPreviewImageUrls(json.preview.image_urls)
         setSamplesStatus(json.samples.status)
         if (json.samples.image_urls.length > 0) setSampleImageUrls(json.samples.image_urls)
         setPolledForMs(p => p + POLL_INTERVAL_MS)
@@ -84,9 +88,19 @@ export function PreviewSection({
 
   const isTimeout = polledForMs >= POLL_TIMEOUT_MS
 
+  // Adaptive grid for the preview images — 1 photo = full width, 2 = 2-up,
+  // 3+ = 3-up on desktop / 2-up on mobile.
+  const previewCount = previewImageUrls.length || 1
+  const previewCols =
+    previewCount === 1 ? 'grid-cols-1' :
+    previewCount === 2 ? 'grid-cols-1 sm:grid-cols-2' :
+    'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+
   return (
     <>
-      {/* ─── AI PREVIEW (room-specific edit of customer's photo) ─── */}
+      {/* ═══════════════════════════════════════════════════════════════
+          AI PREVIEW — one image per uploaded customer photo
+          ═══════════════════════════════════════════════════════════════ */}
       {showPreviewSection ? (
         <section className="mt-6 bg-ink-card border border-ink-line p-6 sm:p-8">
           <div className="flex items-start gap-5 sm:gap-6">
@@ -98,20 +112,25 @@ export function PreviewSection({
                 AI preview · your room
               </h2>
               <p className="mt-1 text-xs text-text-dim">
-                Generated from the photo you sent.
+                {previewImageUrls.length > 0
+                  ? `Generated from the ${previewImageUrls.length === 1 ? 'photo' : `${previewImageUrls.length} photos`} you sent.`
+                  : 'Generated from the photo you sent.'}
               </p>
 
-              <div className="mt-4 relative aspect-4/3 w-full overflow-hidden border border-ink-line bg-ink-deep">
-                {previewStatus === 'ready' && previewImageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={previewImageUrl}
-                    alt="AI-generated preview of the proposed work in your room"
-                    loading="lazy"
-                    className="h-full w-full object-cover"
-                  />
+              <div className={`mt-4 grid gap-4 ${previewCols}`}>
+                {/* If we have any URLs, show one image per URL. Otherwise
+                    show ONE skeleton placeholder during generation. */}
+                {previewImageUrls.length > 0 ? (
+                  previewImageUrls.map((url, i) => (
+                    <ClickableImage
+                      key={i}
+                      src={url}
+                      alt={`AI preview ${i + 1} of your room`}
+                      label={previewImageUrls.length > 1 ? String(i + 1).padStart(2, '0') : null}
+                    />
+                  ))
                 ) : (
-                  <LoadingSkeleton
+                  <SkeletonTile
                     title={isTimeout && previewLoading ? 'Preview taking longer than usual…' : 'Generating your preview…'}
                     subtitle={
                       isTimeout && previewLoading
@@ -122,7 +141,7 @@ export function PreviewSection({
                 )}
               </div>
 
-              <p className="mt-3 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-text-dim">
+              <p className="mt-3 font-mono text-[0.65rem] uppercase tracking-widest text-text-dim">
                 Indicative only · actual install may vary based on access and on-site conditions
               </p>
             </div>
@@ -130,7 +149,9 @@ export function PreviewSection({
         </section>
       ) : null}
 
-      {/* ─── SAMPLE GALLERY (3 generic examples of similar work) ─── */}
+      {/* ═══════════════════════════════════════════════════════════════
+          SAMPLE GALLERY — wide / close-up / in-use
+          ═══════════════════════════════════════════════════════════════ */}
       {showSamplesSection ? (
         <section className="mt-6 bg-ink-card border border-ink-line p-6 sm:p-8">
           <div className="flex items-start gap-5 sm:gap-6">
@@ -142,7 +163,7 @@ export function PreviewSection({
                 Expected sample images
               </h2>
               <p className="mt-1 text-xs text-text-dim">
-                Generic AI examples to give you a feel for the finished install. Not your room.
+                Three views of the proposed install — wide, close-up, and in-use.
               </p>
 
               <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -151,24 +172,21 @@ export function PreviewSection({
                   const labels = ['Wide view', 'Close-up', 'In use']
                   return (
                     <figure key={i} className="m-0">
-                      <div className="relative aspect-4/3 w-full overflow-hidden border border-ink-line bg-ink-deep">
-                        {url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={url}
-                            alt={`AI-generated ${labels[i].toLowerCase()} sample`}
-                            loading="lazy"
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <LoadingSkeleton
+                      {url ? (
+                        <ClickableImage
+                          src={url}
+                          alt={`AI sample — ${labels[i].toLowerCase()}`}
+                        />
+                      ) : (
+                        <div className="relative aspect-4/3 w-full overflow-hidden border border-ink-line bg-ink-deep">
+                          <SkeletonTile
                             title={isTimeout && samplesLoading ? 'Sample pending…' : `Generating ${labels[i].toLowerCase()}…`}
                             subtitle={null}
                             small
                           />
-                        )}
-                      </div>
-                      <figcaption className="mt-2 text-center font-mono text-[0.65rem] uppercase tracking-[0.12em] text-text-sec">
+                        </div>
+                      )}
+                      <figcaption className="mt-2 text-center font-mono text-[0.65rem] uppercase tracking-widest text-text-sec">
                         {labels[i]}
                       </figcaption>
                     </figure>
@@ -176,7 +194,7 @@ export function PreviewSection({
                 })}
               </div>
 
-              <p className="mt-4 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-text-dim">
+              <p className="mt-4 font-mono text-[0.65rem] uppercase tracking-widest text-text-dim">
                 AI-generated · illustrative · final install matched to your space
               </p>
             </div>
@@ -187,7 +205,52 @@ export function PreviewSection({
   )
 }
 
-function LoadingSkeleton({
+/* ═══════════════════════════════════════════════════════════════════
+   Components
+   ═══════════════════════════════════════════════════════════════════ */
+
+function ClickableImage({
+  src,
+  alt,
+  label,
+}: {
+  src: string
+  alt: string
+  label?: string | null
+}) {
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      className="group relative block aspect-4/3 w-full overflow-hidden border border-ink-line bg-ink-deep transition-all hover:border-accent/60"
+      aria-label={`${alt} — tap to view full size`}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className="h-full w-full object-cover transition-transform group-hover:scale-[1.02]"
+      />
+
+      {/* Optional numeric chip in the corner */}
+      {label ? (
+        <span className="absolute top-2 right-2 font-mono text-[0.55rem] uppercase tracking-widest bg-ink-deep/90 text-text-pri px-1.5 py-0.5 rounded-sm border border-ink-line">
+          {label}
+        </span>
+      ) : null}
+
+      {/* Hover hint — "tap to expand" */}
+      <span className="absolute bottom-2 right-2 flex items-center gap-1 font-mono text-[0.55rem] uppercase tracking-widest bg-ink-deep/90 text-text-pri px-1.5 py-1 rounded-sm border border-ink-line opacity-0 group-hover:opacity-100 transition-opacity">
+        <ExpandIcon className="w-3 h-3" />
+        View full
+      </span>
+    </a>
+  )
+}
+
+function SkeletonTile({
   title,
   subtitle,
   small = false,
@@ -197,14 +260,14 @@ function LoadingSkeleton({
   small?: boolean
 }) {
   return (
-    <>
+    <div className={`relative ${small ? '' : 'aspect-4/3'} w-full overflow-hidden border border-ink-line bg-ink-deep`}>
       <div className="absolute inset-0 animate-pulse bg-linear-to-br from-ink-deep via-ink to-ink-card" aria-hidden />
-      <div className="relative flex h-full flex-col items-center justify-center gap-3 px-4 text-text-sec">
+      <div className="relative flex min-h-32 h-full flex-col items-center justify-center gap-3 px-4 text-text-sec">
         <SparkleIcon size={small ? 24 : 36} className="text-accent" />
         <span className={`${small ? 'text-xs' : 'text-sm'} font-medium text-center text-text-pri`}>{title}</span>
         {subtitle ? <span className="text-xs text-text-dim text-center max-w-xs">{subtitle}</span> : null}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -224,6 +287,26 @@ function SparkleIcon({ size = 32, className = '' }: { size?: number; className?:
     >
       <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
       <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function ExpandIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" y1="3" x2="14" y2="10" />
+      <line x1="3" y1="21" x2="10" y2="14" />
     </svg>
   )
 }

@@ -82,7 +82,7 @@ export default async function PublicQuotePage(props: {
 
   const { data: quote } = await supabase
     .from('quotes')
-    .select('id, intake_id, status, scope_of_works, assumptions, risk_flags, good, better, best, optional_upsells, estimated_timeframe, needs_inspection, inspection_reason, gst_note, selected_tier, share_token, stripe_links, paid_at, paid_tier, created_at, preview_status, preview_image_path, samples_status, sample_image_paths')
+    .select('id, intake_id, status, scope_of_works, assumptions, risk_flags, good, better, best, optional_upsells, estimated_timeframe, needs_inspection, inspection_reason, gst_note, selected_tier, share_token, stripe_links, paid_at, paid_tier, created_at, preview_status, preview_image_path, preview_image_paths, samples_status, sample_image_paths')
     .eq('share_token', token)
     .maybeSingle()
 
@@ -128,14 +128,17 @@ export default async function PublicQuotePage(props: {
 
   // ─── AI preview + sample-gallery state for this render + Trigger 2 ───
   const previewStatus = (quote.preview_status as
-    'idle' | 'no_photos' | 'generating' | 'ready' | 'failed' | null) ?? 'idle'
-  let previewImageUrl: string | null = null
-  if (previewStatus === 'ready' && quote.preview_image_path) {
-    try {
-      previewImageUrl = await refreshSignedUrl(quote.preview_image_path as string)
-    } catch {
-      // Sign failed — leave URL null, polling will retry.
-    }
+    'idle' | 'no_photos' | 'generating' | 'ready' | 'partial' | 'failed' | null) ?? 'idle'
+  // Prefer the new plural column. Fall back to the legacy singular for
+  // quotes generated before migration 011 landed (multi-photo previews).
+  const rawPreviewPaths: string[] =
+    Array.isArray(quote.preview_image_paths) && quote.preview_image_paths.length > 0
+      ? (quote.preview_image_paths as string[])
+      : (quote.preview_image_path ? [quote.preview_image_path as string] : [])
+  let previewImageUrls: string[] = []
+  if ((previewStatus === 'ready' || previewStatus === 'partial') && rawPreviewPaths.length > 0) {
+    previewImageUrls = (await Promise.all(rawPreviewPaths.map(p => refreshSignedUrl(p).catch(() => null))))
+      .filter((u): u is string => !!u)
   }
 
   const samplesStatus = (quote.samples_status as
@@ -253,7 +256,7 @@ export default async function PublicQuotePage(props: {
           <PreviewSection
             shareToken={token}
             initialPreviewStatus={previewStatus}
-            initialPreviewImageUrl={previewImageUrl}
+            initialPreviewImageUrls={previewImageUrls}
             initialSamplesStatus={samplesStatus}
             initialSampleImageUrls={sampleImageUrls}
           />

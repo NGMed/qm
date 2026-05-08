@@ -1,17 +1,16 @@
 // ════════════════════════════════════════════════════════════════════
 // Preview + sample-gallery status endpoint — polled by the quote page's
-// <PreviewSection/> client component while either is generating.
+// <PreviewSection/> while either is generating.
 //
 // Returns:
 //   {
-//     preview: { status, image_url? },
-//     samples: { status, image_urls: [] }
+//     preview: { status, image_urls: string[] },   // multi-photo
+//     samples: { status, image_urls: string[] }
 //   }
 // where status ∈ idle | no_photos | generating | ready | partial | failed
 // and URLs are freshly-signed (24h TTL — re-signed on each poll).
 //
-// Auth: anyone with the quote share_token can read. Same trust model
-// as the quote page itself — the token is unguessable.
+// Auth: anyone with the quote share_token can read.
 // ════════════════════════════════════════════════════════════════════
 
 import { createClient } from '@supabase/supabase-js'
@@ -30,7 +29,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
 
   const { data: quote, error } = await supabase
     .from('quotes')
-    .select('id, preview_status, preview_image_path, preview_generated_at, samples_status, sample_image_paths, samples_generated_at')
+    .select('id, preview_status, preview_image_paths, preview_image_path, preview_generated_at, samples_status, sample_image_paths, samples_generated_at')
     .eq('share_token', token)
     .maybeSingle()
 
@@ -41,16 +40,17 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
     return Response.json({ error: 'not found' }, { status: 404 })
   }
 
-  // ─── Preview (single image) ───
+  // ─── Preview (multi-photo) ───
+  // Prefer the new plural column; fall back to the legacy singular path
+  // for quotes generated before migration 011 landed.
   const previewStatus = (quote.preview_status as string) ?? 'idle'
-  let previewImageUrl: string | null = null
-  if (previewStatus === 'ready' && quote.preview_image_path) {
-    try {
-      previewImageUrl = await refreshSignedUrl(quote.preview_image_path as string)
-    } catch (e: any) {
-      console.error('[preview-status] preview sign failed', { quoteId: quote.id, error: e?.message ?? e })
-    }
-  }
+  const previewPaths = Array.isArray(quote.preview_image_paths) && quote.preview_image_paths.length > 0
+    ? (quote.preview_image_paths as string[])
+    : (quote.preview_image_path ? [quote.preview_image_path as string] : [])
+  const previewImageUrls: string[] = previewPaths.length === 0
+    ? []
+    : (await Promise.all(previewPaths.map(p => refreshSignedUrl(p).catch(() => null))))
+        .filter((u): u is string => !!u)
 
   // ─── Samples (up to 3 images) ───
   const samplesStatus = (quote.samples_status as string) ?? 'idle'
@@ -64,7 +64,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
   return Response.json({
     preview: {
       status: previewStatus,
-      image_url: previewImageUrl,
+      image_urls: previewImageUrls,
       generated_at: quote.preview_generated_at ?? null,
     },
     samples: {
