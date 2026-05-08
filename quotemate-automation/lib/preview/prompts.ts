@@ -75,8 +75,91 @@ function footerText(label: 'preview' | 'wide' | 'detail' | 'lit' = 'preview'): s
   ].join('\n')
 }
 
+// ─── COUNT ENFORCEMENT ───────────────────────────────────────────────
+// Text-to-image models notoriously miscount when asked for "3" or "4"
+// of something. Explicit position-by-position numbering ("fitting #1
+// here, #2 here, #3 here") materially improves count accuracy. This
+// block is REPEATED in multiple places in the prompt so the model
+// can't ignore it.
+function countEnforcement(noun: string, count: number): string {
+  const n = count || 1
+  const positionSlots = Array.from({ length: n }, (_, i) => `[${i + 1}]`).join(' ')
+  return [
+    `═══ COUNT IS NON-NEGOTIABLE ═══`,
+    `Render EXACTLY ${n} ${noun}. NOT ${n - 1}. NOT ${n + 1}.`,
+    `Before finalising the image, count them mentally: ${positionSlots}`,
+    `If your draft has fewer, ADD MORE until ${n} are visible.`,
+    `If your draft has more, REMOVE the extras until exactly ${n} remain.`,
+    `If the camera angle won't fit ${n}, PULL BACK to a wider shot until all ${n} fit.`,
+    `═══════════════════════════════`,
+  ].join('\n')
+}
+
+// ─── PLACEMENT MAP ───────────────────────────────────────────────────
+// Per-job-type guidance on WHERE each fitting goes. Stops the model
+// clustering all N fittings in one spot or omitting some because
+// "the room doesn't have space".
+function placementMap(intake: PromptIntake): string {
+  const count = intake.scope?.item_count ?? 0
+  const n = count || 1
+
+  switch (intake.job_type) {
+    case 'downlights':
+      // Even grid across the ceiling — N spread evenly.
+      return [
+        `PLACEMENT MAP — show ALL ${n} downlights spread across the ceiling:`,
+        `  · ${n <= 4 ? 'single row' : '2-row grid'} pattern`,
+        `  · spacing: equal distance between each fitting`,
+        `  · all visible in a single ceiling-up viewing angle`,
+      ].join('\n')
+
+    case 'power_points':
+      // GPOs along walls.
+      return [
+        `PLACEMENT MAP — show ALL ${n} double GPOs along the wall(s):`,
+        `  · evenly spaced horizontally`,
+        `  · all at standard ~30cm height above skirting`,
+        `  · all visible in one wall-facing camera angle`,
+      ].join('\n')
+
+    case 'ceiling_fans':
+      return [
+        `PLACEMENT MAP — show ALL ${n} ceiling fan${n > 1 ? 's' : ''}:`,
+        n === 1
+          ? `  · single fan centred on the ceiling`
+          : `  · one fan per room area, all visible in this frame`,
+      ].join('\n')
+
+    case 'smoke_alarms':
+      // AS 3786 typical placement — one per "zone": hallway + bedroom + living.
+      return [
+        `PLACEMENT MAP — show ALL ${n} smoke alarms positioned per AS 3786:`,
+        n === 1 ? `  · alarm #1: hallway ceiling near bedrooms` :
+        n === 2 ? `  · alarm #1: hallway ceiling near bedrooms\n  · alarm #2: living/dining ceiling` :
+        n === 3 ? `  · alarm #1: hallway ceiling near bedrooms\n  · alarm #2: living/dining ceiling\n  · alarm #3: bedroom ceiling (master)` :
+        n === 4 ? `  · alarm #1: hallway ceiling near bedrooms\n  · alarm #2: living/dining ceiling\n  · alarm #3: master bedroom ceiling\n  · alarm #4: second bedroom ceiling` :
+        `  · ${n} alarms total — distribute one per major room/hallway, all on the ceiling`,
+        `  · all ${n} alarms must be visible in this frame; widen the angle if needed`,
+        `  · each is small (~10cm diameter), white, circular, mounted flush on the ceiling`,
+      ].join('\n')
+
+    case 'outdoor_lighting':
+      return [
+        `PLACEMENT MAP — show ALL ${n} outdoor light fittings:`,
+        `  · evenly spaced along the deck / eaves / outdoor wall`,
+        `  · all visible in one outdoor camera angle`,
+        `  · weatherproof gasket visible, mounted to the substrate`,
+      ].join('\n')
+
+    default:
+      return ''
+  }
+}
+
 // ─── JOB SPEC BLOCK ──────────────────────────────────────────────────
 // Structured "must-match" summary. Surfaced near the top of every prompt.
+// The count is repeated three times across the spec block + count
+// enforcement + placement map — this is intentional, not a typo.
 function jobSpec(intake: PromptIntake): string | null {
   const count = intake.scope?.item_count ?? 0
   const room = detectRoom(intake.scope?.description)
@@ -85,9 +168,11 @@ function jobSpec(intake: PromptIntake): string | null {
   const dimmable = intake.scope?.dimmable === true ? 'dimmable' : 'non-dimmable'
   const desc = (intake.scope?.description ?? '').trim()
 
+  let baseSpec: string[] | null = null
+
   switch (intake.job_type) {
     case 'downlights':
-      return [
+      baseSpec = [
         `JOB SPEC — RENDER MUST MATCH EXACTLY:`,
         `  · Job type: downlight installation`,
         `  · Count: EXACTLY ${count || 6} downlight fittings — count them, no more, no fewer`,
@@ -95,25 +180,25 @@ function jobSpec(intake: PromptIntake): string | null {
         `  · Ceiling: ${ceiling}`,
         `  · Colour temperature: ${tempK}`,
         `  · Dimming: ${dimmable}`,
-        `  · Layout: evenly spaced grid pattern across the ceiling`,
+        `  · Layout: evenly spaced across the ceiling, all visible in one frame`,
         `  · Status: lights ON, beam visible from each fitting`,
-        desc ? `  · Customer description: "${desc.slice(0, 200)}"` : '',
-      ].filter(Boolean).join('\n')
+      ]
+      break
 
     case 'power_points':
-      return [
+      baseSpec = [
         `JOB SPEC — RENDER MUST MATCH EXACTLY:`,
         `  · Job type: GPO (general purpose outlet) installation`,
         `  · Count: EXACTLY ${count || 4} double GPOs — count them, no more, no fewer`,
         `  · Room: ${room}`,
         `  · Faceplate: white, AS/NZS 3112 standard Australian 3-pin double socket`,
         `  · Mounting height: standard ~30cm above skirting`,
-        `  · Spacing: evenly distributed along the wall(s)`,
-        desc ? `  · Customer description: "${desc.slice(0, 200)}"` : '',
-      ].filter(Boolean).join('\n')
+        `  · Spacing: evenly distributed along the wall(s), all visible in one frame`,
+      ]
+      break
 
     case 'ceiling_fans':
-      return [
+      baseSpec = [
         `JOB SPEC — RENDER MUST MATCH EXACTLY:`,
         `  · Job type: ceiling fan installation`,
         `  · Count: EXACTLY ${count || 1} ceiling fan${count > 1 ? 's' : ''}`,
@@ -121,34 +206,53 @@ function jobSpec(intake: PromptIntake): string | null {
         `  · Ceiling: ${ceiling}`,
         `  · Style: modern 3-blade, matte white or brushed nickel finish`,
         `  · Light kit: integrated LED downlight in the centre of the fan`,
-        desc ? `  · Customer description: "${desc.slice(0, 200)}"` : '',
-      ].filter(Boolean).join('\n')
+      ]
+      break
 
     case 'smoke_alarms':
-      return [
+      baseSpec = [
         `JOB SPEC — RENDER MUST MATCH EXACTLY:`,
         `  · Job type: hardwired photoelectric smoke alarm installation`,
-        `  · Count: EXACTLY ${count || 4} smoke alarms`,
-        `  · Room: ${room} / hallway`,
-        `  · Fitting: small white circular, ~10cm diameter, AS 3786 compliant`,
-        `  · Mounting: ${ceiling} ceiling, central position per Australian standard`,
-        desc ? `  · Customer description: "${desc.slice(0, 200)}"` : '',
-      ].filter(Boolean).join('\n')
+        `  · Count: EXACTLY ${count || 4} smoke alarms — must show ALL of them in the frame`,
+        `  · Room: ${room} / hallway / multi-area distribution`,
+        `  · Fitting: small white circular, ~10cm diameter, AS 3786 compliant, photoelectric`,
+        `  · Mounting: flush on the ${ceiling} ceiling`,
+        `  · Spacing: minimum 30cm from any wall, distributed across rooms per AS 3786`,
+      ]
+      break
 
     case 'outdoor_lighting':
-      return [
+      baseSpec = [
         `JOB SPEC — RENDER MUST MATCH EXACTLY:`,
         `  · Job type: outdoor LED light installation`,
         `  · Count: EXACTLY ${count || 4} weatherproof IP-rated fittings`,
         `  · Mounting area: deck / eaves / outdoor wall`,
         `  · Colour temperature: ${tempK}`,
         `  · Status: lights ON, warm welcoming glow at dusk`,
-        desc ? `  · Customer description: "${desc.slice(0, 200)}"` : '',
-      ].filter(Boolean).join('\n')
+      ]
+      break
 
     default:
       return null
   }
+
+  // Append the placement map, count enforcement, and customer description.
+  const noun =
+    intake.job_type === 'downlights' ? 'downlights' :
+    intake.job_type === 'power_points' ? 'double GPOs' :
+    intake.job_type === 'ceiling_fans' ? `ceiling fan${(count || 1) > 1 ? 's' : ''}` :
+    intake.job_type === 'smoke_alarms' ? 'smoke alarms' :
+    intake.job_type === 'outdoor_lighting' ? 'outdoor light fittings' :
+    'fittings'
+
+  return [
+    baseSpec.join('\n'),
+    desc ? `  · Customer description (verbatim): "${desc.slice(0, 240)}"` : '',
+    '',
+    placementMap(intake),
+    '',
+    countEnforcement(noun, count),
+  ].filter(Boolean).join('\n')
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -246,6 +350,7 @@ function buildSamplePromptsForCustomerPhoto(
   tempK: string,
 ): SamplePromptSet {
   const count = intake.scope?.item_count ?? 0
+  const fittingNoun = fittingSingular(intake.job_type)
 
   const sharedHeader = [
     `THE ATTACHED IMAGE IS THE CUSTOMER'S ACTUAL ROOM — same one used for the AI preview above. Generate a sample render of THIS SAME ROOM with the proposed work installed, framed as the specific view-type below.`,
@@ -256,56 +361,90 @@ function buildSamplePromptsForCustomerPhoto(
     `  · Recognisable as the customer's own room from any angle`,
   ].join('\n')
 
-  // ─── WIDE — pull-back, full-room framing ───
+  // ─── WIDE — pull-back, full-room framing, ALL N fittings visible ───
   const wide = [
     sharedHeader,
     ``,
     spec,
     ``,
     `THIS SHOT — ULTRA-WIDE / FULL ROOM:`,
-    `  · Pull the camera BACK so you see as much of the room as possible`,
-    `  · Wider framing than the reference photo — show ceiling, floor, walls, all major furniture`,
-    `  · ALL ${count || 'requested'} fittings clearly visible in this single frame, evenly spaced`,
-    `  · Daytime ambient lighting — fittings powered ON, beams visible`,
+    `  · Pull the camera BACK far enough to fit ALL ${count || 'the requested'} fittings in one frame`,
+    `  · Wider framing than the reference photo — ceiling, floor, walls, all major furniture all visible`,
+    `  · Every single one of the ${count || 'requested'} fittings must be clearly visible and countable`,
+    `  · Daytime ambient lighting — fittings powered ON, beams/glow visible`,
     `  · The customer should immediately recognise this as a wide-angle photo of THEIR room`,
+    ``,
+    `BEFORE FINALISING: count the ${fittingNoun} in the frame. There must be EXACTLY ${count || 'as specified'}. If fewer, widen the angle and add more.`,
     ``,
     footerText('wide'),
   ].join('\n')
 
-  // ─── DETAIL — macro close-up of one fitting ───
+  // ─── DETAIL — MACRO close-up of EXACTLY ONE fitting ───
   const detail = [
     sharedHeader,
     ``,
     spec,
     ``,
-    `THIS SHOT — MACRO CLOSE-UP / SINGLE FITTING:`,
-    `  · Tight crop showing ONE fitting filling most of the frame`,
-    `  · Camera distance ~50 centimetres from the fitting`,
-    `  · The fitting's face plate, trim, and beam pattern must be clearly visible`,
-    `  · Background: rest of the customer's room visible but in shallow bokeh / out of focus`,
+    `╔══════════════════════════════════════════════════════════╗`,
+    `║  THIS SHOT IS A MACRO CLOSE-UP — NOT A WIDE-ANGLE SHOT  ║`,
+    `╚══════════════════════════════════════════════════════════╝`,
+    ``,
+    `FRAMING (CRITICAL):`,
+    `  · Show EXACTLY ONE ${fittingNoun} — a single fitting only, not multiple`,
+    `  · The single ${fittingNoun} must FILL 60-80% of the frame`,
+    `  · Camera distance: ~30-50 centimetres from the fitting`,
+    `  · Tight, intimate crop — like a product-photography shot`,
+    `  · NO other fittings visible in the frame, NO wide-angle composition`,
+    ``,
+    `THE SINGLE ${fittingNoun.toUpperCase()}:`,
+    `  · Show its face plate, trim, finish, and surface texture in detail`,
     `  · ${tempK} colour temperature visible in any emitted light`,
-    `  · This is NOT a wide-angle shot — it must look like a photographer crouched up close`,
+    `  · This is the actual product being installed (or replaced) — show it clearly`,
+    ``,
+    `BACKGROUND:`,
+    `  · Rest of the customer's room visible but BLURRED / out of focus (shallow depth-of-field bokeh)`,
+    `  · Just enough context to tell it's the customer's room — not a wide pull-back`,
+    ``,
+    `REJECT THESE FRAMINGS (DO NOT PRODUCE):`,
+    `  · A pull-back room view`,
+    `  · Multiple fittings visible in the frame`,
+    `  · The fitting smaller than 50% of the image`,
     ``,
     footerText('detail'),
   ].join('\n')
 
-  // ─── LIT — dusk / night-time, lights illuminating the room ───
+  // ─── LIT — dusk, lights illuminating the room ───
   const lit = [
     sharedHeader,
     ``,
     spec,
     ``,
     `THIS SHOT — IN USE / DUSK INTERIOR:`,
-    `  · Same camera framing as the reference photo (or close to it)`,
+    `  · Same camera framing as the wide shot — wide enough to see ALL ${count || 'the requested'} fittings`,
     `  · Time of day: DUSK or EARLY NIGHT — windows show deep blue / purple sky outside`,
     `  · Interior is darker than the reference; the new fittings provide the dominant light`,
     `  · Warm cosy ambient glow from the fittings, gentle reflections on the floor + furniture`,
-    `  · This MUST look meaningfully different from the wide shot — sky outside, lights visibly working`,
+    `  · This MUST look meaningfully different from the wide shot (different time of day, lights as the dominant source)`,
+    `  · ALL ${count || 'requested'} fittings must still be visible and powered ON`,
+    ``,
+    `BEFORE FINALISING: count the ${fittingNoun} in the frame. EXACTLY ${count || 'as specified'} — no fewer.`,
     ``,
     footerText('lit'),
   ].join('\n')
 
   return { wide, detail, lit }
+}
+
+// Singular-form noun used in count-enforcement copy.
+function fittingSingular(jobType: string): string {
+  switch (jobType) {
+    case 'downlights': return 'downlight'
+    case 'power_points': return 'GPO'
+    case 'ceiling_fans': return 'ceiling fan'
+    case 'smoke_alarms': return 'smoke alarm'
+    case 'outdoor_lighting': return 'outdoor light fitting'
+    default: return 'fitting'
+  }
 }
 
 // ─── MODE B: text-to-image (no customer photo) ───────────────────────
@@ -317,6 +456,7 @@ function buildSamplePromptsForTextToImage(
   const room = detectRoom(intake.scope?.description)
   const count = intake.scope?.item_count ?? 0
   const anchor = genericSceneAnchor(intake)
+  const fittingNoun = fittingSingular(intake.job_type)
 
   const wide = [
     `You are producing a series of three coherent sample images of an electrical install for a customer preview. THIS IS IMAGE 1 OF 3 — the WIDE SHOT.`,
@@ -327,23 +467,43 @@ function buildSamplePromptsForTextToImage(
     ``,
     `THIS SHOT — ULTRA-WIDE / FULL ROOM:`,
     `  · Pull the camera back ~3-4 metres — show the whole ${room}`,
-    `  · ALL ${count || 'requested'} fittings visible in this single frame`,
+    `  · ALL ${count || 'the requested'} fittings visible in this single frame`,
     `  · Daytime ambient lighting through the window, fittings powered ON`,
+    ``,
+    `BEFORE FINALISING: count the ${fittingNoun} in the frame. EXACTLY ${count || 'as specified'} — no more, no fewer. Widen the angle if you can't fit them all.`,
     ``,
     footerText('wide'),
   ].join('\n')
 
   const detail = [
-    `THE ATTACHED IMAGE IS THE WIDE SHOT YOU JUST GENERATED. Now produce IMAGE 2 OF 3 — a MACRO CLOSE-UP of one fitting from that same scene.`,
+    `THE ATTACHED IMAGE IS THE WIDE SHOT YOU JUST GENERATED. Now produce IMAGE 2 OF 3 — a MACRO CLOSE-UP of ONE single fitting from that same scene.`,
     ``,
     `KEEP IDENTICAL TO THE REFERENCE: same ceiling material + colour, same walls, same lighting, same fitting style, same finish.`,
     ``,
-    `THIS SHOT — MACRO CLOSE-UP / SINGLE FITTING:`,
-    `  · Tight close-up of ONE fitting, filling most of the frame`,
-    `  · Camera distance ~50 centimetres`,
-    `  · Face plate, trim, beam pattern clearly visible`,
-    `  · Rest of the scene falls into shallow bokeh`,
-    `  · ${tempK} colour temperature visible in the beam pattern`,
+    spec,
+    ``,
+    `╔══════════════════════════════════════════════════════════╗`,
+    `║  THIS SHOT IS A MACRO CLOSE-UP — NOT A WIDE-ANGLE SHOT  ║`,
+    `╚══════════════════════════════════════════════════════════╝`,
+    ``,
+    `FRAMING (CRITICAL):`,
+    `  · Show EXACTLY ONE ${fittingNoun} — a single fitting only, not multiple`,
+    `  · The single ${fittingNoun} must FILL 60-80% of the frame`,
+    `  · Camera distance: ~30-50 centimetres`,
+    `  · Tight, intimate crop — like a product-photography shot`,
+    ``,
+    `THE SINGLE ${fittingNoun.toUpperCase()}:`,
+    `  · Show its face plate, trim, finish, and surface texture in detail`,
+    `  · ${tempK} colour temperature visible in any emitted light`,
+    `  · This is the actual product being installed/replaced — show it clearly`,
+    ``,
+    `BACKGROUND:`,
+    `  · Rest of the scene visible but BLURRED in shallow depth-of-field bokeh`,
+    ``,
+    `REJECT THESE FRAMINGS (DO NOT PRODUCE):`,
+    `  · A pull-back room view`,
+    `  · Multiple fittings in the frame`,
+    `  · The fitting smaller than 50% of the image`,
     ``,
     footerText('detail'),
   ].join('\n')
@@ -353,11 +513,16 @@ function buildSamplePromptsForTextToImage(
     ``,
     `KEEP IDENTICAL TO THE REFERENCE: exact same room, same furniture position, same wall colour, same ceiling, same camera angle, same ${count || 'fittings'} count + placement.`,
     ``,
+    spec,
+    ``,
     `THIS SHOT — IN USE / DUSK INTERIOR:`,
     `  · Time of day: DUSK or EARLY NIGHT — sky outside in deep blue / purple twilight`,
     `  · Interior glow: ${tempK} from the new fittings, cosy ambient atmosphere`,
     `  · Subtle warm reflections on the timber floor + furniture`,
     `  · Must look VISUALLY DIFFERENT from the wide shot — different time of day, fittings now the dominant light source`,
+    `  · ALL ${count || 'requested'} fittings still visible and powered ON`,
+    ``,
+    `BEFORE FINALISING: count the ${fittingNoun} in the frame. EXACTLY ${count || 'as specified'}.`,
     ``,
     footerText('lit'),
   ].join('\n')
