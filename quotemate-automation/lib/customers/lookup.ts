@@ -168,6 +168,83 @@ export async function updateCustomerFromIntake(opts: {
 }
 
 /**
+ * Eager mid-conversation write-back of profile fields the customer just
+ * corrected (PR-B+: customer-initiated profile updates).
+ *
+ * Triggered from the SMS inbound route AFTER mergeSlotUpdates flips a
+ * persistent slot's source to 'customer_corrected'. Persists immediately
+ * so:
+ *   - the change survives if the customer ends the conversation early
+ *   - subsequent conversations see the new value via formatCustomerContext
+ *     and the slot extractor's pre-seed
+ *
+ * Differs from updateCustomerFromIntake:
+ *   - takes slot-shaped data (first_name, suburb, address, email)
+ *   - does NOT bump total_quotes (that still belongs at intake-finish time)
+ *   - only writes fields that are explicitly passed (the route filters to
+ *     the slots that were customer_corrected this turn)
+ *
+ * Fail-soft: logs and returns on error rather than throwing — a write-back
+ * hiccup never breaks the live SMS dialog.
+ */
+export async function writeCustomerCorrections(opts: {
+  customerId: string
+  fields: {
+    first_name?: string | null
+    suburb?: string | null
+    address?: string | null
+    email?: string | null
+  }
+}): Promise<void> {
+  const update: Record<string, unknown> = {
+    last_contacted_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }
+
+  // first_name is mirrored to full_name when full_name was unset OR was the
+  // bare first_name (no surname captured yet). Avoids overwriting a real
+  // "Mike Stevens" full_name with just "Mike" from a mid-conversation update.
+  if (opts.fields.first_name !== undefined && opts.fields.first_name !== null) {
+    const fn = opts.fields.first_name.trim()
+    if (fn) update.first_name = fn
+  }
+  if (opts.fields.suburb !== undefined && opts.fields.suburb !== null) {
+    const s = opts.fields.suburb.trim()
+    if (s) update.suburb = s
+  }
+  if (opts.fields.address !== undefined && opts.fields.address !== null) {
+    const a = opts.fields.address.trim()
+    if (a) update.address = a
+  }
+  if (opts.fields.email !== undefined && opts.fields.email !== null) {
+    const e = opts.fields.email.trim().toLowerCase()
+    if (e) update.email = e
+  }
+
+  // Nothing actionable — bail without a DB round-trip.
+  const writeKeys = Object.keys(update).filter(k => k !== 'last_contacted_at' && k !== 'updated_at')
+  if (writeKeys.length === 0) return
+
+  const { error: updErr } = await supabase
+    .from('customers')
+    .update(update)
+    .eq('id', opts.customerId)
+
+  if (updErr) {
+    console.error('[customers] eager write-back failed', {
+      customerId: opts.customerId,
+      fields: writeKeys,
+      err: updErr.message,
+    })
+  } else {
+    console.log('[customers] eager write-back applied', {
+      customerId: opts.customerId,
+      fields: writeKeys,
+    })
+  }
+}
+
+/**
  * Render a compact "KNOWN CUSTOMER" block for the dialog system prompt.
  * Returns null if there's nothing useful to inject (stub customer with no
  * fields populated).

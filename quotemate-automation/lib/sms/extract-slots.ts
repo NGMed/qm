@@ -24,7 +24,14 @@ import { withRetry } from '@/lib/util/retry'
 // ONLY the slots the customer's message established this turn.
 export const SlotsSchema = z.object({
   first_name: z.string().nullable().optional(),
+  // Persistent profile slots — pre-seeded from customers row, eagerly
+  // written back to customers row when source='customer_corrected'.
+  // The customer expects "update my address to X" to stick across
+  // conversations, so we don't wait for finish to persist.
   suburb: z.string().nullable().optional(),
+  address: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  // Per-job slots — scoped to the current request, not written back.
   job_type: z.enum([
     'downlights', 'power_points', 'ceiling_fans', 'smoke_alarms', 'outdoor_lighting',
     'unknown', 'out_of_scope',
@@ -40,6 +47,12 @@ export const SlotsSchema = z.object({
   // "all good"). The dialog policy reads this to decide finish vs ask.
   verified: z.boolean().nullable().optional(),
 })
+
+// Slots that get persisted back to the customers row when the customer
+// corrects them mid-conversation. Other slots (job_type, count, room, etc.)
+// are scoped to the current request and don't propagate cross-conversation.
+export const PERSISTENT_PROFILE_SLOTS = ['first_name', 'suburb', 'address', 'email'] as const
+export type PersistentProfileSlot = typeof PERSISTENT_PROFILE_SLOTS[number]
 
 export type Slots = z.infer<typeof SlotsSchema>
 export type SlotKey = keyof Slots
@@ -91,11 +104,13 @@ export function normaliseState(raw: unknown): ConversationState {
 //   - the dialog prompt knows to skip re-asking
 //   - the scrub knows the value came from storage (not the customer's mouth)
 //   - if the customer corrects it later, mergeSlotUpdates flips the source
-//     to 'customer_corrected'
+//     to 'customer_corrected' and the route eagerly writes back to customers
 // Accepts a generic shape so this module stays free of CustomerProfile coupling.
 export function seedStateFromKnownFields(args: {
   first_name?: string | null
   suburb?: string | null
+  address?: string | null
+  email?: string | null
 }): ConversationState {
   const slots: Slots = {}
   const sources: SlotSources = {}
@@ -106,6 +121,14 @@ export function seedStateFromKnownFields(args: {
   if (args.suburb && args.suburb.trim()) {
     slots.suburb = args.suburb.trim()
     sources.suburb = 'from_memory'
+  }
+  if (args.address && args.address.trim()) {
+    slots.address = args.address.trim()
+    sources.address = 'from_memory'
+  }
+  if (args.email && args.email.trim()) {
+    slots.email = args.email.trim()
+    sources.email = 'from_memory'
   }
   return {
     slots,
@@ -180,11 +203,28 @@ EXTRACTION RULES:
      - Customer must clearly state a name. "I'm Mike", "Mike", "It's Sarah" → first_name.
      - Don't extract from greetings ("Hey there"), suburbs, or colours.
      - When the agent's last message asks for a name, a single short word reply IS the name.
+     - Explicit update phrases: "update my name to Jeff", "change my name to Jeff",
+       "my name is actually Jeff", "it's Jeff not Jeph" → first_name: "Jeff"
   5. SUBURB extraction:
      - Australian suburb names are 1-3 words, letters only (e.g. Chandler, Bondi,
        Coorparoo, Surry Hills, Bondi Beach).
      - Common patterns: "in Chandler", "at Bondi", "Chandler", "Bondi Beach".
      - Strip leading "in " / "at " / "no, " / "actually " before storing.
+     - Explicit update phrases: "update my suburb to X", "change my suburb to X",
+       "I've moved to X", "my new suburb is X" → suburb: "X"
+  5a. ADDRESS extraction (street + number, not suburb):
+     - Patterns: "12 Smith St", "12 Smith Street, Bondi", "Unit 4 / 18 Hall Rd"
+     - Explicit update phrases: "update my address to 12 Smith St",
+       "change my address to X", "my new address is X", "I'm at 12 Smith St now"
+       → address: "12 Smith St" (full street line, no suburb)
+     - If a customer's message contains BOTH a street address AND a suburb
+       ("12 Smith St, Bondi"), extract address: "12 Smith St" AND suburb: "Bondi".
+     - Do NOT extract a bare suburb name as an address (street numbers required).
+  5b. EMAIL extraction:
+     - Standard email pattern. "my email is sam@example.com",
+       "update my email to sam@example.com", "send it to sam@example.com"
+       → email: "sam@example.com"
+     - Lowercase the value before storing.
   6. JOB_TYPE extraction:
      - downlights / power_points / ceiling_fans / smoke_alarms / outdoor_lighting
      - Anything else (switchboard, EV charger, fault find, ovens, renovation,
