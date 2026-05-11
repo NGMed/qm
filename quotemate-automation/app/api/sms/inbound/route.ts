@@ -22,6 +22,13 @@ import { extractAndStoreMmsPhotos } from '@/lib/sms/mms'
 import { buildPhotoRequestSms, buildQuoteInFlightSms, buildQuoteFailureSms } from '@/lib/sms/templates'
 import { withRetry } from '@/lib/util/retry'
 import { findOrCreateCustomer, formatCustomerContext, type CustomerProfile } from '@/lib/customers/lookup'
+import {
+  extractSlots,
+  mergeSlotUpdates,
+  normaliseState,
+  seedStateFromKnownFields,
+  type ConversationState,
+} from '@/lib/sms/extract-slots'
 
 // Twilio webhook ack. We send the real customer reply via the REST API
 // inside after() — never as TwiML in the webhook response — so this
@@ -276,6 +283,30 @@ export async function POST(req: Request) {
       reason: isReuseOpenLike ? 'open/structuring within window' : 'done within grace',
     })
 
+    // One-time backfill for legacy rows created before migration 012.
+    // If conversation_state is empty AND we have customer fields, seed it
+    // now so per-turn extraction has a starting point. Without this,
+    // legacy in-flight conversations would never benefit from slot tracking
+    // until they ended and a new conversation started.
+    const existingState = normaliseState(conversation.conversation_state)
+    const hasNoState = Object.keys(existingState.slots).length === 0
+    const customerHasFields = !!(customer?.first_name || customer?.suburb)
+    if (hasNoState && customerHasFields) {
+      const seeded = seedStateFromKnownFields({
+        first_name: customer?.first_name ?? null,
+        suburb: customer?.suburb ?? null,
+      })
+      await supabase
+        .from('sms_conversations')
+        .update({ conversation_state: seeded, updated_at: new Date().toISOString() })
+        .eq('id', conversation.id)
+      conversation = { ...conversation, conversation_state: seeded }
+      console.log('[sms/inbound] step 3 — backfilled empty conversation_state from customer record', {
+        conversationId: conversation.id,
+        seededFields: Object.keys(seeded.slots),
+      })
+    }
+
     // Photo-state freshness check — fixes the "second-quote photo bleed" bug.
     //
     // When we re-engage a conversation that's been idle long enough that the
@@ -336,6 +367,14 @@ export async function POST(req: Request) {
     // or done >5min ago = returning customer for a new request).
     mode = 'new'
     const photoToken = randomBytes(16).toString('hex')
+    // Pre-seed conversation_state from the customers row. Any field present
+    // is marked source='from_memory' so the slot extractor + dialog know it
+    // came from storage. If the customer corrects it later, mergeSlotUpdates
+    // flips that source to 'customer_corrected' and the scrub bails.
+    const initialState = seedStateFromKnownFields({
+      first_name: customer?.first_name ?? null,
+      suburb: customer?.suburb ?? null,
+    })
     const { data: created, error: createErr } = await supabase
       .from('sms_conversations')
       .insert({
@@ -344,6 +383,7 @@ export async function POST(req: Request) {
         status: 'open',
         customer_id: customer?.id ?? null,
         photo_request_token: photoToken,
+        conversation_state: initialState,
       })
       .select()
       .single()
@@ -483,6 +523,10 @@ export async function POST(req: Request) {
   const conversationId = conversation.id
   const initialAssumptions = (conversation.assumptions_made as string[] | null) ?? []
   const initialTurnCount = conversation.turn_count
+  // Slot state captured at request entry. Inside after() we run the slot
+  // extractor against the customer's latest inbound and merge any updates
+  // back into this state, then persist + pass into the dialog Haiku call.
+  const initialConversationState: ConversationState = normaliseState(conversation.conversation_state)
   // Photo-request state — passed into after() so we can decide whether
   // to fire the upload-link SMS (parallel to Haiku's reply, only on the
   // first turn that identifies an easy-5 job_type, never twice).
@@ -590,14 +634,61 @@ export async function POST(req: Request) {
       }))
       const inboundCount = turns.filter(t => t.direction === 'inbound').length
 
+      // ─────── Slot extraction (PR-B step 4) ───────
+      // Run a tiny Haiku NLU pass against the latest inbound and merge
+      // structured updates into conversation_state. Catches customer
+      // corrections in real time — without this, "Chandler" arrives as
+      // plain text in sms_messages and nothing tracks the change, so the
+      // dialog Haiku has to re-derive every turn (and sometimes drops it).
+      // Fail-open: extraction failure leaves the dialog running on stale state.
+      let conversationState: ConversationState = initialConversationState
+      try {
+        const lastInbound = turns.filter(t => t.direction === 'inbound').at(-1)?.body ?? ''
+        const lastOutbound = turns.filter(t => t.direction === 'outbound').at(-1)?.body ?? null
+        const extraction = await extractSlots({
+          state: conversationState,
+          lastAgentMessage: lastOutbound,
+          customerMessage: lastInbound,
+        })
+        const updateKeys = Object.keys(extraction.updates).filter(
+          k => extraction.updates[k as keyof typeof extraction.updates] !== null
+            && extraction.updates[k as keyof typeof extraction.updates] !== undefined,
+        )
+        if (updateKeys.length > 0) {
+          const next = mergeSlotUpdates(conversationState, extraction.updates)
+          if (next.last_extracted_at !== conversationState.last_extracted_at) {
+            await supabase
+              .from('sms_conversations')
+              .update({ conversation_state: next, updated_at: new Date().toISOString() })
+              .eq('id', conversationId)
+            conversationState = next
+            console.log('[sms/inbound:after] slots extracted + merged', {
+              updates: updateKeys,
+              sources: next.sources,
+              reasoning: extraction.reasoning,
+            })
+          }
+        } else {
+          console.log('[sms/inbound:after] no slot updates this turn', {
+            reasoning: extraction.reasoning,
+          })
+        }
+      } catch (e: any) {
+        console.warn('[sms/inbound:after] slot extraction failed - continuing with stale state', {
+          message: e?.message,
+          name: e?.name,
+        })
+      }
+
       console.log('[sms/inbound:after] step 6 — calling Haiku dialog agent', {
         turnCount: turns.length,
         inboundCount,
         customerHistory,
         photoLink: photoLinkHint,
-        // Surface the customer-memory state so we can verify in prod logs
-        // whether the KNOWN CUSTOMER MEMORY block is being injected and
-        // what fields it carries.
+        // Surface state knowledge so we can audit in prod logs whether the
+        // dialog is being driven by stored slots vs raw transcript.
+        stateSlots: Object.keys(conversationState.slots),
+        stateSources: conversationState.sources,
         customerHydrated: !!customer,
         customerHasName: !!customer?.first_name,
         customerHasSuburb: !!customer?.suburb,
@@ -615,11 +706,13 @@ export async function POST(req: Request) {
           inboundCount,
           customerHistory,
           photoLink: photoLinkHint,
+          // PR-B: per-conversation slot state is the new source of truth.
+          // The dialog prompt + deterministic scrub both read from this.
+          conversationState,
+          // Legacy memory injections — kept for backwards compat. The
+          // dialog prefers conversationState when it has slots; these are
+          // fallbacks for callers that haven't migrated yet.
           customerContext: formatCustomerContext(customer),
-          // Raw values for the deterministic post-process scrub. If Haiku
-          // ignores the Rule 6 exception and asks for suburb anyway, the
-          // scrub rewrites the reply as an address-confirmation handshake
-          // before the customer ever sees it.
           knownFields: customer ? {
             firstName: customer.first_name,
             suburb: customer.suburb,

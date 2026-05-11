@@ -2,20 +2,24 @@
 // AI sample-gallery generation — 3 coherent Gemini renders of the
 // proposed install, framed as wide / close-up / in-use.
 //
-// All 3 are TEXT-TO-IMAGE (no customer photo as reference). The reason:
-// using the customer's room as a reference makes count accuracy WORSE
-// because the reference room may not have natural placement slots for
-// N fittings. Text-to-image lets Gemini compose around the spec, and
-// the user has confirmed random/generic backgrounds are acceptable so
-// long as the WORK (count, fitting type) follows the customer brief.
+// PHOTO-TAILORED MODE (default when customer uploaded photos):
+// The customer's first uploaded photo is attached to ALL 3 calls as
+// a reference. The wide and in-use shots re-render that room from
+// new angles / at dusk; the close-up uses the photo only for blurred
+// background bokeh. Result: every sample feels like the customer's
+// own space, not a stock photo.
 //
-// All 3 calls run in PARALLEL — there's no chain dependency since each
-// has its own self-contained brief.
+// FALLBACK MODE (no photos uploaded):
+// All 3 calls fall back to text-to-image with a generic Aussie home
+// scene — the original behaviour.
 //
-// Prompt structure: each prompt has a `system` (rules — sent in the
-// Gemini systemInstruction field) and a `user` (the job brief — sent
-// in contents[0].parts[0].text). Splitting them this way empirically
-// improves rule adherence on Gemini Flash Image.
+// Earlier comment said photo-references hurt count accuracy with
+// Gemini 2.5 Flash. With gemini-3-pro-image-preview the model is
+// much better at honouring the count even with a reference, so we
+// can keep the visual fidelity benefit.
+//
+// All 3 calls run in PARALLEL. We download the reference photo once
+// at the top and pass the bytes to each call.
 // ════════════════════════════════════════════════════════════════════
 
 import { createClient } from '@supabase/supabase-js'
@@ -28,7 +32,9 @@ const supabase = createClient(
 
 const BUCKET = 'intake-photos'
 
-const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image'
+// See generate.ts for the default-model rationale. Pro model gives
+// substantially better count + spec adherence than Flash.
+const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-3-pro-image-preview'
 
 const GEMINI_ENDPOINT = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
@@ -91,7 +97,35 @@ export async function generateSampleImages(quoteId: string): Promise<SamplesResu
       .maybeSingle()
     if (!intake) throw new Error('intake row not found')
 
-    const prompts = buildSamplePrompts(intake as PromptIntake)
+    // ─── Resolve reference photo (if any) ─────────────────────────────
+    // Use the first uploaded customer photo as the visual anchor for
+    // all 3 sample calls. If no photos are uploaded, fall back to
+    // generic text-to-image renders.
+    const photoPaths = (Array.isArray((intake as { photo_paths?: unknown }).photo_paths)
+      ? ((intake as { photo_paths: unknown[] }).photo_paths as string[])
+      : []) as string[]
+    const referencePath = photoPaths[0] ?? null
+
+    let referencePhoto: { base64: string; mime: string } | null = null
+    if (referencePath) {
+      const { data: blob, error: dlErr } = await supabase.storage
+        .from(BUCKET)
+        .download(referencePath)
+      if (dlErr || !blob) {
+        console.warn('[samples] reference-photo download failed; falling back to text-to-image', {
+          referencePath,
+          error: dlErr?.message,
+        })
+      } else {
+        const buf = Buffer.from(await blob.arrayBuffer())
+        referencePhoto = { base64: buf.toString('base64'), mime: blob.type || 'image/jpeg' }
+        console.log('[samples] reference photo loaded', { path: referencePath, bytes: buf.length })
+      }
+    }
+
+    const prompts = buildSamplePrompts(intake as PromptIntake, {
+      usePhotoReference: referencePhoto !== null,
+    })
     if (!prompts) {
       await supabase.from('quotes')
         .update({ samples_status: 'failed', samples_error: 'no sample prompts for this job_type' })
@@ -104,12 +138,15 @@ export async function generateSampleImages(quoteId: string): Promise<SamplesResu
     const succeededPaths: string[] = []
     const failureReasons: string[] = []
 
-    // All 3 in parallel — no inter-shot dependency.
-    console.log('[samples] running 3 parallel text-to-image calls')
+    // All 3 in parallel — no inter-shot dependency. Reference photo
+    // (if present) is shared across all 3 calls.
+    console.log('[samples] running 3 parallel calls', {
+      mode: referencePhoto ? 'photo-tailored' : 'text-to-image',
+    })
     const results = await Promise.allSettled([
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.wide,   label: 'wide' }),
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.detail, label: 'detail' }),
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.lit,    label: 'lit' }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.wide,   label: 'wide',   referencePhoto }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.detail, label: 'detail', referencePhoto }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.lit,    label: 'lit',    referencePhoto }),
     ])
     const labels = ['wide', 'detail', 'lit'] as const
     results.forEach((r, i) => {
@@ -158,8 +195,25 @@ async function generateOneSample(opts: {
   intakeId: string
   prompt: SystemUserPrompt
   label: 'wide' | 'detail' | 'lit'
+  referencePhoto: { base64: string; mime: string } | null
 }): Promise<{ path: string; imageBytes: Buffer; mimeType: string }> {
   const apiUrl = `${GEMINI_ENDPOINT(GEMINI_MODEL)}?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`
+
+  // Build user-message parts. Text first, then the reference photo
+  // (if present) so the model reads the brief before looking at the
+  // visual anchor.
+  const userParts: Array<
+    | { text: string }
+    | { inline_data: { mime_type: string; data: string } }
+  > = [{ text: opts.prompt.user }]
+  if (opts.referencePhoto) {
+    userParts.push({
+      inline_data: {
+        mime_type: opts.referencePhoto.mime,
+        data: opts.referencePhoto.base64,
+      },
+    })
+  }
 
   const res = await fetch(apiUrl, {
     method: 'POST',
@@ -173,7 +227,7 @@ async function generateOneSample(opts: {
       contents: [
         {
           role: 'user',
-          parts: [{ text: opts.prompt.user }],
+          parts: userParts,
         },
       ],
       generation_config: {

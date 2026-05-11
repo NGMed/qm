@@ -24,10 +24,11 @@ const supabase = createClient(
 
 const BUCKET = 'intake-photos'
 
-// Default: gemini-2.5-flash-image (GA, stable). Override via env to
-// gemini-3.1-flash-image-preview / gemini-3-pro-image-preview /
-// nano-banana-pro-preview.
-const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-2.5-flash-image'
+// Default: gemini-3-pro-image-preview ("Nano Banana Pro") — best
+// instruction-following + count accuracy of the Gemini image family.
+// Override via env to gemini-3.1-flash-image-preview (cheaper/faster)
+// or gemini-2.5-flash-image (legacy GA).
+const GEMINI_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-3-pro-image-preview'
 
 const GEMINI_ENDPOINT = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`

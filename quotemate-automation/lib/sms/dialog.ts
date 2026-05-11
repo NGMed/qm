@@ -18,6 +18,7 @@ import {
   rulesAsText,
   type JobType,
 } from './assumptions'
+import type { ConversationState, SlotKey } from './extract-slots'
 
 // What the dialog agent returns for every inbound SMS turn.
 export const TurnDecisionSchema = z.object({
@@ -550,22 +551,89 @@ function formatHistory(history: ConversationTurn[]): string {
 // Returns either the original reply (no rewrite needed) or a deterministic
 // rewrite. Only triggers on action='ask' where reply mentions "suburb" and
 // we have a stored value to substitute.
+// Renders the per-conversation slot state into a prompt block. This block
+// is the single source of truth for what we know about the customer + job
+// once PR-B is live — supersedes the older KNOWN CUSTOMER MEMORY block
+// formatted by lib/customers/lookup.ts:formatCustomerContext.
+//
+// Source attribution is preserved in the rendered text so Haiku knows:
+//   - from_memory:        skip re-asking, use silently
+//   - from_transcript:    customer stated this turn, can echo naturally
+//   - customer_corrected: ACKNOWLEDGE the change in the next reply
+function formatStateBlock(state: ConversationState | undefined): string | null {
+  if (!state) return null
+  const slotEntries = Object.entries(state.slots).filter(
+    ([, v]) => v !== null && v !== undefined,
+  )
+  if (slotEntries.length === 0) return null
+
+  const lines: string[] = [
+    'CURRENT JOB STATE — single source of truth for what we know.',
+    'This block supersedes any earlier prompt section. Use these values',
+    'verbatim in greetings, acknowledgements, and the verification handshake.',
+    '',
+    'KNOWN VALUES (do NOT re-ask any of these):',
+  ]
+  for (const [key, value] of slotEntries) {
+    const src = state.sources[key as SlotKey]
+    lines.push(`  ${key}: ${JSON.stringify(value)}${src ? `  [source: ${src}]` : ''}`)
+  }
+
+  const corrections = slotEntries.filter(
+    ([k]) => state.sources[k as SlotKey] === 'customer_corrected',
+  )
+  if (corrections.length > 0) {
+    lines.push('')
+    lines.push('★ CUSTOMER CORRECTIONS THIS CONVERSATION ★')
+    lines.push('The customer has corrected the following stored values during this conversation.')
+    lines.push('Your reply MUST acknowledge each correction explicitly so the customer feels heard:')
+    for (const [k, v] of corrections) {
+      lines.push(`  - ${k} is now ${JSON.stringify(v)}. Reference the change naturally`)
+      lines.push(`    (e.g. "Got it, ${v} not <previous value from history> - ...").`)
+    }
+    lines.push('Echo the CORRECTED value in your verification handshake, never the old one.')
+  }
+
+  return lines.join('\n')
+}
+
+// Deterministic safety net for Rule 6 — rewrite suburb questions into the
+// address-confirmation handshake when the customer's suburb is on file.
+//
+// PR-B made this state-aware:
+//   - Reads the current suburb from conversation_state.slots.suburb
+//   - BAILS when sources.suburb === 'customer_corrected' (stored value is
+//     stale, customer just gave us the new one this conversation — rewriting
+//     into "still at <stale>?" would ignore the customer entirely, which is
+//     exactly what bit Con on 2026-05-11)
 function scrubAskingForKnownSuburb(args: {
   reply: string
   action: 'ask' | 'finish' | 'escalate_inspection'
-  knownSuburb: string | null | undefined
-  knownFirstName: string | null | undefined
+  state: ConversationState | undefined
 }): string {
   if (args.action !== 'ask') return args.reply
-  if (!args.knownSuburb) return args.reply
+  const knownSuburb = args.state?.slots.suburb
+  if (!knownSuburb) return args.reply
+
+  // Customer just corrected the suburb this conversation — the dialog Haiku
+  // already sees the correction in CURRENT JOB STATE and is acknowledging
+  // it. Rewriting would clobber Haiku's reply with the stale stored value.
+  if (args.state?.sources.suburb === 'customer_corrected') {
+    console.log('[sms/dialog] scrubAskingForKnownSuburb skipped - suburb was customer-corrected', {
+      suburb: knownSuburb,
+    })
+    return args.reply
+  }
+
   // Only rewrite when the reply is genuinely asking about suburb — we look
   // for the word "suburb" plus a question mark. Acknowledgements that
   // mention the suburb in passing ("got it, the Bondi job") are left alone.
   const r = args.reply.toLowerCase()
   if (!/\bsuburb\b/.test(r)) return args.reply
   if (!/\?/.test(args.reply)) return args.reply
-  const namePart = args.knownFirstName ? ` ${args.knownFirstName}` : ''
-  return `Got it${namePart} - still at the ${args.knownSuburb} place? If not, just let me know the new suburb.`
+  const knownFirstName = args.state?.slots.first_name
+  const namePart = knownFirstName ? ` ${knownFirstName}` : ''
+  return `Got it${namePart} - still at the ${knownSuburb} place? If not, just let me know the new suburb.`
 }
 
 // Deterministic post-process scrub — defence-in-depth in case Haiku
@@ -644,17 +712,28 @@ export async function decideNextTurn(args: {
    */
   customerContext?: string | null
   /**
-   * Raw known-field values (NOT the formatted block above). Used by the
-   * post-Haiku deterministic scrub to rewrite any "what suburb?" ask into
-   * the address-confirmation handshake when we have a stored value. Belt
-   * and braces with the Rule 6 prompt directive — Haiku occasionally
-   * drops the exception on long prompts and re-asks anyway.
+   * Raw known-field values (NOT the formatted block above). Legacy — kept
+   * for backwards compat with non-PR-B callers. New callers should pass
+   * `conversationState` instead.
    */
   knownFields?: {
     firstName?: string | null
     suburb?: string | null
   }
+  /**
+   * Per-conversation slot state (PR-B). When present and non-empty, this
+   * supersedes both `customerContext` and `knownFields` — it's the single
+   * source of truth for what we know about the customer + job. Includes
+   * source attribution so Haiku knows which fields were corrections this
+   * conversation and acknowledges them in the reply.
+   */
+  conversationState?: ConversationState
 }): Promise<TurnDecision> {
+  // Build the memory block for the prompt. Prefer the state-based block
+  // (PR-B) when state has slots; fall back to the legacy customerContext
+  // block (formatCustomerContext output) for callers that haven't migrated.
+  const stateBlock = formatStateBlock(args.conversationState)
+  const memoryBlock = stateBlock ?? args.customerContext ?? ''
   // Wrap Haiku call in withRetry so a transient Anthropic 529 (overloaded)
   // or network blip doesn't drop the customer's reply silently. 3 attempts
   // with 1s/2s backoff = max ~4s overhead, kept tight because the SMS reply
@@ -671,10 +750,9 @@ export async function decideNextTurn(args: {
         customerHistoryDirective(args.customerHistory ?? (args.inboundCount === 1 ? 'first_time' : 'continuing')),
         `PHOTO LINK STATE: ${args.photoLink ?? 'not_applicable'}`,
         photoLinkDirective(args.photoLink ?? 'not_applicable'),
-        // Customer-memory injection — only present when the database has a
-        // populated profile for this phone number. Haiku uses these fields
-        // to greet by first name and skip already-known must-ask questions.
-        args.customerContext ? args.customerContext : '',
+        // Memory injection — state-based when PR-B's conversation_state
+        // is present, legacy customerContext block when not.
+        memoryBlock,
         `CONVERSATION HISTORY (oldest first):`,
         formatHistory(args.history),
         ``,
@@ -692,23 +770,36 @@ export async function decideNextTurn(args: {
     }
   )
   // Deterministic scrubs — defence-in-depth against Haiku rule drift.
-  //   1. scrubAskingForKnownSuburb: if Haiku asks for suburb but we have
-  //      one stored, rewrite as address-confirmation handshake (Rule 6).
+  //   1. scrubAskingForKnownSuburb: if Haiku asks for suburb but state has
+  //      one (and it wasn't customer-corrected this turn), rewrite into the
+  //      address-confirmation handshake (Rule 6).
   //   2. scrubVoiceWording: replace voice-context phrasing + typographic
   //      punctuation that renders badly on Android.
   // Order matters — suburb scrub runs first so its output flows through
   // the voice/punctuation cleanup as well.
+  // Build a synthetic state for the scrub when only the legacy `knownFields`
+  // is provided. Lets the new state-aware scrub keep working for callers
+  // that haven't migrated to passing `conversationState` yet.
+  const scrubState: ConversationState | undefined =
+    args.conversationState
+      ?? (args.knownFields ? {
+        slots: {
+          first_name: args.knownFields.firstName ?? undefined,
+          suburb: args.knownFields.suburb ?? undefined,
+        },
+        sources: {},
+        last_extracted_at: null,
+      } : undefined)
   const suburbScrubbed = scrubAskingForKnownSuburb({
     reply: object.reply_to_send,
     action: object.action,
-    knownSuburb: args.knownFields?.suburb,
-    knownFirstName: args.knownFields?.firstName,
+    state: scrubState,
   })
   if (suburbScrubbed !== object.reply_to_send) {
     console.warn('[sms/dialog] scrubAskingForKnownSuburb rewrote reply', {
       original: object.reply_to_send.slice(0, 120),
       rewritten: suburbScrubbed.slice(0, 120),
-      knownSuburb: args.knownFields?.suburb,
+      knownSuburb: scrubState?.slots.suburb,
     })
   }
   return {
