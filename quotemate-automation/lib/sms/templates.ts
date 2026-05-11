@@ -376,7 +376,7 @@ function incGst(exGstCents: number | string): number {
   return Math.round(n * 1.10)
 }
 
-function tierComponents(tier: Tier): string {
+function tierComponents(tier: Tier, jobType?: string | null): string {
   if (!tier?.line_items?.length) return ''
   const labourHrs = tier.line_items
     .filter((li) => li.unit === 'hr')
@@ -384,8 +384,15 @@ function tierComponents(tier: Tier): string {
   const fittingCount = tier.line_items
     .filter((li) => li.unit === 'each')
     .reduce((sum, li) => sum + (li.quantity ?? 0), 0)
+  // Trade-aware noun: electrical jobs install discrete "fittings"
+  // (downlights, GPOs, fans, alarms). Plumbing jobs are mostly callouts
+  // with one or two assembly + sundries items, so "fittings" reads as
+  // wrong. Use "items" for plumbing and unknown, "fittings" for electrical.
+  const noun = jobType && PLUMBING_JOB_TYPES.has(jobType)
+    ? 'items'
+    : (jobType && ELECTRICAL_JOB_TYPES.has(jobType) ? 'fittings' : 'items')
   const parts: string[] = []
-  if (fittingCount) parts.push(`${fittingCount} fittings`)
+  if (fittingCount) parts.push(`${fittingCount} ${noun}`)
   if (labourHrs) parts.push(`${+labourHrs.toFixed(2)}hr labour`)
   return parts.join(' + ')
 }
@@ -467,7 +474,7 @@ export function buildQuoteSms(intake: Intake, quote: Quote): string {
 
     const label = tierLabel(tier)
     if (label) lines.push(`- ${label}`)
-    const comps = tierComponents(tier)
+    const comps = tierComponents(tier, intake.job_type)
     if (comps) lines.push(`- ${comps}`)
 
     const payUrl = quote.pay_links?.[key]
