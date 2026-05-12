@@ -71,19 +71,27 @@ export default async function OnboardSuccess({ searchParams }: Props) {
             </p>
           </div>
 
-          {smsHref && (
-            <div className="mt-12">
+          <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-8 py-4 text-sm uppercase tracking-wider transition-colors focus:outline-none focus:ring-2 focus:ring-accent-soft focus:ring-offset-2 focus:ring-offset-ink-deep"
+            >
+              Open my dashboard
+              <Arrow />
+            </Link>
+            {smsHref && (
               <a
                 href={smsHref}
-                className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-8 py-4 text-sm uppercase tracking-wider transition-colors focus:outline-none focus:ring-2 focus:ring-accent-soft focus:ring-offset-2 focus:ring-offset-ink-deep"
+                className="inline-flex items-center gap-2 bg-transparent border border-ink-line hover:bg-ink-card text-text-pri font-semibold px-6 py-4 text-sm uppercase tracking-wider transition-colors"
               >
                 Send a test text
-                <Arrow />
               </a>
-              <p className="mt-4 text-xs text-text-dim">
-                Opens your phone&rsquo;s SMS app with the number pre-filled.
-              </p>
-            </div>
+            )}
+          </div>
+          {smsHref && (
+            <p className="mt-4 text-xs text-text-dim">
+              Test text opens your phone&rsquo;s SMS app with the number pre-filled.
+            </p>
           )}
         </div>
       </div>

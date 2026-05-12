@@ -1,0 +1,1031 @@
+// /dashboard — Tradie portal. Maintain design system.
+//
+// Tabbed single-page app: Overview / Account / Pricing / Services / Quotes.
+// Fetches everything from /api/tenant/me, posts updates back via PATCH.
+//
+// Client component start to finish — we want immediate optimistic feedback
+// when the tradie toggles a service or saves pricing. Server-side rendering
+// would force a round-trip on every save which is a worse UX.
+
+'use client'
+
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { getBrowserSupabase } from '@/lib/supabase/client'
+import { ErrorBanner, Field, INPUT } from '../signup/page'
+
+// ─── Types ────────────────────────────────────────────────────────
+
+type Tenant = {
+  id: string
+  owner_user_id: string
+  business_name: string
+  owner_first_name: string | null
+  owner_email: string | null
+  owner_mobile: string | null
+  trade: 'electrical' | 'plumbing'
+  state: string | null
+  abn: string | null
+  licence_type: string | null
+  licence_number: string | null
+  licence_expiry: string | null
+  twilio_sms_number: string | null
+  twilio_voice_number: string | null
+  vapi_assistant_id: string | null
+  vapi_voice_persona: string | null
+  status: 'onboarding' | 'active'
+  created_at: string
+  activated_at: string | null
+}
+
+type Pricing = {
+  tenant_id: string
+  hourly_rate: number | null
+  call_out_minimum: number | null
+  default_markup_pct: number | null
+  apprentice_rate: number | null
+  senior_rate: number | null
+  after_hours_multiplier: number | null
+  min_labour_hours: number | null
+  risk_buffer_pct: number | null
+  gst_registered: boolean | null
+} | null
+
+type ServiceOffering = {
+  assembly_id: string
+  enabled: boolean
+  shared_assemblies: {
+    id: string
+    code: string
+    label: string
+    trade: string
+  } | null
+}
+
+type Quote = {
+  id: string
+  created_at: string
+  status: string
+  selected_tier: string | null
+  total_inc_gst: number | string | null
+  scope_of_works: string | null
+  share_token: string | null
+  needs_inspection: boolean | null
+  routing_decision: string | null
+  customer_first_name: string | null
+  customer_phone: string | null
+}
+
+type DashboardData = {
+  tenant: Tenant
+  pricing: Pricing
+  services: ServiceOffering[]
+  quotes: Quote[]
+}
+
+type Tab = 'overview' | 'account' | 'pricing' | 'services' | 'quotes'
+
+// ─── Page ─────────────────────────────────────────────────────────
+
+export default function DashboardPage() {
+  const router = useRouter()
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [tab, setTab] = useState<Tab>('overview')
+
+  // On mount: confirm we have a session, then load the dashboard payload.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const supabase = getBrowserSupabase()
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token ?? null
+      if (!token) {
+        // Not signed in → bounce to /signin.
+        router.replace('/signin')
+        return
+      }
+      if (cancelled) return
+      setAccessToken(token)
+      await refresh(token)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function refresh(token: string) {
+    setLoadError(null)
+    try {
+      const res = await fetch('/api/tenant/me', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
+      if (res.status === 404) {
+        // Authed but no tenant row yet → finish onboarding wizard.
+        router.replace('/onboard')
+        return
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error ?? `Load failed (HTTP ${res.status})`)
+      }
+      const json = (await res.json()) as DashboardData
+      setData(json)
+    } catch (err: any) {
+      setLoadError(err?.message ?? 'Failed to load dashboard')
+    }
+  }
+
+  async function patch(payload: Record<string, unknown>) {
+    if (!accessToken) throw new Error('not signed in')
+    const res = await fetch('/api/tenant/me', {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(
+        Array.isArray(body?.errors)
+          ? body.errors.join(' · ')
+          : body?.error ?? `Save failed (HTTP ${res.status})`,
+      )
+    }
+    // Re-fetch to confirm what landed.
+    await refresh(accessToken)
+  }
+
+  async function signOut() {
+    const supabase = getBrowserSupabase()
+    await supabase.auth.signOut()
+    router.replace('/signin')
+  }
+
+  if (loadError) {
+    return (
+      <Shell businessName={null} onSignOut={signOut}>
+        <div className="max-w-xl">
+          <ErrorBanner>{loadError}</ErrorBanner>
+          <button
+            onClick={() => accessToken && refresh(accessToken)}
+            className="mt-4 inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-5 py-2.5 text-xs uppercase tracking-wider"
+          >
+            Try again
+          </button>
+        </div>
+      </Shell>
+    )
+  }
+
+  if (!data) {
+    return (
+      <Shell businessName={null} onSignOut={signOut}>
+        <div className="font-mono text-xs uppercase tracking-[0.16em] text-text-dim">
+          Loading your portal…
+        </div>
+      </Shell>
+    )
+  }
+
+  return (
+    <Shell businessName={data.tenant.business_name} onSignOut={signOut}>
+      {/* Hero / status row */}
+      <header className="flex flex-wrap items-end justify-between gap-4 pb-8 border-b border-ink-line">
+        <div>
+          <span className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-text-dim">
+            QuoteMate · Portal
+          </span>
+          <h1 className="mt-2 font-extrabold uppercase text-[clamp(1.75rem,4vw,2.5rem)] leading-[1] tracking-[-0.03em]">
+            G&rsquo;day{' '}
+            <span className="text-accent">
+              {data.tenant.owner_first_name || 'tradie'}
+            </span>
+            .
+          </h1>
+          <p className="mt-2 text-text-sec text-sm">
+            {data.tenant.business_name} · {tradeLabel(data.tenant.trade)} ·{' '}
+            {data.tenant.state ?? '—'}
+          </p>
+        </div>
+        <StatusBadge status={data.tenant.status} />
+      </header>
+
+      {/* Tab nav */}
+      <nav className="mt-8 flex flex-wrap gap-1 border-b border-ink-line">
+        {(['overview', 'account', 'pricing', 'services', 'quotes'] as const).map(
+          (t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-4 py-3 font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold transition-colors ${
+                tab === t
+                  ? 'text-accent border-b-2 border-accent -mb-px'
+                  : 'text-text-dim hover:text-text-pri'
+              }`}
+            >
+              {tabLabel(t)}
+              {t === 'quotes' && data.quotes.length > 0 && (
+                <span className="ml-2 text-text-sec">({data.quotes.length})</span>
+              )}
+            </button>
+          ),
+        )}
+      </nav>
+
+      {/* Tab content */}
+      <section className="mt-8 pb-20">
+        {tab === 'overview' && <OverviewTab data={data} />}
+        {tab === 'account' && <AccountTab data={data} onSave={patch} />}
+        {tab === 'pricing' && <PricingTab data={data} onSave={patch} />}
+        {tab === 'services' && <ServicesTab data={data} onSave={patch} />}
+        {tab === 'quotes' && <QuotesTab data={data} />}
+      </section>
+    </Shell>
+  )
+}
+
+// ─── Shell + Status badge ─────────────────────────────────────────
+
+function Shell({
+  businessName,
+  onSignOut,
+  children,
+}: {
+  businessName: string | null
+  onSignOut: () => void
+  children: ReactNode
+}) {
+  return (
+    <main className="min-h-screen bg-ink-deep text-text-pri flex flex-col">
+      <nav className="border-b border-ink-line bg-ink-deep sticky top-0 z-10">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <Link href="/dashboard" className="flex items-center gap-3">
+            <span className="grid h-7 w-7 place-items-center bg-accent font-black text-white text-xs">
+              Q
+            </span>
+            <span className="font-extrabold uppercase tracking-tight text-text-pri">
+              QuoteMate
+            </span>
+            {businessName && (
+              <>
+                <span className="text-text-dim">/</span>
+                <span className="font-mono text-xs uppercase tracking-[0.14em] text-text-sec">
+                  {businessName}
+                </span>
+              </>
+            )}
+          </Link>
+          <button
+            onClick={onSignOut}
+            className="text-sm font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      </nav>
+      <div className="flex-1 mx-auto w-full max-w-5xl px-6 py-10">
+        {children}
+      </div>
+    </main>
+  )
+}
+
+function StatusBadge({ status }: { status: 'onboarding' | 'active' }) {
+  const isActive = status === 'active'
+  return (
+    <span
+      className={`inline-flex items-center gap-2 font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-3 py-1.5 border ${
+        isActive
+          ? 'text-emerald-300 border-emerald-700/60 bg-emerald-950/30'
+          : 'text-amber-300 border-amber-700/60 bg-amber-950/30'
+      }`}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${
+          isActive ? 'bg-emerald-300' : 'bg-amber-300'
+        }`}
+      />
+      {isActive ? 'Active' : 'Onboarding'}
+    </span>
+  )
+}
+
+// ─── Overview tab ─────────────────────────────────────────────────
+
+function OverviewTab({ data }: { data: DashboardData }) {
+  const enabledServices = data.services.filter((s) => s.enabled).length
+  const totalServices = data.services.length
+  const activeQuotes = data.quotes.length
+  const draftQuotes = data.quotes.filter((q) =>
+    ['drafted', 'awaiting_review', 'review'].includes(q.status),
+  ).length
+
+  return (
+    <div className="space-y-8">
+      <Grid cols={3}>
+        <Kpi label="QuoteMate number" value={data.tenant.twilio_sms_number ?? '—'} mono />
+        <Kpi label="AI assistant" value={data.tenant.vapi_assistant_id ? 'Live' : '—'} />
+        <Kpi label="Trade" value={tradeLabel(data.tenant.trade)} />
+      </Grid>
+
+      <Grid cols={3}>
+        <Kpi label="Auto-quote services" value={`${enabledServices} / ${totalServices}`} />
+        <Kpi label="Quotes recorded" value={String(activeQuotes)} />
+        <Kpi label="In review" value={String(draftQuotes)} />
+      </Grid>
+
+      <Card title="What's wired up">
+        <ul className="space-y-2 text-sm text-text-sec">
+          <Tick on={!!data.tenant.business_name}>Business identity saved</Tick>
+          <Tick on={!!data.pricing?.hourly_rate}>Pricing book in place</Tick>
+          <Tick on={enabledServices > 0}>{enabledServices} auto-quote services enabled</Tick>
+          <Tick on={!!data.tenant.twilio_sms_number}>QuoteMate phone number assigned</Tick>
+          <Tick on={!!data.tenant.vapi_assistant_id}>AI receptionist active</Tick>
+        </ul>
+      </Card>
+    </div>
+  )
+}
+
+function Kpi({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="bg-ink-card border border-ink-line p-5">
+      <div className="font-mono text-[0.65rem] uppercase tracking-[0.16em] text-text-dim">
+        {label}
+      </div>
+      <div
+        className={`mt-2 text-text-pri font-bold text-lg ${
+          mono ? 'font-mono' : ''
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function Tick({ on, children }: { on: boolean; children: ReactNode }) {
+  return (
+    <li className="flex items-baseline gap-3">
+      <span
+        className={`font-mono text-xs ${
+          on ? 'text-emerald-400' : 'text-text-dim'
+        }`}
+      >
+        {on ? '✓' : '○'}
+      </span>
+      <span className={on ? 'text-text-sec' : 'text-text-dim'}>{children}</span>
+    </li>
+  )
+}
+
+// ─── Account tab ──────────────────────────────────────────────────
+
+function AccountTab({
+  data,
+  onSave,
+}: {
+  data: DashboardData
+  onSave: (payload: Record<string, unknown>) => Promise<void>
+}) {
+  const [form, setForm] = useState({
+    business_name: data.tenant.business_name ?? '',
+    owner_first_name: data.tenant.owner_first_name ?? '',
+    owner_email: data.tenant.owner_email ?? '',
+    owner_mobile: data.tenant.owner_mobile ?? '',
+    trade: data.tenant.trade,
+    state: data.tenant.state ?? '',
+    abn: data.tenant.abn ?? '',
+    licence_type: data.tenant.licence_type ?? '',
+    licence_number: data.tenant.licence_number ?? '',
+    licence_expiry: data.tenant.licence_expiry ?? '',
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      await onSave({ tenant: form })
+      setSavedAt(Date.now())
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Card
+      title="Account details"
+      subtitle="What customers see on quotes, where the regulator finds you."
+    >
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div className="grid md:grid-cols-2 gap-5">
+          <Field label="Business name">
+            <input
+              type="text"
+              value={form.business_name}
+              onChange={(e) => setForm({ ...form, business_name: e.target.value })}
+              className={INPUT}
+              required
+            />
+          </Field>
+          <Field label="Your first name">
+            <input
+              type="text"
+              value={form.owner_first_name}
+              onChange={(e) => setForm({ ...form, owner_first_name: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+          <Field label="Email">
+            <input
+              type="email"
+              value={form.owner_email}
+              onChange={(e) => setForm({ ...form, owner_email: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+          <Field label="Mobile">
+            <input
+              type="tel"
+              value={form.owner_mobile}
+              onChange={(e) => setForm({ ...form, owner_mobile: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+          <Field label="Trade">
+            <select
+              value={form.trade}
+              onChange={(e) => setForm({ ...form, trade: e.target.value as 'electrical' | 'plumbing' })}
+              className={INPUT}
+            >
+              <option value="electrical">Electrical</option>
+              <option value="plumbing">Plumbing</option>
+            </select>
+          </Field>
+          <Field label="State">
+            <select
+              value={form.state}
+              onChange={(e) => setForm({ ...form, state: e.target.value })}
+              className={INPUT}
+            >
+              <option value="">Select state</option>
+              {['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'].map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="ABN">
+            <input
+              type="text"
+              value={form.abn}
+              onChange={(e) => setForm({ ...form, abn: e.target.value })}
+              className={INPUT}
+              maxLength={20}
+            />
+          </Field>
+          <Field label="Licence number">
+            <input
+              type="text"
+              value={form.licence_number}
+              onChange={(e) => setForm({ ...form, licence_number: e.target.value })}
+              className={INPUT}
+              maxLength={40}
+            />
+          </Field>
+          <Field label="Licence type">
+            <input
+              type="text"
+              value={form.licence_type}
+              onChange={(e) => setForm({ ...form, licence_type: e.target.value })}
+              className={INPUT}
+              maxLength={20}
+              placeholder="e.g. NECA NSW"
+            />
+          </Field>
+          <Field label="Licence expiry">
+            <input
+              type="date"
+              value={form.licence_expiry}
+              onChange={(e) => setForm({ ...form, licence_expiry: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+        </div>
+
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+
+        <div className="flex items-center justify-between pt-2">
+          <SaveHint savedAt={savedAt} />
+          <button
+            type="submit"
+            disabled={submitting}
+            className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
+          >
+            {submitting ? 'Saving…' : 'Save account'}
+          </button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
+// ─── Pricing tab ──────────────────────────────────────────────────
+
+function PricingTab({
+  data,
+  onSave,
+}: {
+  data: DashboardData
+  onSave: (payload: Record<string, unknown>) => Promise<void>
+}) {
+  const initial = useMemo(
+    () => ({
+      hourly_rate: numString(data.pricing?.hourly_rate),
+      call_out_minimum: numString(data.pricing?.call_out_minimum),
+      default_markup_pct: numString(data.pricing?.default_markup_pct),
+      apprentice_rate: numString(data.pricing?.apprentice_rate),
+      senior_rate: numString(data.pricing?.senior_rate),
+      after_hours_multiplier: numString(data.pricing?.after_hours_multiplier),
+      min_labour_hours: numString(data.pricing?.min_labour_hours),
+      risk_buffer_pct: numString(data.pricing?.risk_buffer_pct),
+      gst_registered: data.pricing?.gst_registered ?? false,
+    }),
+    [data.pricing],
+  )
+  const [form, setForm] = useState(initial)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      const payload: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(form)) {
+        if (typeof v === 'boolean') payload[k] = v
+        else if (v !== '') payload[k] = Number(v)
+      }
+      await onSave({ pricing: payload })
+      setSavedAt(Date.now())
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Card
+      title="Pricing book"
+      subtitle="Every quote your AI drafts pulls from these numbers. Update any time."
+    >
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div className="grid md:grid-cols-3 gap-5">
+          <Field label="Hourly rate" hint="$AUD ex GST">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.hourly_rate}
+              onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
+              className={INPUT}
+              required
+            />
+          </Field>
+          <Field label="Callout minimum" hint="$AUD ex GST">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.call_out_minimum}
+              onChange={(e) => setForm({ ...form, call_out_minimum: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+          <Field label="Default markup" hint="0–100 %">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              value={form.default_markup_pct}
+              onChange={(e) => setForm({ ...form, default_markup_pct: e.target.value })}
+              className={INPUT}
+            />
+          </Field>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-sm font-mono uppercase tracking-[0.14em] text-text-sec hover:text-text-pri"
+        >
+          {showAdvanced ? '− Hide advanced' : '+ Show advanced'}
+        </button>
+
+        {showAdvanced && (
+          <div className="grid md:grid-cols-3 gap-5 pt-2 border-t border-ink-line">
+            <Field label="Apprentice rate" hint="$AUD ex GST">
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.apprentice_rate}
+                onChange={(e) => setForm({ ...form, apprentice_rate: e.target.value })}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="Senior rate" hint="$AUD ex GST">
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.senior_rate}
+                onChange={(e) => setForm({ ...form, senior_rate: e.target.value })}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="After-hours multiplier" hint="1.0–3.0">
+              <input
+                type="number"
+                step="0.1"
+                min="1"
+                max="3"
+                value={form.after_hours_multiplier}
+                onChange={(e) => setForm({ ...form, after_hours_multiplier: e.target.value })}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="Min labour hours">
+              <input
+                type="number"
+                step="0.5"
+                min="0"
+                max="8"
+                value={form.min_labour_hours}
+                onChange={(e) => setForm({ ...form, min_labour_hours: e.target.value })}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="Risk buffer" hint="0–100 %">
+              <input
+                type="number"
+                step="0.5"
+                min="0"
+                max="100"
+                value={form.risk_buffer_pct}
+                onChange={(e) => setForm({ ...form, risk_buffer_pct: e.target.value })}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="GST registered">
+              <label className="inline-flex items-center gap-3 mt-2">
+                <input
+                  type="checkbox"
+                  checked={form.gst_registered}
+                  onChange={(e) => setForm({ ...form, gst_registered: e.target.checked })}
+                  className="h-5 w-5 accent-accent"
+                />
+                <span className="text-sm text-text-sec">Yes, I&rsquo;m GST registered</span>
+              </label>
+            </Field>
+          </div>
+        )}
+
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+
+        <div className="flex items-center justify-between pt-2">
+          <SaveHint savedAt={savedAt} />
+          <button
+            type="submit"
+            disabled={submitting}
+            className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
+          >
+            {submitting ? 'Saving…' : 'Save pricing'}
+          </button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
+// ─── Services tab ─────────────────────────────────────────────────
+
+function ServicesTab({
+  data,
+  onSave,
+}: {
+  data: DashboardData
+  onSave: (payload: Record<string, unknown>) => Promise<void>
+}) {
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  const dirty = Object.keys(pending).length > 0
+
+  function toggle(assemblyId: string, current: boolean) {
+    setPending((prev) => {
+      const next = { ...prev }
+      if (next[assemblyId] !== undefined) {
+        // Already toggled in this session → revert removes it from pending
+        if (next[assemblyId] !== current) {
+          delete next[assemblyId]
+        } else {
+          next[assemblyId] = !current
+        }
+      } else {
+        next[assemblyId] = !current
+      }
+      return next
+    })
+  }
+
+  async function saveAll() {
+    setError(null)
+    setBusy(true)
+    try {
+      await onSave({ services: pending })
+      setPending({})
+      setSavedAt(Date.now())
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card
+      title="Auto-quote services"
+      subtitle={`Tick the work your AI can auto-quote. Anything unticked routes to the $199 inspection flow.`}
+    >
+      <div className="space-y-2">
+        {data.services.length === 0 ? (
+          <p className="text-sm text-text-dim">
+            No services in your catalogue yet — head back to the wizard to enable some.
+          </p>
+        ) : (
+          data.services.map((svc) => {
+            const live =
+              pending[svc.assembly_id] !== undefined
+                ? pending[svc.assembly_id]
+                : svc.enabled
+            const label = svc.shared_assemblies?.label ?? svc.shared_assemblies?.code ?? svc.assembly_id
+            return (
+              <button
+                key={svc.assembly_id}
+                type="button"
+                onClick={() => toggle(svc.assembly_id, svc.enabled)}
+                className={`w-full flex items-center justify-between gap-4 px-4 py-3.5 border transition-colors text-left ${
+                  live
+                    ? 'border-accent/70 bg-accent/5 text-text-pri'
+                    : 'border-ink-line bg-ink-card text-text-sec hover:border-ink-line/70'
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm">{label}</div>
+                  <div className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim mt-1">
+                    {svc.shared_assemblies?.code ?? '—'} · {svc.shared_assemblies?.trade ?? '—'}
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 inline-flex items-center font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-3 py-1 ${
+                    live ? 'text-accent' : 'text-text-dim'
+                  }`}
+                >
+                  {live ? '● Enabled' : '○ Off'}
+                </span>
+              </button>
+            )
+          })
+        )}
+      </div>
+
+      {error && <div className="mt-4"><ErrorBanner>{error}</ErrorBanner></div>}
+
+      <div className="mt-6 flex items-center justify-between">
+        <SaveHint savedAt={savedAt} />
+        <button
+          type="button"
+          onClick={saveAll}
+          disabled={busy || !dirty}
+          className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {busy ? 'Saving…' : dirty ? `Save ${Object.keys(pending).length} change(s)` : 'No changes'}
+        </button>
+      </div>
+    </Card>
+  )
+}
+
+// ─── Quotes tab ───────────────────────────────────────────────────
+
+function QuotesTab({ data }: { data: DashboardData }) {
+  if (data.quotes.length === 0) {
+    return (
+      <Card title="Quotes">
+        <p className="text-sm text-text-dim">
+          No quotes drafted yet. Customers texting your QuoteMate number will appear here once their first quote is drafted.
+        </p>
+      </Card>
+    )
+  }
+  return (
+    <Card title="Quotes" subtitle="Last 20 drafted by your AI. Tap to view the full customer page.">
+      <div className="overflow-x-auto -mx-6">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-ink-line text-left font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim">
+              <th className="px-6 py-3">Drafted</th>
+              <th className="px-6 py-3">Customer</th>
+              <th className="px-6 py-3">Status</th>
+              <th className="px-6 py-3 text-right">Total</th>
+              <th className="px-6 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.quotes.map((q) => {
+              const total = pickTierTotal(q)
+              const url = q.share_token ? `/q/${q.share_token}` : null
+              return (
+                <tr key={q.id} className="border-b border-ink-line/60">
+                  <td className="px-6 py-3 font-mono text-xs text-text-sec whitespace-nowrap">
+                    {formatDate(q.created_at)}
+                  </td>
+                  <td className="px-6 py-3">
+                    {q.customer_first_name ?? '—'}
+                    {q.customer_phone && (
+                      <span className="block font-mono text-[0.65rem] text-text-dim">
+                        {q.customer_phone}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-6 py-3">
+                    <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-sec">
+                      {q.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-3 text-right font-mono text-text-pri">
+                    {total !== null ? `$${formatMoney(total)}` : '—'}
+                  </td>
+                  <td className="px-6 py-3 text-right">
+                    {url ? (
+                      <Link
+                        href={url}
+                        className="text-accent hover:text-accent-press font-semibold text-xs uppercase tracking-wider"
+                        target="_blank"
+                      >
+                        View
+                      </Link>
+                    ) : (
+                      <span className="text-text-dim">—</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+// ─── Shared UI primitives ─────────────────────────────────────────
+
+function Card({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  children: ReactNode
+}) {
+  return (
+    <div className="bg-ink-card border border-ink-line">
+      <div className="px-6 py-5 border-b border-ink-line">
+        <h2 className="font-extrabold uppercase text-base tracking-[-0.01em] text-text-pri">
+          {title}
+        </h2>
+        {subtitle && (
+          <p className="mt-1.5 text-text-sec text-sm">{subtitle}</p>
+        )}
+      </div>
+      <div className="px-6 py-6">{children}</div>
+    </div>
+  )
+}
+
+function Grid({ cols, children }: { cols: number; children: ReactNode }) {
+  const gridClass =
+    cols === 3
+      ? 'grid grid-cols-1 sm:grid-cols-3 gap-4'
+      : 'grid grid-cols-1 sm:grid-cols-2 gap-4'
+  return <div className={gridClass}>{children}</div>
+}
+
+function SaveHint({ savedAt }: { savedAt: number | null }) {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    if (!savedAt) return
+    setShow(true)
+    const t = setTimeout(() => setShow(false), 3000)
+    return () => clearTimeout(t)
+  }, [savedAt])
+  if (!show) return <span />
+  return (
+    <span className="font-mono text-[0.65rem] uppercase tracking-[0.16em] text-emerald-400">
+      ✓ Saved
+    </span>
+  )
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function tradeLabel(t: 'electrical' | 'plumbing'): string {
+  return t === 'electrical' ? 'Electrical' : 'Plumbing'
+}
+
+function tabLabel(t: Tab): string {
+  switch (t) {
+    case 'overview':
+      return 'Overview'
+    case 'account':
+      return 'Account'
+    case 'pricing':
+      return 'Pricing'
+    case 'services':
+      return 'Services'
+    case 'quotes':
+      return 'Quotes'
+  }
+}
+
+function numString(v: number | null | undefined): string {
+  if (v === null || v === undefined) return ''
+  return String(v)
+}
+
+function pickTierTotal(q: Quote): number | null {
+  // total_inc_gst is already computed off the selected tier server-side
+  // in /api/estimate/draft. Numeric Postgres columns sometimes deserialise
+  // as strings depending on the client config — coerce defensively.
+  if (q.total_inc_gst === null || q.total_inc_gst === undefined) return null
+  const n =
+    typeof q.total_inc_gst === 'string'
+      ? parseFloat(q.total_inc_gst)
+      : q.total_inc_gst
+  return Number.isFinite(n) ? n : null
+}
+
+function formatMoney(n: number): string {
+  return n.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+}
+
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-AU', {
+      day: 'numeric',
+      month: 'short',
+      year: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}

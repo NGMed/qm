@@ -34,12 +34,16 @@ export default function SignInPage() {
         .eq('owner_user_id', authData.user.id)
         .maybeSingle()
 
+      // Routing rules:
+      //   • No tenant row yet         → finish onboarding wizard
+      //   • Tenant in 'onboarding'    → resume wizard
+      //   • Tenant 'active'           → tradie portal / dashboard
       if (!tenant) {
         router.push(`/onboard?owner_user_id=${authData.user.id}`)
         return
       }
       if (tenant.status === 'active') {
-        router.push(`/?welcome=${encodeURIComponent(tenant.business_name)}`)
+        router.push(`/dashboard`)
       } else {
         router.push(`/onboard?tenant=${tenant.id}`)
       }
