@@ -61,12 +61,13 @@ type Pricing = {
 type ServiceOffering = {
   assembly_id: string
   enabled: boolean
-  shared_assemblies: {
-    id: string
-    code: string
-    label: string
-    trade: string
-  } | null
+  name: string
+  description: string | null
+  trade: string
+  default_unit: string | null
+  default_unit_price_ex_gst: number | string | null
+  default_labour_hours: number | string | null
+  default_exclusions: string | null
 }
 
 type Quote = {
@@ -788,68 +789,146 @@ function ServicesTab({
     }
   }
 
+  const enabledCount = data.services.filter((s) => {
+    const live = pending[s.assembly_id] !== undefined ? pending[s.assembly_id] : s.enabled
+    return live
+  }).length
+  const totalCount = data.services.length
+
   return (
-    <Card
-      title="Auto-quote services"
-      subtitle={`Tick the work your AI can auto-quote. Anything unticked routes to the $199 inspection flow.`}
-    >
-      <div className="space-y-2">
-        {data.services.length === 0 ? (
-          <p className="text-sm text-text-dim">
-            No services in your catalogue yet — head back to the wizard to enable some.
-          </p>
-        ) : (
-          data.services.map((svc) => {
-            const live =
-              pending[svc.assembly_id] !== undefined
-                ? pending[svc.assembly_id]
-                : svc.enabled
-            const label = svc.shared_assemblies?.label ?? svc.shared_assemblies?.code ?? svc.assembly_id
-            return (
-              <button
-                key={svc.assembly_id}
-                type="button"
-                onClick={() => toggle(svc.assembly_id, svc.enabled)}
-                className={`w-full flex items-center justify-between gap-4 px-4 py-3.5 border transition-colors text-left ${
-                  live
-                    ? 'border-accent/70 bg-accent/5 text-text-pri'
-                    : 'border-ink-line bg-ink-card text-text-sec hover:border-ink-line/70'
-                }`}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm">{label}</div>
-                  <div className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim mt-1">
-                    {svc.shared_assemblies?.code ?? '—'} · {svc.shared_assemblies?.trade ?? '—'}
-                  </div>
-                </div>
-                <span
-                  className={`shrink-0 inline-flex items-center font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-3 py-1 ${
-                    live ? 'text-accent' : 'text-text-dim'
+    <div className="space-y-6">
+      <Card
+        title="Auto-quote services"
+        subtitle={`Tick the work your AI can auto-quote. Unticked services still get inspections — they just won't auto-draft a price. ${enabledCount} of ${totalCount} enabled.`}
+      >
+        <div className="space-y-2">
+          {data.services.length === 0 ? (
+            <div className="bg-amber-950/30 border border-amber-700/50 px-4 py-3">
+              <p className="text-sm text-amber-200">
+                No services found in the catalogue for{' '}
+                <span className="font-mono">{data.tenant.trade}</span>. This usually
+                means the seed data hasn&rsquo;t loaded — check the Supabase{' '}
+                <span className="font-mono">shared_assemblies</span> table.
+              </p>
+            </div>
+          ) : (
+            data.services.map((svc) => {
+              const live =
+                pending[svc.assembly_id] !== undefined
+                  ? pending[svc.assembly_id]
+                  : svc.enabled
+              const price = toNum(svc.default_unit_price_ex_gst)
+              const hours = toNum(svc.default_labour_hours)
+              return (
+                <button
+                  key={svc.assembly_id}
+                  type="button"
+                  onClick={() => toggle(svc.assembly_id, svc.enabled)}
+                  className={`w-full flex items-start justify-between gap-4 px-4 py-3.5 border transition-colors text-left ${
+                    live
+                      ? 'border-accent/70 bg-accent/5 text-text-pri'
+                      : 'border-ink-line bg-ink-card text-text-sec hover:border-ink-line/70'
                   }`}
                 >
-                  {live ? '● Enabled' : '○ Off'}
-                </span>
-              </button>
-            )
-          })
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm">{svc.name}</div>
+                    {svc.description && (
+                      <div className="mt-1 text-xs text-text-sec leading-snug">
+                        {svc.description}
+                      </div>
+                    )}
+                    <div className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                      {price !== null && (
+                        <span>
+                          ${price.toFixed(2)} {svc.default_unit ? `/ ${svc.default_unit}` : ''}
+                        </span>
+                      )}
+                      {hours !== null && hours > 0 && <span>{hours}h labour</span>}
+                      <span className="text-text-dim/70">{svc.trade}</span>
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 inline-flex items-center font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-3 py-1 ${
+                      live ? 'text-accent' : 'text-text-dim'
+                    }`}
+                  >
+                    {live ? '● Enabled' : '○ Off'}
+                  </span>
+                </button>
+              )
+            })
+          )}
+        </div>
+
+        {error && (
+          <div className="mt-4">
+            <ErrorBanner>{error}</ErrorBanner>
+          </div>
         )}
-      </div>
 
-      {error && <div className="mt-4"><ErrorBanner>{error}</ErrorBanner></div>}
+        <div className="mt-6 flex items-center justify-between">
+          <SaveHint savedAt={savedAt} />
+          <button
+            type="button"
+            onClick={saveAll}
+            disabled={busy || !dirty}
+            className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {busy
+              ? 'Saving…'
+              : dirty
+                ? `Save ${Object.keys(pending).length} change(s)`
+                : 'No changes'}
+          </button>
+        </div>
+      </Card>
 
-      <div className="mt-6 flex items-center justify-between">
-        <SaveHint savedAt={savedAt} />
-        <button
-          type="button"
-          onClick={saveAll}
-          disabled={busy || !dirty}
-          className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {busy ? 'Saving…' : dirty ? `Save ${Object.keys(pending).length} change(s)` : 'No changes'}
-        </button>
-      </div>
-    </Card>
+      {/* Inspection-only educational footer */}
+      <Card title="Always require a site visit" subtitle="These jobs route to a $199 paid inspection regardless of toggles above. Your AI tells the customer up front.">
+        <ul className="grid sm:grid-cols-2 gap-2 text-sm">
+          {(data.tenant.trade === 'plumbing'
+            ? PLUMBING_INSPECTION_ONLY
+            : ELECTRICAL_INSPECTION_ONLY
+          ).map((item) => (
+            <li
+              key={item}
+              className="flex items-baseline gap-3 text-text-sec border border-ink-line bg-ink-card px-3.5 py-2.5"
+            >
+              <span className="font-mono text-xs text-accent">!</span>
+              {item}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-4 text-xs text-text-dim">
+          These are out-of-scope for SMS auto-quote in v1. Need to handle one yourself?
+          The customer&rsquo;s details are still captured in the dialog — you take it from
+          there after the site visit fee is paid.
+        </p>
+      </Card>
+    </div>
   )
+}
+
+const ELECTRICAL_INSPECTION_ONLY = [
+  'Switchboard upgrade or repair',
+  'Fault finding',
+  'EV charger install',
+  'Underground cabling',
+  'Whole-house renovation rewires',
+]
+
+const PLUMBING_INSPECTION_ONLY = [
+  'Gas fitting',
+  'Burst pipe repair',
+  'Bathroom renovation',
+  'CCTV drain inspection',
+  'Pressure reduction valve install',
+]
+
+function toNum(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined) return null
+  const n = typeof v === 'string' ? parseFloat(v) : v
+  return Number.isFinite(n) ? n : null
 }
 
 // ─── Quotes tab ───────────────────────────────────────────────────

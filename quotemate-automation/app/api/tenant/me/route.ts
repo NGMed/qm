@@ -53,18 +53,34 @@ export async function GET(req: Request) {
     return Response.json({ error: 'no_tenant' }, { status: 404 })
   }
 
-  // Run the remaining 3 reads in parallel — they're independent.
-  const [pricingRes, servicesRes, quotesRes] = await Promise.all([
+  // Run the remaining 4 reads in parallel — they're independent.
+  //
+  // Service catalogue strategy: we fetch every shared_assemblies row
+  // for the tenant's trade AND every tenant_service_offerings row, then
+  // merge. This way:
+  //   • Tradies whose activation didn't seed offerings still see the
+  //     full catalogue (so they can opt in)
+  //   • Tradies who toggled OFF a service still see it on the list (so
+  //     they can re-enable it)
+  //   • New catalogue items added later show up automatically
+  // No offering row → enabled defaults to true (catalogue is opt-out
+  // by default, matching the activate route's auto-seed intent).
+  const [pricingRes, assembliesRes, offeringsRes, quotesRes] = await Promise.all([
     supabase
       .from('pricing_book')
       .select('*')
       .eq('tenant_id', tenant.id)
       .maybeSingle(),
     supabase
-      .from('tenant_service_offerings')
+      .from('shared_assemblies')
       .select(
-        'assembly_id, enabled, shared_assemblies(id, code, label, trade)',
+        'id, name, description, trade, default_unit, default_unit_price_ex_gst, default_labour_hours, default_exclusions',
       )
+      .eq('trade', tenant.trade)
+      .order('name'),
+    supabase
+      .from('tenant_service_offerings')
+      .select('assembly_id, enabled')
       .eq('tenant_id', tenant.id),
     // Quotes table has total_inc_gst (single computed column) + the
     // tier-specific JSONB objects (good/better/best). For the dashboard
@@ -78,6 +94,27 @@ export async function GET(req: Request) {
       .order('created_at', { ascending: false })
       .limit(20),
   ])
+
+  // Merge assemblies + offerings into a unified Service[] for the dashboard.
+  const offeringMap = new Map<string, boolean>(
+    (offeringsRes.data ?? []).map((o) => [
+      o.assembly_id as string,
+      o.enabled as boolean,
+    ]),
+  )
+  const services = (assembliesRes.data ?? []).map((a) => ({
+    assembly_id: a.id as string,
+    name: a.name as string,
+    description: (a.description ?? null) as string | null,
+    trade: a.trade as string,
+    default_unit: (a.default_unit ?? null) as string | null,
+    default_unit_price_ex_gst: a.default_unit_price_ex_gst as number | string | null,
+    default_labour_hours: a.default_labour_hours as number | string | null,
+    default_exclusions: (a.default_exclusions ?? null) as string | null,
+    enabled: offeringMap.has(a.id as string)
+      ? (offeringMap.get(a.id as string) as boolean)
+      : true,
+  }))
 
   // Resolve customer names by joining quotes → intakes → customers.
   // Intakes carry the customer_id and the human-readable caller name;
@@ -122,7 +159,7 @@ export async function GET(req: Request) {
   return Response.json({
     tenant,
     pricing: pricingRes.data ?? null,
-    services: servicesRes.data ?? [],
+    services,
     quotes,
   })
 }
@@ -219,17 +256,25 @@ export async function PATCH(req: Request) {
     if (error) errors.push(`pricing: ${error.message}`)
   }
 
-  // 3. Service toggles — sequential because Postgres .update can't
-  //    bulk-update with different values for each row in one statement.
-  //    Volume is bounded (max ~10 services per trade) so this is fine.
+  // 3. Service toggles — UPSERT so the same call works whether or not
+  //    a tenant_service_offerings row already exists for this tradie +
+  //    assembly. Catalogue-first dashboards mean the row often DOESN'T
+  //    exist on the first toggle (the dashboard renders every assembly
+  //    for the trade regardless of offerings rows).
+  //
+  //    Bulk upsert handles all changes in one round-trip via the
+  //    composite (tenant_id, assembly_id) primary key.
   if (updates.services) {
-    for (const [assemblyId, enabled] of Object.entries(updates.services)) {
+    const rows = Object.entries(updates.services).map(([assembly_id, enabled]) => ({
+      tenant_id: tenant.id,
+      assembly_id,
+      enabled,
+    }))
+    if (rows.length > 0) {
       const { error } = await supabase
         .from('tenant_service_offerings')
-        .update({ enabled })
-        .eq('tenant_id', tenant.id)
-        .eq('assembly_id', assemblyId)
-      if (error) errors.push(`services[${assemblyId}]: ${error.message}`)
+        .upsert(rows, { onConflict: 'tenant_id,assembly_id' })
+      if (error) errors.push(`services: ${error.message}`)
     }
   }
 
