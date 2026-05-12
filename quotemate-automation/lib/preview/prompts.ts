@@ -308,24 +308,123 @@ function buildCustomerPrefsBlock(ctx: PromptContext): string {
   return lines.join('\n')
 }
 
-// ─── Universal constraints ───
-function universalConstraints(): string {
+// ─── MASTER RULES — top-priority instructions ───
+// These come BEFORE the customer-prefs block so they frame how Gemini
+// interprets everything below. Numbered to help the model track them.
+// Hard imperatives only (MUST / NEVER, not "should"). Every rule has
+// an explicit failure-mode statement so the model knows what counts
+// as a rejection.
+function masterRules(): string {
   return [
-    `UNIVERSAL CONSTRAINTS (apply to every image):`,
-    `  · No people, pets, hands, text overlays, captions, annotations, or logos in the image — only the small AI-watermark specified in the per-shot context.`,
-    `  · Photorealistic, magazine-quality interior photography style. Modern Australian residential aesthetic.`,
+    `════════════════════════════════════════════════════════════════`,
+    `MASTER RULES — NON-NEGOTIABLE. READ FIRST. APPLY ALWAYS.`,
+    `════════════════════════════════════════════════════════════════`,
+    ``,
+    `You are generating an image for a real Australian customer's`,
+    `quote. The instructions below are not guidelines — they are`,
+    `hard rules. Violating any one means the output is REJECTED and`,
+    `you must redraft.`,
+    ``,
+    `  1. EXACT COUNT.`,
+    `     The image MUST contain exactly the quantity stated in`,
+    `     the COUNT line below. Not one more, not one less.`,
+    `     FAILURE: image contains a different number of fittings.`,
+    ``,
+    `  2. EXACT PRODUCT (ANCHOR PRODUCT).`,
+    `     The image MUST depict the specific product named in the`,
+    `     ANCHOR PRODUCT block below — exact brand, exact style.`,
+    `     Do NOT substitute. Do NOT swap to a similar product.`,
+    `     Do NOT improvise.`,
+    `     FAILURE: wrong product (e.g. close-coupled when anchor is`,
+    `     wall-faced, plain LED when anchor is tri-colour, generic`,
+    `     basin tap when anchor is a Phoenix wall-mounted mixer).`,
+    ``,
+    `  3. CUSTOMER'S OWN WORDS WIN.`,
+    `     Where the verbatim SMS or CONFIRMED PREFERENCES specify`,
+    `     a value (room, style, colour, finish, count), match it.`,
+    `     Where nothing is specified, use neutral defaults — do`,
+    `     NOT invent features.`,
+    `     FAILURE: adding features the customer didn't ask for`,
+    `     (dimmable, smart, weatherproof, premium finishes, etc.).`,
+    ``,
+    `  4. VIEW TYPE DISCIPLINE.`,
+    `     The "Series role" or shot-context line specifies the view`,
+    `     type: PREVIEW edit / WIDE / CLOSE-UP / IN-USE-DUSK. Match`,
+    `     it precisely. A close-up is NOT a wide; a wide is NOT a`,
+    `     close-up. Do not blend.`,
+    `     FAILURE: producing a wide when CLOSE-UP was asked,`,
+    `     producing a daytime shot when IN-USE-DUSK was asked.`,
+    ``,
+    `  5. NO PEOPLE / TEXT / LOGOS.`,
+    `     No humans, hands, body parts, pets, captions, annotations,`,
+    `     brand logos, or text overlays anywhere in the image. The`,
+    `     ONLY allowed text is the small approved watermark named`,
+    `     in the per-shot context.`,
+    `     FAILURE: a person, a hand, text on a wall, a visible`,
+    `     brand label, a caption.`,
+    ``,
+    `  6. PHOTOREALISM + AUSTRALIAN AESTHETIC.`,
+    `     Magazine-quality interior photography. Modern Australian`,
+    `     residential look. NOT cartoon, NOT illustration, NOT`,
+    `     3D-render-looking, NOT staged-stock-photo.`,
+    `     FAILURE: cartoonish, plastic-looking, or unrealistic.`,
+    ``,
+    `  7. SELF-VERIFY BEFORE EMITTING.`,
+    `     Before committing the image, mentally run through every`,
+    `     rule above and the FINAL CHECKLIST at the bottom of`,
+    `     this prompt. If any single check fails, redraft.`,
+    `════════════════════════════════════════════════════════════════`,
   ].join('\n')
 }
 
+// ─── Final pre-commit checklist ───
+// Sits at the very bottom of the system instruction. Gives the model
+// a concrete tick-box loop it can run before emitting the output.
+// Empirically this dramatically reduces drift from the brief.
+function finalChecklist(ctx: PromptContext): string {
+  const count = (ctx.intake.scope?.item_count && ctx.intake.scope.item_count > 0)
+    ? ctx.intake.scope.item_count
+    : null
+  const anchor = pickAnchorProduct(ctx)
+  const lines = [
+    ``,
+    `════════════════════════════════════════════════════════════════`,
+    `FINAL CHECKLIST — confirm EVERY box BEFORE emitting the image:`,
+    ``,
+    count !== null
+      ? `  [ ] Count: image contains exactly ${count} ${humaniseJobType(ctx.intake.job_type).plural}.`
+      : `  [ ] Count: image matches the quantity stated in this brief.`,
+    anchor
+      ? `  [ ] Product: image depicts "${anchor}" — correct brand and style.`
+      : `  [ ] Product: image depicts the product family stated in the brief.`,
+    `  [ ] View type: image matches the Series role (WIDE / CLOSE-UP / IN-USE / PREVIEW edit).`,
+    `  [ ] No additions: no features the customer did not request (no premium finishes, no smart features, no IP-rated unless asked).`,
+    `  [ ] No people: no humans, hands, pets, body parts anywhere in frame.`,
+    `  [ ] No text: no captions, annotations, brand logos, or text — only the approved small watermark.`,
+    `  [ ] Photorealism: magazine-quality Australian interior, not cartoon or 3D render.`,
+    ``,
+    `If ANY box is unchecked, DO NOT emit. Redraft until all pass.`,
+    `════════════════════════════════════════════════════════════════`,
+  ]
+  return lines.join('\n')
+}
+
 // ─── Per-shot system-instruction builder ───
+// Layout: MASTER RULES → customer prefs (data block) → THIS IMAGE
+// (shot-specific context) → FINAL CHECKLIST. The MASTER RULES bracket
+// the prompt at the top so Gemini sees the imperatives before it sees
+// the data, and the CHECKLIST sits at the bottom so it's the last
+// thing the model reads before emitting.
 function buildSystemInstruction(ctx: PromptContext, shotContext: string): string {
   return [
-    buildCustomerPrefsBlock(ctx),
+    masterRules(),
     ``,
-    universalConstraints(),
+    buildCustomerPrefsBlock(ctx),
     ``,
     `THIS IMAGE:`,
     shotContext,
+    ``,
+    finalChecklist(ctx),
   ].join('\n')
 }
 
@@ -352,9 +451,25 @@ export function buildPreviewPrompt(ctx: PromptContext): SystemUserPrompt {
     `  Watermark: a small "AI PREVIEW" mark in the bottom-right corner.`,
   ].join('\n')
 
+  // Tight user message — closes the prompt with a verification reminder
+  // so the model re-checks its draft before emitting.
+  const previewUser = [
+    `Generate the AI Preview image now using the attached reference photo.`,
+    ``,
+    `Before emitting, run the FINAL CHECKLIST from the system instruction:`,
+    `  · count matches exactly`,
+    `  · ANCHOR PRODUCT (brand + style) is depicted, NOT the existing fitting`,
+    `  · the edited image looks visibly DIFFERENT from the input photo (the new product replaces the old)`,
+    `  · no extra features the customer did not request`,
+    `  · no people, no text, no logos`,
+    `  · photorealistic — magazine-quality, not cartoon or 3D render`,
+    ``,
+    `If any check fails, redraft. Do not return the input photo unchanged.`,
+  ].join('\n')
+
   return {
     system: buildSystemInstruction(ctx, shotContext),
-    user: `Generate the AI Preview image now using the attached reference photo. Remember: the final image MUST show the ANCHOR PRODUCT, not just return the input photo unchanged.`,
+    user: previewUser,
   }
 }
 
@@ -421,9 +536,24 @@ export function buildSamplePrompts(ctx: PromptContext, opts: SamplePromptOpts = 
     `  Watermark: a small "AI SAMPLE" mark in the bottom-right corner.`,
   ].join('\n')
 
-  const baseUser = usingPhoto
-    ? `Generate the AI Sample image now using the attached reference photo. Remember: this image MUST depict the ANCHOR PRODUCT named in the system instruction, and it MUST match the product depicted in the other two sample shots (WIDE / CLOSE-UP / IN-USE).`
-    : `Generate the AI Sample image now. Remember: this image MUST depict the ANCHOR PRODUCT named in the system instruction, and it MUST match the product depicted in the other two sample shots (WIDE / CLOSE-UP / IN-USE).`
+  // Tight user message — reinforces the MASTER RULES + CHECKLIST one
+  // last time. Gemini reads system + user in sequence; closing the
+  // user message with explicit verification commands is empirically
+  // the highest-leverage way to keep the model on-spec.
+  const baseUser = [
+    `Generate the AI Sample image now${usingPhoto ? ' using the attached reference photo' : ''}.`,
+    ``,
+    `Before emitting, run the FINAL CHECKLIST from the system instruction:`,
+    `  · count matches exactly`,
+    `  · ANCHOR PRODUCT matches (brand + style)`,
+    `  · view type matches the Series role for this shot`,
+    `  · no extra features the customer did not request`,
+    `  · no people, no text, no logos`,
+    `  · photorealistic Australian residential aesthetic`,
+    `  · same product as the other two shots in this series`,
+    ``,
+    `If any check fails, redraft. Do not emit a flawed image.`,
+  ].join('\n')
 
   return {
     wide:   { system: buildSystemInstruction(ctx, wideShot),   user: baseUser },
