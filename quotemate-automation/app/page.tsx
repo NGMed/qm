@@ -1,275 +1,354 @@
-// QuoteMate home page — the v6 tradie onboarding plan.
-//
-// Static React Server Component. Brand: Maintain design system
-// (dark navy + orange, all-caps display, numbered cards).
-// Styles in page.module.css; fonts (Manrope + JetBrains Mono) loaded via
-// next/font/google so they're self-hosted on Vercel.
-//
-// The previous marketing/overview page now lives at /docs/overview.
+// QuoteMate home — Maintain design system: dark navy canvas, orange
+// accent, all-caps display, signature numbered cards, restraint over decoration.
 
-import type { Metadata } from 'next'
-import { Manrope, JetBrains_Mono } from 'next/font/google'
-import Link from 'next/link'
-import styles from './page.module.css'
+import Link from "next/link"
 
-const manrope = Manrope({
-  subsets: ['latin'],
-  weight: ['400', '700', '800'],
-  variable: '--font-manrope',
-  display: 'swap',
-})
-
-const jbMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '600', '700'],
-  variable: '--font-mono',
-  display: 'swap',
-})
-
-export const metadata: Metadata = {
-  title: 'QuoteMate · Tradie Onboarding Plan',
+export const metadata = {
+  title: "QuoteMate — AI receptionist for Australian tradies",
   description:
-    'How a tradie signs up, fills the form, and gets a live AI receptionist on their own QuoteMate number. End to end, fully automated.',
+    "Customer texts. AI drafts a Good / Better / Best quote. You review, send. For sparkies and plumbers who'd rather be on the tools.",
 }
 
-type Step = { num: string; label: string; desc: string }
-
-const FLOW: Step[] = [
-  { num: '01', label: 'Website',  desc: 'Tradie visits quotemate.com.au and clicks Get Started' },
-  { num: '02', label: 'Form',     desc: '4 short pages on mobile, ~3 minutes to fill' },
-  { num: '03', label: 'Database', desc: 'Tenant row, pricing book, service offerings written' },
-  { num: '04', label: 'Twilio',   desc: 'New AU phone number bought, SMS + voice webhooks wired' },
-  { num: '05', label: 'Vapi',     desc: 'AI assistant created with their pricing and brand' },
-  { num: '06', label: 'Live AI',  desc: 'Welcome SMS sent. Tradie tests their new number.' },
-]
-
-type Card = { num: string; title: string; body: string; meta: string }
-
-const FORM_CARDS: Card[] = [
-  {
-    num: '01',
-    title: 'Account basics',
-    body: 'Business name, owner first + last name, mobile, email, password. Six fields. All required.',
-    meta: '→ tenants table',
-  },
-  {
-    num: '02',
-    title: 'Trade and licence',
-    body: 'Pick electrical or plumbing, choose your state. ABN, licence number, and expiry are optional in test.',
-    meta: '→ tenants + pricing_book',
-  },
-  {
-    num: '03',
-    title: 'Pricing essentials',
-    body: 'Hourly rate, callout minimum, markup percent. Advanced fields hide behind a toggle with sensible defaults.',
-    meta: '→ pricing_book',
-  },
-  {
-    num: '04',
-    title: 'Review and activate',
-    body: 'Summary of every field. Services pre-ticked. Big orange button: Activate my QuoteMate.',
-    meta: '→ /api/onboard/activate',
-  },
-]
-
-const ACTIVATE_CARDS: Card[] = [
-  {
-    num: '01',
-    title: 'Save to database',
-    body: 'Tenant row, pricing book, and service offerings inserted in one atomic transaction.',
-    meta: 'Supabase',
-  },
-  {
-    num: '02',
-    title: 'Buy phone number',
-    body: 'New AU mobile long code purchased via Twilio API. SMS and voice webhooks pointed at QuoteMate.',
-    meta: 'Twilio API',
-  },
-  {
-    num: '03',
-    title: 'Create AI assistant',
-    body: "Vapi assistant spun up with the tradie's business name, trade prompt, and pricing book bound to it.",
-    meta: 'Vapi API',
-  },
-  {
-    num: '04',
-    title: 'Bind number to tradie',
-    body: 'Twilio number and Vapi assistant ID saved on the tenant row. Inbound webhooks know which tradie to route to.',
-    meta: 'tenants.twilio_sms_number',
-  },
-  {
-    num: '05',
-    title: 'Send welcome SMS',
-    body: 'Tradie gets a text from their new QuoteMate number on their personal mobile. Closes the loop visibly.',
-    meta: 'Twilio outbound',
-  },
-  {
-    num: '06',
-    title: 'Show the new number',
-    body: 'Welcome screen displays the number with a Send a test text button. Stripe Connect deferred to dashboard.',
-    meta: '/onboard/success',
-  },
-]
-
-export default function HomePage() {
+export default function Home() {
   return (
-    <main className={`${manrope.variable} ${jbMono.variable} ${styles.page}`}>
-      {/* ─── HERO ─── */}
-      <header className={styles.hero}>
-        <svg
-          className={styles.topo}
-          viewBox="0 0 1920 600"
-          preserveAspectRatio="xMidYMid slice"
-          aria-hidden="true"
-        >
-          <g fill="none" stroke="#14b8a6" strokeWidth="1">
-            <path d="M0,420 Q240,300 480,360 T960,330 T1440,380 T1920,340" />
-            <path d="M0,470 Q240,360 480,400 T960,380 T1440,430 T1920,400" opacity="0.7" />
-            <path d="M0,520 Q240,420 480,450 T960,430 T1440,480 T1920,450" opacity="0.5" />
-            <path d="M0,570 Q240,480 480,500 T960,480 T1440,530 T1920,500" opacity="0.3" />
-          </g>
-        </svg>
-        <div className={styles.container}>
-          <span className={styles.eyebrow}>QuoteMate · v6 Architecture Plan</span>
-          <h1 className={styles.display}>
-            Tradie <span className={styles.hi}>Onboarding</span>
+    <>
+      {/* ═══════════════ NAV ═══════════════ */}
+      <Nav />
+
+      {/* ═══════════════ HERO ═══════════════ */}
+      <section className="relative overflow-hidden border-b border-ink-line">
+        <Topography />
+        <div className="relative z-10 mx-auto max-w-7xl px-6 py-24 md:py-32 grid md:grid-cols-[2fr_1fr] gap-12">
+          <div>
+            <Eyebrow>AI receptionist · AU tradies · v5 live</Eyebrow>
+            <h1 className="mt-6 font-extrabold uppercase text-[clamp(2.75rem,7vw,6rem)] leading-[0.95] tracking-[-0.04em]">
+              Drafts your <span className="text-accent">quote</span>
+              <br />
+              before they <span className="text-accent">hang up.</span>
+            </h1>
+            <div className="mt-10 flex flex-wrap items-center gap-3">
+              <PrimaryCTA href="/signup">Get my QuoteMate</PrimaryCTA>
+              <SecondaryCTA href="/signin">Sign in</SecondaryCTA>
+              <SecondaryCTA href="/docs/tradie-onboarding-plan">See how it works</SecondaryCTA>
+            </div>
+            <p className="mt-6 text-xs font-mono uppercase tracking-[0.12em] text-text-dim">
+              ~3 min to sign up · No credit card · Test phase open
+            </p>
+          </div>
+          <aside className="text-text-sec text-base leading-relaxed self-end">
+            <p>
+              Customer texts your QuoteMate number. AI asks the right questions.
+              A clean Good / Better / Best quote lands in your inbox in under a
+              minute. You review, tweak, send.
+            </p>
+            <p className="mt-4">
+              Built for sparkies (NSW) and plumbers (QLD). Each tradie gets their
+              own number, pricing book, and AI brand voice.
+            </p>
+          </aside>
+        </div>
+      </section>
+
+      {/* ═══════════════ HOW IT WORKS (numbered cards) ═══════════════ */}
+      <section id="how" className="border-b border-ink-line">
+        <div className="mx-auto max-w-7xl px-6 py-24 md:py-32">
+          <div className="max-w-3xl">
+            <Eyebrow>How it works</Eyebrow>
+            <h2 className="mt-3 font-extrabold uppercase text-[clamp(2rem,4vw,3.25rem)] leading-[1] tracking-[-0.035em]">
+              Three steps. <span className="text-accent">No phone calls answered at 11pm.</span>
+            </h2>
+          </div>
+
+          <div className="mt-14 grid gap-4">
+            <NumberedCard
+              num="01"
+              title="Customer texts your number"
+              body="Each tradie gets a dedicated AU number. Voice or SMS — both paths feed the same AI receptionist."
+            />
+            <NumberedCard
+              num="02"
+              title="AI drafts your quote"
+              body="Claude asks the right questions for the job type, applies your pricing book, and writes Good / Better / Best line items in under a minute."
+            />
+            <NumberedCard
+              num="03"
+              title="You review, send, get paid"
+              body="Quote lands in your inbox. Approve as-is or tweak. Customer pays deposit via Stripe. Site visit booked or job scheduled."
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* ═══════════════ TRADES + SCOPE ═══════════════ */}
+      <section id="scope" className="border-b border-ink-line">
+        <div className="mx-auto max-w-7xl px-6 py-24 md:py-32 grid md:grid-cols-2 gap-10">
+          <TradePanel
+            label="Electrical"
+            state="NSW · NECA pilot"
+            auto={[
+              "Downlights",
+              "Power points (GPOs)",
+              "Ceiling fans",
+              "Smoke alarms",
+              "Outdoor lighting",
+            ]}
+            inspection={[
+              "Switchboard",
+              "EV charger",
+              "Fault finding",
+              "Oven / cooktop",
+              "Renovation",
+            ]}
+          />
+          <TradePanel
+            label="Plumbing"
+            state="QLD · QBCC pilot"
+            auto={[
+              "Blocked drains",
+              "Hot water replace",
+              "Tap repair",
+              "Tap replace",
+              "Toilet repair",
+              "Toilet replace",
+            ]}
+            inspection={[
+              "Gas fitting",
+              "Burst pipe",
+              "Bathroom renovation",
+            ]}
+          />
+        </div>
+      </section>
+
+      {/* ═══════════════ NUMBERS ═══════════════ */}
+      <section className="border-b border-ink-line">
+        <div className="mx-auto max-w-7xl px-6 py-20 grid grid-cols-2 md:grid-cols-4 gap-10">
+          <Stat value="< 1 min" label="Per quote drafted" />
+          <Stat value="2" label="Trades live" />
+          <Stat value="3" label="Pricing tiers" />
+          <Stat value="0" label="Auto-sends without you" />
+        </div>
+      </section>
+
+      {/* ═══════════════ STATUS / TRUST ═══════════════ */}
+      <section className="border-b border-ink-line">
+        <div className="mx-auto max-w-4xl px-6 py-24 md:py-28">
+          <Eyebrow>Where we are</Eyebrow>
+          <h2 className="mt-3 font-extrabold uppercase text-[clamp(1.75rem,3.5vw,2.75rem)] leading-[1.05] tracking-[-0.03em]">
+            <span className="text-accent">v5 multi-trade</span> shipped.
             <br />
-            Flow + System
-          </h1>
-          <p className={styles.lede}>
-            How a tradie signs up, fills the form, and gets a live AI receptionist on
-            their own QuoteMate number. End to end, fully automated, four pages on the
-            front, six steps on the back.
-          </p>
-          <p className={styles.lede} style={{ marginTop: '0.75rem', fontSize: '0.92rem' }}>
-            Looking for the v1 architecture overview?{' '}
-            <Link href="/docs/overview" className={styles.inlineLink}>
-              Read the docs
-            </Link>
-            .
-          </p>
-        </div>
-      </header>
-
-      {/* ─── THE FLOW ─── */}
-      <section className={styles.block}>
-        <div className={styles.container}>
-          <span className={`${styles.eyebrow} ${styles.sectionEyebrow}`}>The Flow</span>
-          <h2 className={styles.sectionTitle}>
-            Website to <span className={styles.hi}>live AI</span> in under 4 minutes
+            v6 self-serve onboarding is now.
           </h2>
-          <p className={styles.sectionLead}>
-            One forward path. No branching, no separate apps to install. Tradie hits one
-            button at the end and the system provisions everything in parallel.
+          <p className="mt-6 text-text-sec text-lg leading-relaxed max-w-2xl">
+            Both pilots are running on the same platform. Each tradie has their
+            own pricing book, prompt, and AI receptionist. Your turn is next.
           </p>
-
-          <div className={styles.diagram} aria-label="Onboarding flow diagram">
-            {FLOW.map((s) => (
-              <div key={s.num} className={styles.node}>
-                <span className={styles.stepNum}>{s.num}</span>
-                <span className={styles.stepLabel}>{s.label}</span>
-                <span className={styles.stepDesc}>{s.desc}</span>
-              </div>
-            ))}
+          <div className="mt-10 flex flex-wrap gap-3">
+            <PrimaryCTA href="/signup">Get my QuoteMate</PrimaryCTA>
+            <SecondaryCTA href="/docs/tradie-onboarding-plan">See the plan</SecondaryCTA>
           </div>
         </div>
       </section>
 
-      {/* ─── THE FORM ─── */}
-      <section className={styles.block}>
-        <div className={styles.container}>
-          <span className={`${styles.eyebrow} ${styles.sectionEyebrow}`}>The Form</span>
-          <h2 className={styles.sectionTitle}>
-            Four pages, <span className={styles.hi}>three minutes</span>
-          </h2>
-          <p className={styles.sectionLead}>
-            Fields that need outside verification (ABN, licence, insurance) are optional
-            in test. The tradie can add them later from the dashboard.
-          </p>
-
-          <div className={styles.cards}>
-            {FORM_CARDS.map((c) => (
-              <article key={c.num} className={styles.card}>
-                <span className={styles.num}>{c.num}</span>
-                <div>
-                  <h3 className={styles.cardTitle}>{c.title}</h3>
-                  <p className={styles.cardBody}>{c.body}</p>
-                  <span className={styles.meta}>{c.meta}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ─── BEHIND THE ACTIVATE BUTTON ─── */}
-      <section className={styles.block}>
-        <div className={styles.container}>
-          <span className={`${styles.eyebrow} ${styles.sectionEyebrow}`}>
-            Behind the Activate Button
-          </span>
-          <h2 className={styles.sectionTitle}>
-            Six things happen in <span className={styles.hi}>parallel</span>
-          </h2>
-          <p className={styles.sectionLead}>
-            Total elapsed time around 10 to 15 seconds. The tradie watches a live
-            checklist tick over while the system provisions everything.
-          </p>
-
-          <div className={styles.cards}>
-            {ACTIVATE_CARDS.map((c) => (
-              <article key={c.num} className={styles.card}>
-                <span className={styles.num}>{c.num}</span>
-                <div>
-                  <h3 className={styles.cardTitle}>{c.title}</h3>
-                  <p className={styles.cardBody}>{c.body}</p>
-                  <span className={styles.meta}>{c.meta}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ─── OUTCOME ─── */}
-      <section className={styles.block}>
-        <div className={styles.container}>
-          <span className={`${styles.eyebrow} ${styles.sectionEyebrow}`}>The Outcome</span>
-          <h2 className={styles.sectionTitle}>
-            Tradie sees one screen. <span className={styles.hi}>AI is live.</span>
-          </h2>
-
-          <div className={styles.outcome}>
-            <div>
-              <h3 className={styles.outcomeTitle}>You&rsquo;re live</h3>
-              <p className={styles.outcomeCopy}>Your QuoteMate line:</p>
-              <div className={styles.phone}>+61 482 123 456</div>
-              <p className={styles.outcomeCopy} style={{ marginTop: '1rem' }}>
-                Send any text to that number now to try your AI receptionist. We just
-                sent you a welcome text from it too.
-              </p>
-            </div>
-            <div>
-              <h3 className={styles.outcomeTitle}>What&rsquo;s active</h3>
-              <ul className={styles.checklist}>
-                <li>AI receptionist taking SMS</li>
-                <li>AI receptionist taking voice calls</li>
-                <li>Your pricing book loaded</li>
-                <li>Services configured for your trade</li>
-                <li>Welcome SMS delivered</li>
-              </ul>
-              <p className={styles.outcomeCopy} style={{ marginTop: '0.85rem' }}>
-                Set up Stripe Connect from the dashboard later to start accepting deposits.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ─── CTA BAR ─── */}
-      <div className={styles.ctaBar}>
-        Build order · migration 015 → form routes → /api/onboard/activate → twilio + vapi provisioning
+      {/* ═══════════════ ORANGE CTA BAR (signature) ═══════════════ */}
+      <div className="bg-accent text-white text-center py-5 px-6">
+        <span className="font-mono text-sm md:text-base uppercase tracking-[0.16em] font-semibold">
+          QuoteMate · Built in Australia · For tradies, by tradies
+        </span>
       </div>
-    </main>
+    </>
+  )
+}
+
+/* ─── Primitives ──────────────────────────────────────────────── */
+
+function Nav() {
+  return (
+    <nav className="sticky top-0 z-50 border-b border-ink-line bg-ink-deep/85 backdrop-blur-md">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
+        <Link href="/" className="flex items-center gap-2.5">
+          <span className="grid h-7 w-7 place-items-center bg-accent font-black text-white text-xs">
+            Q
+          </span>
+          <span className="font-extrabold uppercase tracking-tight text-text-pri">
+            QuoteMate
+          </span>
+        </Link>
+        <div className="hidden gap-8 text-sm font-medium text-text-sec md:flex">
+          <a href="#how" className="hover:text-text-pri transition-colors">How</a>
+          <a href="#scope" className="hover:text-text-pri transition-colors">Scope</a>
+          <Link href="/docs/tradie-onboarding-plan" className="hover:text-text-pri transition-colors">Plan</Link>
+        </div>
+        <div className="flex items-center gap-2 md:gap-3">
+          <Link
+            href="/signin"
+            className="px-3 py-2 text-sm font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors"
+          >
+            Sign in
+          </Link>
+          <Link
+            href="/signup"
+            className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-4 py-2.5 text-xs uppercase tracking-wider transition-colors"
+          >
+            Get started
+            <Arrow />
+          </Link>
+        </div>
+      </div>
+    </nav>
+  )
+}
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-mono text-xs uppercase tracking-[0.18em] text-text-dim font-semibold">
+      {children}
+    </span>
+  )
+}
+
+function PrimaryCTA({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-7 py-3.5 text-sm uppercase tracking-wider transition-colors focus:outline-none focus:ring-2 focus:ring-accent-soft focus:ring-offset-2 focus:ring-offset-ink-deep"
+    >
+      {children}
+      <Arrow />
+    </Link>
+  )
+}
+
+function SecondaryCTA({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-2 border border-ink-line bg-transparent hover:bg-ink-card text-text-pri font-semibold px-7 py-3.5 text-sm uppercase tracking-wider transition-colors focus:outline-none focus:ring-2 focus:ring-accent-soft focus:ring-offset-2 focus:ring-offset-ink-deep"
+    >
+      {children}
+    </Link>
+  )
+}
+
+function NumberedCard({ num, title, body }: { num: string; title: string; body: string }) {
+  return (
+    <article className="bg-ink-card border border-ink-line p-6 md:p-10">
+      <div className="flex items-start gap-6 md:gap-10">
+        <span className="font-mono text-5xl md:text-7xl font-bold text-accent leading-none shrink-0">
+          {num}
+        </span>
+        <div>
+          <h3 className="text-text-pri font-extrabold text-xl md:text-2xl uppercase tracking-tight">
+            {title}
+          </h3>
+          <p className="mt-3 text-text-sec text-base md:text-lg leading-relaxed max-w-2xl">
+            {body}
+          </p>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function TradePanel({
+  label,
+  state,
+  auto,
+  inspection,
+}: {
+  label: string
+  state: string
+  auto: string[]
+  inspection: string[]
+}) {
+  return (
+    <div className="bg-ink-card border border-ink-line p-6 md:p-8">
+      <div className="flex items-baseline justify-between">
+        <h3 className="font-extrabold uppercase text-2xl md:text-3xl tracking-tight">
+          {label}
+        </h3>
+        <span className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim">
+          {state}
+        </span>
+      </div>
+
+      <div className="mt-8">
+        <span className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-accent">
+          Auto-quoted
+        </span>
+        <ul className="mt-3 grid gap-2">
+          {auto.map((it) => (
+            <li key={it} className="flex items-baseline gap-3 text-text-sec text-sm md:text-base">
+              <span className="text-accent font-mono text-xs">→</span>
+              {it}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-7">
+        <span className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-text-dim">
+          $199 site visit
+        </span>
+        <ul className="mt-3 grid gap-2">
+          {inspection.map((it) => (
+            <li key={it} className="flex items-baseline gap-3 text-text-dim text-sm md:text-base">
+              <span className="text-text-dim font-mono text-xs">○</span>
+              {it}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+function Stat({ value, label }: { value: string; label: string }) {
+  return (
+    <div>
+      <div className="font-mono font-bold text-accent text-[clamp(2.5rem,5vw,4.25rem)] leading-none tracking-tight">
+        {value}
+      </div>
+      <div className="mt-3 text-xs uppercase tracking-[0.16em] text-text-dim font-mono font-semibold">
+        {label}
+      </div>
+    </div>
+  )
+}
+
+function Arrow() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+      aria-hidden="true"
+    >
+      <path d="M5 12h14M13 5l7 7-7 7" />
+    </svg>
+  )
+}
+
+function Topography() {
+  return (
+    <svg
+      className="absolute inset-0 w-full h-full opacity-[0.22] pointer-events-none"
+      viewBox="0 0 1920 1080"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+    >
+      <g fill="none" stroke="var(--teal-glow)" strokeWidth="1">
+        <path d="M0,820 Q240,700 480,760 T960,720 T1440,780 T1920,740" />
+        <path d="M0,870 Q240,760 480,800 T960,780 T1440,830 T1920,800" opacity="0.7" />
+        <path d="M0,920 Q240,820 480,850 T960,830 T1440,880 T1920,850" opacity="0.5" />
+        <path d="M0,970 Q240,880 480,900 T960,880 T1440,930 T1920,900" opacity="0.35" />
+        <path d="M0,1020 Q240,940 480,960 T960,940 T1440,980 T1920,960" opacity="0.2" />
+      </g>
+    </svg>
   )
 }

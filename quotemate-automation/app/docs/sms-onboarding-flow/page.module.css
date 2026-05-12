@@ -1,0 +1,545 @@
+/* ─── BRAND TOKENS (Maintain design system) ──────────────────── */
+.page {
+  --ink-deep: #0a1628;
+  --ink: #131c2d;
+  --ink-card: #1a2332;
+  --ink-line: #2a3548;
+  --accent: #ff5a1f;
+  --accent-press: #e8470f;
+  --text-pri: #ffffff;
+  --text-sec: #b8c2d1;
+  --text-dim: #7a8699;
+  --teal-glow: #14b8a6;
+  --success: #34d399;
+  --warning: #fbbf24;
+
+  background: var(--ink-deep);
+  color: var(--text-pri);
+  font-family: var(--font-manrope), -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-weight: 400;
+  line-height: 1.55;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.mono { font-family: var(--font-mono), ui-monospace, monospace; }
+
+.container {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  position: relative;
+  z-index: 1;
+}
+
+.topo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.22;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── HERO ─────────────────────────────────────────────────── */
+.hero {
+  position: relative;
+  padding: 5rem 0 3.5rem;
+  border-bottom: 1px solid var(--ink-line);
+  overflow: hidden;
+}
+
+.eyebrow {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.display {
+  margin-top: 1.25rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: clamp(2.25rem, 5.5vw, 4.5rem);
+  letter-spacing: -0.035em;
+  line-height: 0.95;
+}
+
+.hi { color: var(--accent); }
+
+.inlineLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-weight: 600;
+}
+.inlineLink:hover { color: var(--accent-press); }
+
+.lede {
+  margin-top: 1.5rem;
+  max-width: 52ch;
+  color: var(--text-sec);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+/* ─── SECTIONS ────────────────────────────────────────────── */
+.block {
+  padding: 4rem 0;
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.sectionTitle {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: clamp(1.5rem, 2.6vw, 2.25rem);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.sectionEyebrow {
+  display: inline-block;
+  margin-bottom: 0.85rem;
+}
+
+.sectionLead {
+  margin-top: 1rem;
+  color: var(--text-sec);
+  max-width: 60ch;
+  font-size: 0.98rem;
+}
+
+/* ─── FLOW DIAGRAM (6 horizontal nodes) ───────────────────── */
+.flow {
+  margin-top: 2.5rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 1000px) {
+  .flow {
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.5rem;
+  }
+}
+
+.node {
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  padding: 1rem 1.1rem;
+  position: relative;
+  min-height: 7rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.nodeNum {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.14em;
+}
+
+.nodeLabel {
+  margin-top: 0.4rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 0.92rem;
+  letter-spacing: -0.01em;
+}
+
+.nodeDesc {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-sec);
+  line-height: 1.45;
+}
+
+@media (min-width: 1000px) {
+  .node:not(:last-child)::after {
+    content: "→";
+    color: var(--accent);
+    position: absolute;
+    right: -1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+}
+
+@media (max-width: 999px) {
+  .node:not(:last-child)::before {
+    content: "↓";
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 1rem;
+    position: absolute;
+    left: 50%;
+    bottom: -1rem;
+    transform: translateX(-50%);
+  }
+}
+
+/* ─── CHECKLIST CARDS ─────────────────────────────────────── */
+.checklist {
+  margin-top: 2.5rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.checkCard {
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  padding: 1.25rem 1.5rem;
+  display: grid;
+  grid-template-columns: 3rem 1fr auto;
+  gap: 1.25rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .checkCard {
+    grid-template-columns: 2rem 1fr;
+  }
+  .checkCard .tag {
+    grid-column: 2;
+    margin-top: 0.5rem;
+    justify-self: start;
+  }
+}
+
+.stepN {
+  font-family: var(--font-mono), monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.checkTitle {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 0.98rem;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--text-pri);
+}
+
+.checkBody {
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-sec);
+  line-height: 1.5;
+}
+
+.tag {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--ink-line);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.tagOk {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.tagGated {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.tagSms {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tagWeb {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+/* ─── SMS THREAD VISUALISATION ────────────────────────────── */
+.thread {
+  margin-top: 2.5rem;
+  max-width: 32rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.bubble {
+  padding: 0.85rem 1rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  max-width: 88%;
+}
+
+.bubbleIn {
+  justify-self: end;
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  color: var(--text-pri);
+}
+
+.bubbleOut {
+  justify-self: start;
+  background: var(--accent);
+  color: var(--text-pri);
+}
+
+.bubbleWho {
+  display: block;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+  opacity: 0.85;
+}
+
+.bubbleLink {
+  color: inherit;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+@media (max-width: 719px) {
+  .thread { max-width: 100%; }
+  .bubble { font-size: 0.88rem; }
+}
+
+/* ─── SCHEMA BLOCKS ───────────────────────────────────────── */
+.schemaGrid {
+  margin-top: 2.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 800px) {
+  .schemaGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.schemaCard {
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  padding: 1.5rem;
+}
+
+.schemaTitle {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.schemaNote {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-sec);
+  line-height: 1.5;
+}
+
+.schemaPre {
+  margin-top: 1rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  line-height: 1.65;
+  color: var(--text-pri);
+  overflow-x: auto;
+  padding: 1rem;
+  background: var(--ink-deep);
+  border: 1px solid var(--ink-line);
+  white-space: pre;
+}
+
+.kw { color: var(--accent); }
+.ty { color: var(--teal-glow); }
+.fn { color: var(--teal-glow); }
+.str { color: #f8b78a; }
+.cm {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* ─── SERVICES TRIANGLE ───────────────────────────────────── */
+.services {
+  margin-top: 2.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 720px) {
+  .services {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.svc {
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  padding: 1.5rem;
+}
+
+.svcName {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.svcRole {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-sec);
+  line-height: 1.5;
+}
+
+.svcCreds {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--ink-line);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.svcCreds strong {
+  color: var(--text-pri);
+  font-weight: 600;
+}
+
+.svcOptional { color: var(--text-sec); }
+
+/* ─── FLAGS PANEL ─────────────────────────────────────────── */
+.flags {
+  margin-top: 2.5rem;
+  background: var(--ink-card);
+  border: 1px solid var(--ink-line);
+  padding: 1.5rem 1.75rem;
+}
+
+.flagsHeader {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.flagsTable {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.55rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+}
+
+.flagsRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.flagsRow:last-child {
+  border-bottom: 0;
+}
+
+.flagsKey {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.flagsValue {
+  color: var(--text-dim);
+}
+
+/* ─── CTA BAR ─────────────────────────────────────────────── */
+.ctaBar {
+  background: var(--accent);
+  color: var(--text-pri);
+  text-align: center;
+  padding: 1.1rem 1.5rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   MOBILE OVERRIDES — below 720px
+   ───────────────────────────────────────────────────────────── */
+@media (max-width: 719px) {
+  .container { padding: 0 1.1rem; }
+  .hero { padding: 3rem 0 2.25rem; }
+  .topo { opacity: 0.16; }
+  .display {
+    font-size: clamp(2rem, 9vw, 2.85rem);
+    line-height: 1;
+  }
+  .lede {
+    font-size: 0.98rem;
+    margin-top: 1.1rem;
+  }
+  .block { padding: 2.75rem 0; }
+  .sectionTitle {
+    font-size: clamp(1.4rem, 6.5vw, 1.85rem);
+    line-height: 1.1;
+  }
+  .flow {
+    margin-top: 1.75rem;
+    gap: 0.6rem;
+  }
+  .node {
+    min-height: auto;
+    padding: 0.95rem 1rem;
+  }
+  .nodeNum { font-size: 0.66rem; }
+  .nodeLabel { font-size: 0.88rem; }
+  .nodeDesc { font-size: 0.83rem; }
+  .checklist { margin-top: 1.75rem; }
+  .checkCard {
+    padding: 1rem 1.1rem;
+    gap: 0.85rem;
+  }
+  .stepN { font-size: 1.3rem; }
+  .checkTitle { font-size: 0.92rem; }
+  .checkBody { font-size: 0.84rem; }
+  .schemaGrid { margin-top: 1.75rem; }
+  .schemaCard { padding: 1.2rem 1.1rem; }
+  .schemaPre {
+    font-size: 0.65rem;
+    padding: 0.85rem;
+  }
+  .services { margin-top: 1.75rem; }
+  .svc { padding: 1.2rem 1.1rem; }
+  .flags { padding: 1.2rem 1.1rem; }
+  .flagsTable { font-size: 0.72rem; }
+  .ctaBar {
+    padding: 1rem 1.1rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    line-height: 1.55;
+  }
+}

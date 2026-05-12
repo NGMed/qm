@@ -15,9 +15,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "QuoteMate — AI quoting for Australian electricians",
+  title: "QuoteMate — AI receptionist for Australian tradies",
   description:
-    "QuoteMate drafts a Good / Better / Best electrical quote in under a minute. Built for NSW owner-operator sparkies who hate quoting after hours.",
+    "Customer texts. AI drafts your Good / Better / Best quote. You review, tweak, send. Built for AU sparkies and plumbers who'd rather be on the tools.",
 };
 
 export default function RootLayout({

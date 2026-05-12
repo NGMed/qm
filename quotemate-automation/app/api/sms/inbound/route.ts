@@ -36,6 +36,13 @@ import {
   type ConversationState,
   type PersistentProfileSlot,
 } from '@/lib/sms/extract-slots'
+import { classifyIntent } from '@/lib/sms/intent'
+import { createOrGetActiveIntent } from '@/lib/onboard/intent-tokens'
+import {
+  buildTradieWelcomeSms,
+  buildTradieIntentStillOpenSms,
+} from '@/lib/sms/templates'
+import { sendSms } from '@/lib/sms/twilio'
 
 // Twilio webhook ack. We send the real customer reply via the REST API
 // inside after() — never as TwiML in the webhook response — so this
@@ -183,6 +190,28 @@ export async function POST(req: Request) {
     return new Response('Missing required Twilio fields', { status: 400 })
   }
 
+  // ─────── Tenant routing (v6 multi-tenant) ───────
+  // Look up which registered tradie owns the destination number the
+  // customer texted. New conversations get this tenant_id stamped so
+  // downstream (estimator, etc.) can scope by tenant.
+  // Fail-soft: no tenant match → null → existing pipeline uses the
+  // legacy single pricing_book (back-compat for pre-v6 conversations).
+  const { tenantByDestinationSms } = await import('@/lib/tenant/lookup')
+  const tenant = await tenantByDestinationSms(supabase, toNumber)
+  if (tenant) {
+    console.log('[sms/inbound] step 2a — tenant resolved by destination number', {
+      tenantId: tenant.id,
+      businessName: tenant.business_name,
+      trade: tenant.trade,
+      status: tenant.status,
+    })
+  } else {
+    console.log('[sms/inbound] step 2a — no tenant match for destination', {
+      toNumber,
+      note: 'falling back to legacy single-pricing-book pipeline',
+    })
+  }
+
   // ─────── Customer memory lookup ───────
   // Look up (or stub-create) the customer record for this phone number.
   // Used downstream to: pre-populate the dialog with known fields so
@@ -221,6 +250,28 @@ export async function POST(req: Request) {
       })
       return ackTwiml()
     }
+  }
+
+  // ─────── Tradie-registration short-circuit (v6) ───────
+  // When the destination number has no tenant match (e.g. the shared
+  // QuoteMate admin number), check if the inbound message is a tradie
+  // wanting to sign up. If so, branch to a slimmer flow: generate a
+  // signup token, send a link, persist the conversation as
+  // 'tradie_registration'. Customer-quote flow is untouched.
+  //
+  // Skip this if:
+  //   (a) The destination resolved to a tenant — this is a customer
+  //       texting a specific tradie, not the admin number.
+  //   (b) There's already a recent conversation for this from_number
+  //       that's a customer_quote in progress — don't hijack it.
+  if (!tenant) {
+    const tradieBranch = await maybeHandleTradieRegistration({
+      fromNumber,
+      toNumber,
+      inboundBody,
+      messageSid,
+    })
+    if (tradieBranch) return tradieBranch
   }
 
   console.log('[sms/inbound] step 3 — completion-aware conversation lookup', { fromNumber })
@@ -403,6 +454,9 @@ export async function POST(req: Request) {
         to_number: toNumber,
         status: 'open',
         customer_id: customer?.id ?? null,
+        // v6 multi-tenant: stamp the conversation with the tenant whose
+        // destination number was texted. Null for legacy pre-v6 traffic.
+        tenant_id: tenant?.id ?? null,
         photo_request_token: photoToken,
         conversation_state: initialState,
       })
@@ -1084,4 +1138,144 @@ export async function POST(req: Request) {
     { status: 500, headers: { 'Content-Type': 'application/json' } },
   )
  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// SMS-initiated tradie onboarding (v6 SMS flow).
+//
+// Runs BEFORE the customer-quote conversation pipeline when there's no
+// tenant match on the destination number. Decides whether to short-
+// circuit into the registration flow based on:
+//
+//   • Is there already a recent tradie_registration conversation for
+//     this from_number?            → resend the link
+//   • Does the inbound message match the tradie-intent regex?
+//                                  → start a new tradie_registration
+//   • Otherwise                    → return null, let the normal
+//                                    customer-quote flow take over.
+// ════════════════════════════════════════════════════════════════════
+async function maybeHandleTradieRegistration(args: {
+  fromNumber: string
+  toNumber: string
+  inboundBody: string
+  messageSid: string | null
+}): Promise<Response | null> {
+  // 1. Check for an in-flight tradie-registration conversation first.
+  const REGISTRATION_REUSE_WINDOW_MS = 24 * 60 * 60 * 1000  // 24h
+  const { data: priorTradie } = await supabase
+    .from('sms_conversations')
+    .select('id, conversation_type, last_message_at, status')
+    .eq('from_number', args.fromNumber)
+    .eq('conversation_type', 'tradie_registration')
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle()
+
+  const reusePriorTradieThread =
+    priorTradie &&
+    priorTradie.last_message_at &&
+    Date.now() - new Date(priorTradie.last_message_at).getTime() < REGISTRATION_REUSE_WINDOW_MS &&
+    priorTradie.status !== 'converted'
+
+  // 2. Detect intent on the current message. Async because the hybrid
+  //    classifier may fall back to Haiku for messages that don't match
+  //    the regex strong-phrase lists. Total latency budget ≤ ~400ms.
+  const classification = await classifyIntent(args.inboundBody)
+  const isTradieIntent = classification.intent === 'tradie_registration'
+
+  // Skip the branch entirely if neither path is triggered.
+  if (!reusePriorTradieThread && !isTradieIntent) {
+    return null
+  }
+
+  console.log('[sms/inbound] tradie registration branch', {
+    fromNumber: args.fromNumber,
+    reusedThread: !!reusePriorTradieThread,
+    classification,
+  })
+
+  // 3. Get or create the conversation row.
+  let conversationId: string
+  if (reusePriorTradieThread) {
+    conversationId = priorTradie.id
+  } else {
+    const { data: created, error: createErr } = await supabase
+      .from('sms_conversations')
+      .insert({
+        from_number: args.fromNumber,
+        to_number: args.toNumber,
+        status: 'open',
+        conversation_type: 'tradie_registration',
+      })
+      .select('id')
+      .single()
+    if (createErr || !created) {
+      console.error('[sms/inbound] tradie conversation create failed', createErr)
+      return new Response('DB error', { status: 500 })
+    }
+    conversationId = created.id
+  }
+
+  // 4. Persist the inbound message.
+  await supabase.from('sms_messages').insert({
+    conversation_id: conversationId,
+    direction: 'inbound',
+    body: args.inboundBody,
+    twilio_message_sid: args.messageSid,
+  })
+
+  // 5. Get-or-create the active signup intent for this mobile.
+  const intent = await createOrGetActiveIntent(supabase, {
+    owner_mobile: args.fromNumber,
+    sms_conversation_id: conversationId,
+  })
+  if ('error' in intent) {
+    console.error('[sms/inbound] tradie intent creation failed', intent.error)
+    return new Response('Intent error', { status: 500 })
+  }
+
+  // 6. Build the SMS body. Welcome on first-touch, reminder on re-text.
+  const appUrl = process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app'
+  const body = intent.reused
+    ? buildTradieIntentStillOpenSms({ appUrl, token: intent.token })
+    : buildTradieWelcomeSms({ appUrl, token: intent.token })
+
+  // 7. Dispatch the outbound SMS in after() so we ack Twilio fast.
+  after(async () => {
+    try {
+      const result = await sendSms({
+        to: args.fromNumber,
+        from: args.toNumber,
+        text: body,
+      })
+      if (result.ok) {
+        await supabase.from('sms_messages').insert({
+          conversation_id: conversationId,
+          direction: 'outbound',
+          body,
+          twilio_message_sid: result.sid,
+        })
+        await supabase
+          .from('sms_conversations')
+          .update({
+            last_message_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', conversationId)
+      } else {
+        console.error('[sms/inbound] tradie outbound SMS failed', {
+          conversationId,
+          code: result.code,
+          reason: result.reason,
+        })
+      }
+    } catch (e: any) {
+      console.error('[sms/inbound] tradie outbound SMS threw', {
+        conversationId,
+        message: e?.message ?? String(e),
+      })
+    }
+  })
+
+  return ackTwiml()
 }
