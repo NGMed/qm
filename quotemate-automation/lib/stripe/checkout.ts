@@ -132,6 +132,93 @@ function buildProductName(intake: IntakeForCheckout, tierKey: string, tier: NonN
 }
 
 /**
+ * Expire a Stripe Checkout Session so a stale customer link can't be
+ * paid after the tradie edited the quote. Idempotent: a Session that's
+ * already expired (or one we can't find) returns ok without throwing —
+ * we don't want a stale URL in the DB to block a legitimate price edit.
+ */
+export async function expireCheckoutSession(sessionUrl: string): Promise<{ ok: boolean; reason?: string }> {
+  // Stripe Session URLs look like:
+  //   https://checkout.stripe.com/c/pay/cs_test_a1xxxxx...
+  // Pull the `cs_*` SID out of the path. If the URL doesn't carry one
+  // (legacy quotes that stored a different shape), skip silently —
+  // there's nothing to expire on Stripe's side.
+  const m = sessionUrl.match(/cs_[A-Za-z0-9_]+/)
+  if (!m) return { ok: true, reason: 'no_session_id_in_url' }
+  const sessionId = m[0]
+  try {
+    const stripe = getStripe()
+    await stripe.checkout.sessions.expire(sessionId)
+    return { ok: true }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    // Most failure modes are non-fatal for the edit flow: the Session
+    // was already expired, already paid, or the SID was malformed.
+    // We still want to issue the replacement Session so the customer's
+    // next click goes to the new price.
+    return { ok: false, reason: msg }
+  }
+}
+
+/**
+ * Create a Stripe Checkout Session for a single tier on an existing
+ * quote — used by the tradie edit endpoint to issue a replacement
+ * Session after a price change. Same shape as createCheckoutSessionsForQuote
+ * but scoped to one tier.
+ */
+export async function createCheckoutSessionForTier(opts: {
+  quote: QuoteForCheckout
+  tierKey: 'good' | 'better' | 'best'
+  intake: IntakeForCheckout
+  shareToken: string
+  appUrl: string
+}): Promise<string | null> {
+  const stripe = getStripe()
+  const tier = opts.quote[opts.tierKey]
+  if (!tier) return null
+  const depositPct = typeof opts.quote.deposit_pct === 'string'
+    ? parseFloat(opts.quote.deposit_pct)
+    : opts.quote.deposit_pct
+  const incCents = tierIncGstCents(tier)
+  const deposit = depositCents(incCents, depositPct)
+  if (deposit <= 0) return null
+
+  const productName = buildProductName(opts.intake, opts.tierKey, tier)
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [
+      {
+        price_data: {
+          currency: 'aud',
+          product_data: {
+            name: productName,
+            description: `${depositPct}% deposit · balance due on completion`,
+          },
+          unit_amount: deposit,
+        },
+        quantity: 1,
+      },
+    ],
+    customer_email: opts.intake.caller?.email || undefined,
+    success_url: `${opts.appUrl}/q/${opts.shareToken}/paid?tier=${opts.tierKey}&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${opts.appUrl}/q/${opts.shareToken}/cancelled`,
+    metadata: {
+      quote_id: opts.quote.id,
+      tier: opts.tierKey,
+      deposit_pct: String(depositPct),
+      full_total_inc_gst_cents: String(incCents),
+    },
+    payment_intent_data: {
+      metadata: {
+        quote_id: opts.quote.id,
+        tier: opts.tierKey,
+      },
+    },
+  })
+  return session.url ?? null
+}
+
+/**
  * Inspection-required path: create a single Stripe Checkout Session for
  * the $199 refundable site-visit deposit. Sets metadata.tier='inspection'
  * so the webhook can record it on the quote correctly.

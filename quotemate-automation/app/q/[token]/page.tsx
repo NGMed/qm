@@ -19,6 +19,7 @@ import { refreshSignedUrl } from '@/lib/storage/upload'
 import { generatePreviewImage } from '@/lib/preview/generate'
 import { generateSampleImages } from '@/lib/preview/samples'
 import { PreviewSection } from './PreviewSection'
+import TradieEditor from './TradieEditor'
 
 export const dynamic = 'force-dynamic'
 
@@ -205,6 +206,49 @@ export default async function PublicQuotePage(props: {
 
   return (
     <main className="min-h-screen bg-ink-deep text-text-pri relative">
+      {/* ─── Tradie-owner edit overlay (renders nothing for customers) ─── */}
+      <TradieEditor
+        quoteId={quote.id as string}
+        gstRegistered={!!pricingBook?.gst_registered}
+        initialTiers={{
+          good: (quote.good as unknown as {
+            label?: string
+            timeframe?: string
+            subtotal_ex_gst?: number
+            line_items?: Array<{
+              description: string
+              quantity: number
+              unit?: string
+              unit_price_ex_gst: number
+              total_ex_gst?: number
+            }>
+          } | null) ?? null,
+          better: (quote.better as unknown as {
+            label?: string
+            timeframe?: string
+            subtotal_ex_gst?: number
+            line_items?: Array<{
+              description: string
+              quantity: number
+              unit?: string
+              unit_price_ex_gst: number
+              total_ex_gst?: number
+            }>
+          } | null) ?? null,
+          best: (quote.best as unknown as {
+            label?: string
+            timeframe?: string
+            subtotal_ex_gst?: number
+            line_items?: Array<{
+              description: string
+              quantity: number
+              unit?: string
+              unit_price_ex_gst: number
+              total_ex_gst?: number
+            }>
+          } | null) ?? null,
+        }}
+      />
       {/* ─── Topographic SVG overlay (signature brand pattern) ─── */}
       <TopographicBackground />
 

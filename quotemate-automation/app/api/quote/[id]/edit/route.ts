@@ -1,0 +1,308 @@
+// POST /api/quote/[id]/edit
+//
+// Tradie-only endpoint that lets the owner of a quote update its line
+// items + tier pricing in place. The customer-facing /q/<token> URL
+// stays the same — only the underlying tier JSONBs, headline total,
+// and Stripe Checkout Session URLs change.
+//
+// Auth: Bearer <supabase-access-token>. Validates that the caller's
+// user id matches tenants.owner_user_id for the quote's tenant. Any
+// other authenticated user (or anon) gets 403.
+//
+// Behaviour:
+//   1. Reject if quote is already paid (immutable once a deposit lands).
+//   2. Recompute each tier's subtotal_ex_gst from its line_items.
+//   3. Pick the new headline total_inc_gst from the selected_tier (or
+//      better/best/good fallback) and apply the same GST treatment the
+//      original draft used (pricing_book.gst_registered).
+//   4. For every tier whose subtotal changed, expire the old Stripe
+//      Checkout Session and create a new one. Tiers whose subtotal
+//      didn't change keep their existing URL.
+//   5. Persist tier JSONBs + new total + updated stripe_links.
+//
+// Returns the updated row so the client can render without a follow-up
+// fetch.
+
+import { createClient } from '@supabase/supabase-js'
+import { z } from 'zod'
+import {
+  expireCheckoutSession,
+  createCheckoutSessionForTier,
+} from '@/lib/stripe/checkout'
+
+export const dynamic = 'force-dynamic'
+export const maxDuration = 60
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+)
+
+const LineItemSchema = z.object({
+  description: z.string().trim().min(1).max(200),
+  quantity: z.coerce.number().min(0),
+  unit: z.string().trim().max(20).optional().or(z.literal('')),
+  unit_price_ex_gst: z.coerce.number().min(0),
+  // total_ex_gst is recomputed server-side from quantity * unit_price.
+  total_ex_gst: z.coerce.number().min(0).optional(),
+  source: z.string().trim().max(120).optional().or(z.literal('')),
+})
+
+const TierEditSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  timeframe: z.string().trim().max(60).optional().or(z.literal('')),
+  line_items: z.array(LineItemSchema).min(1, 'At least one line item'),
+})
+
+const BodySchema = z.object({
+  good: TierEditSchema.optional(),
+  better: TierEditSchema.optional(),
+  best: TierEditSchema.optional(),
+})
+
+type TierEdit = z.infer<typeof TierEditSchema>
+
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id: quoteId } = await params
+
+  // ─── Auth ───────────────────────────────────────────────────
+  const auth = req.headers.get('authorization') ?? ''
+  if (!auth.toLowerCase().startsWith('bearer ')) {
+    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  }
+  const token = auth.slice(7).trim()
+  if (!token) return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+
+  const { data: userData, error: userErr } = await supabase.auth.getUser(token)
+  if (userErr || !userData.user) {
+    return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  }
+  const userId = userData.user.id
+
+  // ─── Parse body ─────────────────────────────────────────────
+  let raw: unknown
+  try {
+    raw = await req.json()
+  } catch {
+    return Response.json({ ok: false, error: 'invalid_json' }, { status: 400 })
+  }
+  const parsed = BodySchema.safeParse(raw)
+  if (!parsed.success) {
+    return Response.json(
+      {
+        ok: false,
+        error: 'validation_failed',
+        fieldErrors: parsed.error.flatten().fieldErrors,
+      },
+      { status: 400 },
+    )
+  }
+  const edits = parsed.data
+  if (!edits.good && !edits.better && !edits.best) {
+    return Response.json({ ok: false, error: 'no_changes' }, { status: 400 })
+  }
+
+  // ─── Load + authorise ──────────────────────────────────────
+  const { data: quote } = await supabase
+    .from('quotes')
+    .select(
+      'id, tenant_id, intake_id, share_token, status, paid_at, selected_tier, good, better, best, stripe_links, total_inc_gst',
+    )
+    .eq('id', quoteId)
+    .maybeSingle()
+  if (!quote) return Response.json({ ok: false, error: 'no_quote' }, { status: 404 })
+  if (!quote.tenant_id) {
+    return Response.json({ ok: false, error: 'unscoped_quote' }, { status: 403 })
+  }
+  if (quote.paid_at) {
+    return Response.json(
+      { ok: false, error: 'quote_already_paid' },
+      { status: 409 },
+    )
+  }
+
+  const { data: tenant } = await supabase
+    .from('tenants')
+    .select('id, owner_user_id')
+    .eq('id', quote.tenant_id)
+    .maybeSingle()
+  if (!tenant || tenant.owner_user_id !== userId) {
+    return Response.json({ ok: false, error: 'not_owner' }, { status: 403 })
+  }
+
+  // ─── Pricing context for GST handling ──────────────────────
+  const { data: pricingBook } = await supabase
+    .from('pricing_book')
+    .select('gst_registered')
+    .eq('tenant_id', quote.tenant_id)
+    .limit(1)
+    .maybeSingle()
+  const gstRegistered = (pricingBook?.gst_registered ?? true) as boolean
+
+  // ─── Intake context for Stripe product naming ──────────────
+  const { data: intake } = await supabase
+    .from('intakes')
+    .select('job_type, scope, caller')
+    .eq('id', quote.intake_id)
+    .maybeSingle()
+
+  // ─── Apply per-tier edits ──────────────────────────────────
+  type TierJson = {
+    label?: string
+    timeframe?: string
+    subtotal_ex_gst?: number
+    line_items?: Array<{
+      description: string
+      quantity: number
+      unit?: string
+      unit_price_ex_gst: number
+      total_ex_gst: number
+      source?: string
+    }>
+  } | null
+
+  const tierKeys: Array<'good' | 'better' | 'best'> = ['good', 'better', 'best']
+  const nextTiers: Record<'good' | 'better' | 'best', TierJson> = {
+    good: (quote.good as TierJson) ?? null,
+    better: (quote.better as TierJson) ?? null,
+    best: (quote.best as TierJson) ?? null,
+  }
+  const changedTiers: Array<'good' | 'better' | 'best'> = []
+
+  for (const key of tierKeys) {
+    const edit: TierEdit | undefined = edits[key]
+    if (!edit) continue
+    const existing = nextTiers[key]
+    if (!existing) {
+      return Response.json(
+        { ok: false, error: `cannot_edit_missing_tier:${key}` },
+        { status: 400 },
+      )
+    }
+
+    // Recompute every line item's total from quantity × unit_price. We
+    // trust the unit + description from the caller but never the totals
+    // — those have to be derived so a buggy or malicious client can't
+    // ship a Stripe Session that doesn't match the visible line items.
+    const lineItems = edit.line_items.map((li) => ({
+      description: li.description,
+      quantity: li.quantity,
+      unit: li.unit || existing.line_items?.[0]?.unit || 'hr',
+      unit_price_ex_gst: +li.unit_price_ex_gst.toFixed(2),
+      total_ex_gst: +(li.quantity * li.unit_price_ex_gst).toFixed(2),
+      source: li.source || 'tradie_edit',
+    }))
+    const subtotal = +lineItems
+      .reduce((acc, li) => acc + li.total_ex_gst, 0)
+      .toFixed(2)
+
+    const oldSubtotal =
+      typeof existing.subtotal_ex_gst === 'number'
+        ? +existing.subtotal_ex_gst.toFixed(2)
+        : null
+    if (oldSubtotal === null || Math.abs(subtotal - oldSubtotal) > 0.001) {
+      changedTiers.push(key)
+    }
+
+    nextTiers[key] = {
+      ...existing,
+      label: edit.label,
+      timeframe: edit.timeframe || existing.timeframe || '',
+      line_items: lineItems,
+      subtotal_ex_gst: subtotal,
+    }
+  }
+
+  // ─── Headline total — pick from selected_tier or fall back ─
+  const selectedKey =
+    (quote.selected_tier as 'good' | 'better' | 'best' | null) ?? 'better'
+  const headlineTier =
+    nextTiers[selectedKey] ?? nextTiers.better ?? nextTiers.best ?? nextTiers.good
+  const headlineSubtotal = headlineTier?.subtotal_ex_gst ?? 0
+  const gstMultiplier = gstRegistered ? 1.1 : 1.0
+  const newTotalIncGst = +(headlineSubtotal * gstMultiplier).toFixed(2)
+
+  // ─── Stripe sync — only re-issue for tiers that changed ───
+  const stripeLinks: Record<string, string | undefined> = {
+    ...((quote.stripe_links as Record<string, string | undefined>) ?? {}),
+  }
+  const appUrl =
+    process.env.APP_URL ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    'https://quote-mate-rho.vercel.app'
+
+  for (const key of changedTiers) {
+    const oldUrl = stripeLinks[key]
+    if (oldUrl) {
+      const exp = await expireCheckoutSession(oldUrl)
+      if (!exp.ok) {
+        console.warn('[quote/edit] expire failed (continuing)', {
+          quoteId,
+          tier: key,
+          reason: exp.reason,
+        })
+      }
+    }
+    // Cast each tier to the Stripe helper's strict { label, subtotal_ex_gst }
+    // shape — by this point every tier we'd actually re-issue has those
+    // fields populated (label from the edit, subtotal recomputed above).
+    type StripeTierShape = { label: string; subtotal_ex_gst: number | string } | null
+    const newUrl = await createCheckoutSessionForTier({
+      quote: {
+        id: quote.id as string,
+        good: nextTiers.good as StripeTierShape,
+        better: nextTiers.better as StripeTierShape,
+        best: nextTiers.best as StripeTierShape,
+        deposit_pct: 30,
+      },
+      tierKey: key,
+      intake: {
+        job_type: (intake?.job_type as string) ?? 'other',
+        scope: (intake?.scope as { item_count?: number } | null) ?? null,
+        caller: (intake?.caller as { name?: string; email?: string } | null) ?? null,
+      },
+      shareToken: quote.share_token as string,
+      appUrl,
+    })
+    if (newUrl) stripeLinks[key] = newUrl
+  }
+
+  // ─── Persist ───────────────────────────────────────────────
+  const updateBody: Record<string, unknown> = {
+    good: nextTiers.good,
+    better: nextTiers.better,
+    best: nextTiers.best,
+    total_inc_gst: newTotalIncGst,
+    stripe_links: stripeLinks,
+    // Bump status to 'sent' if the tradie edits a draft — implies they
+    // are taking ownership of the price. Keep other statuses untouched.
+    status: quote.status === 'draft' ? 'sent' : quote.status,
+  }
+
+  const { error: updErr } = await supabase
+    .from('quotes')
+    .update(updateBody)
+    .eq('id', quoteId)
+  if (updErr) {
+    return Response.json(
+      { ok: false, error: `update_failed: ${updErr.message}` },
+      { status: 500 },
+    )
+  }
+
+  return Response.json({
+    ok: true,
+    quoteId,
+    changedTiers,
+    total_inc_gst: newTotalIncGst,
+    stripe_links: stripeLinks,
+    tiers: {
+      good: nextTiers.good,
+      better: nextTiers.better,
+      best: nextTiers.best,
+    },
+  })
+}

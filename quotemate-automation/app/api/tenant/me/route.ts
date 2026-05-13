@@ -14,6 +14,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
+import { UpdateSchema } from '@/lib/tenant/update-schema'
 
 export const dynamic = 'force-dynamic'
 
@@ -306,69 +307,12 @@ export async function GET(req: Request) {
 }
 
 // ─── PATCH /api/tenant/me ──────────────────────────────────────────
-
-// Pricing fields are shared between the legacy single-trade payload
-// (`pricing: {...}`) and the per-trade payload (`pricing_by_trade:
-// { electrical: {...}, plumbing: {...} }`). Defining once keeps the two
-// payloads in lockstep.
-const PricingFields = z.object({
-  hourly_rate: z.coerce.number().positive().optional(),
-  call_out_minimum: z.coerce.number().nonnegative().optional(),
-  default_markup_pct: z.coerce.number().min(0).max(100).optional(),
-  apprentice_rate: z.coerce.number().nonnegative().optional(),
-  senior_rate: z.coerce.number().nonnegative().optional(),
-  after_hours_multiplier: z.coerce.number().min(1).max(3).optional(),
-  min_labour_hours: z.coerce.number().min(0).max(8).optional(),
-  risk_buffer_pct: z.coerce.number().min(0).max(100).optional(),
-  gst_registered: z.boolean().optional(),
-})
-
-const LicenceFields = z.object({
-  licence_type: z.string().trim().max(40).optional().or(z.literal('')),
-  licence_number: z.string().trim().max(60).optional().or(z.literal('')),
-  licence_state: z
-    .enum(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'])
-    .optional()
-    .or(z.literal('')),
-  licence_expiry: z.string().trim().optional().or(z.literal('')),
-})
-
-const UpdateSchema = z.object({
-  tenant: z
-    .object({
-      business_name: z.string().trim().min(2).max(80).optional(),
-      owner_first_name: z.string().trim().min(1).max(40).optional(),
-      owner_email: z.string().trim().email().max(120).optional(),
-      owner_mobile: z.string().trim().min(8).max(20).optional(),
-      trade: z.enum(['electrical', 'plumbing']).optional(),
-      state: z.enum(['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT']).optional(),
-      abn: z.string().trim().max(20).optional().or(z.literal('')),
-      // Legacy single-licence triple — still written to tenants.licence_*
-      // for back-compat with code paths that read the scalar columns.
-      licence_type: z.string().trim().max(40).optional().or(z.literal('')),
-      licence_number: z.string().trim().max(60).optional().or(z.literal('')),
-      licence_expiry: z.string().trim().optional().or(z.literal('')),
-    })
-    .optional(),
-  // Legacy single-pricing payload: applies the same fields to EVERY
-  // pricing_book row this tenant owns. Keep accepting this shape so
-  // older dashboard builds still work after the per-trade rollout.
-  pricing: PricingFields.optional(),
-  // Per-trade pricing — apply different rates per trade. Keys are the
-  // trade name; values are partial pricing fields. Lets a sparky charge
-  // $110/hr for electrical and $0/hr (i.e. unset) for plumbing.
-  pricing_by_trade: z
-    .record(z.enum(['electrical', 'plumbing']), PricingFields)
-    .optional(),
-  // Per-trade licence storage (migration 018). Same shape as
-  // pricing_by_trade: trade → licence triple.
-  licences_by_trade: z
-    .record(z.enum(['electrical', 'plumbing']), LicenceFields)
-    .optional(),
-  // Map of assembly_id → enabled flag. Lets the UI flip multiple
-  // service offerings in one round trip.
-  services: z.record(z.string().uuid(), z.boolean()).optional(),
-})
+//
+// UpdateSchema lives in lib/tenant/update-schema.ts so it can be
+// unit-tested without importing this route (which has top-level
+// Supabase side-effects). See that file for the partial-record rule
+// that fixed the licences_by_trade "invalid_payload" regression on
+// single-trade tenants.
 
 export async function PATCH(req: Request) {
   const user = await userFromBearer(req)
