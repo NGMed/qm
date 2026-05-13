@@ -2,6 +2,7 @@
 // accent, all-caps display, signature numbered cards, restraint over decoration.
 
 import Link from "next/link"
+import AuthNav from "./AuthNav"
 
 export const metadata = {
   title: "QuoteMate — AI receptionist for Australian tradies",
@@ -27,8 +28,7 @@ export default function Home() {
               before they <span className="text-accent">hang up.</span>
             </h1>
             <div className="mt-10 flex flex-wrap items-center gap-3">
-              <PrimaryCTA href="/signup">Get my QuoteMate</PrimaryCTA>
-              <SecondaryCTA href="/signin">Sign in</SecondaryCTA>
+              <AuthNav variant="hero" />
               <SecondaryCTA href="/docs/tradie-onboarding-plan">See how it works</SecondaryCTA>
             </div>
             <p className="mt-6 text-xs font-mono uppercase tracking-[0.12em] text-text-dim">
@@ -180,19 +180,7 @@ function Nav() {
           <Link href="/docs/tradie-onboarding-plan" className="hover:text-text-pri transition-colors">Plan</Link>
         </div>
         <div className="flex items-center gap-2 md:gap-3">
-          <Link
-            href="/signin"
-            className="px-3 py-2 text-sm font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors"
-          >
-            Sign in
-          </Link>
-          <Link
-            href="/signup"
-            className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-4 py-2.5 text-xs uppercase tracking-wider transition-colors"
-          >
-            Get started
-            <Arrow />
-          </Link>
+          <AuthNav variant="nav" />
         </div>
       </div>
     </nav>
