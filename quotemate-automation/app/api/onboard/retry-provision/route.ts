@@ -16,6 +16,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { runProvisioning } from '@/lib/onboard/run-provisioning'
+import { setTwilioSmsWebhook } from '@/lib/twilio/set-sms-webhook'
 
 export const dynamic = 'force-dynamic'
 
@@ -54,14 +55,36 @@ export async function POST(req: Request) {
     return Response.json({ ok: false, error: 'no_tenant' }, { status: 404 })
   }
 
-  // Fast path: already fully provisioned, just echo the values.
+  // Fast path: already fully provisioned. We still reset the SMS
+  // webhook on every hit because Vapi's /phone-number registration has
+  // a history of rewriting Twilio's SmsUrl to api.vapi.ai/twilio/sms
+  // (its AI-SMS feature) — and we always want inbound texts to land
+  // at /api/sms/inbound so our tenant lookup + intake structurer run.
+  // Tradies stuck with the wrong webhook can hit Retry and have it
+  // self-heal without re-running Twilio purchase or Vapi assistant
+  // creation.
   if (tenant.twilio_sms_number && tenant.vapi_assistant_id) {
+    const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
+    let smsWarning: string | undefined
+    if (appUrl) {
+      const smsHook = await setTwilioSmsWebhook({
+        phoneNumber: tenant.twilio_sms_number,
+        smsUrl: `${appUrl}/api/sms/inbound`,
+      })
+      if (!smsHook.ok) {
+        smsWarning = `SMS webhook reclaim failed: ${smsHook.reason}`
+      }
+    } else {
+      smsWarning =
+        'APP_URL / NEXT_PUBLIC_APP_URL not set — cannot reclaim SMS webhook.'
+    }
     return Response.json({
       ok: true,
       tenantId: tenant.id,
       phoneNumber: tenant.twilio_sms_number,
       vapiAssistantId: tenant.vapi_assistant_id,
       alreadyProvisioned: true,
+      warning: smsWarning,
     })
   }
 
