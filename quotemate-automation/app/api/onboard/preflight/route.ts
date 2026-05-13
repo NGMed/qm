@@ -46,6 +46,7 @@ export async function GET(req: Request) {
     check('VAPI_PROVISIONING_ENABLED', 'Set to "true" for real Vapi assistant creation'),
     check('TWILIO_ACCOUNT_SID', 'Required when TWILIO_PROVISIONING_ENABLED=true'),
     check('TWILIO_AUTH_TOKEN', 'Required when TWILIO_PROVISIONING_ENABLED=true'),
+    check('TWILIO_ADDRESS_SID', 'Required when TWILIO_PROVISIONING_ENABLED=true — AU numbers require an address bundle at purchase'),
     check('VAPI_API_KEY', 'Required when VAPI_PROVISIONING_ENABLED=true'),
     check('APP_URL', 'Required so SMS webhook resolves to your deploy'),
     check('NEXT_PUBLIC_APP_URL', 'Alternate to APP_URL — at least one must be set'),

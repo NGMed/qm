@@ -85,11 +85,28 @@ export async function provisionTwilioNumber(opts: {
   const sid = process.env.TWILIO_ACCOUNT_SID
   const token = process.env.TWILIO_AUTH_TOKEN
   const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
+  // AU numbers require an AddressSid at purchase time (Twilio regulatory
+  // bundle). We attach the single platform-level address registered on
+  // QuoteMate's Twilio account to every tradie's number. The tradie's own
+  // address isn't required here — Twilio only needs a verifiable address
+  // for the account doing the purchase, which is us. Set this in Vercel
+  // to the SID shown under Twilio Console → Phone Numbers → Regulatory
+  // Compliance → Addresses (starts with AD…).
+  const addressSid = process.env.TWILIO_ADDRESS_SID
   if (!sid || !token) {
     return { ok: false, reason: 'TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not set' }
   }
   if (!appUrl) {
     return { ok: false, reason: 'APP_URL or NEXT_PUBLIC_APP_URL must be set so webhooks resolve' }
+  }
+  if (!addressSid) {
+    return {
+      ok: false,
+      reason:
+        'TWILIO_ADDRESS_SID not set. AU numbers require an address on the purchase. ' +
+        'Grab the SID from Twilio Console → Phone Numbers → Regulatory Compliance → ' +
+        'Addresses (starts with AD…) and add it to Vercel env vars.',
+    }
   }
 
   const auth = 'Basic ' + Buffer.from(sid + ':' + token).toString('base64')
@@ -159,6 +176,10 @@ export async function provisionTwilioNumber(opts: {
   const purchaseBody = new URLSearchParams()
   purchaseBody.set('PhoneNumber', picked.number)
   purchaseBody.set('FriendlyName', opts.friendlyName)
+  // AddressSid is mandatory for AU number purchases — without it Twilio
+  // rejects with "Phone Number Requires an Address but the 'AddressSid'
+  // parameter was empty." See lib/twilio/provision.ts addressSid resolution.
+  purchaseBody.set('AddressSid', addressSid)
   purchaseBody.set('SmsUrl', `${appUrl}/api/sms/inbound`)
   purchaseBody.set('SmsMethod', 'POST')
   purchaseBody.set('VoiceUrl', VAPI_INBOUND_VOICE_URL)

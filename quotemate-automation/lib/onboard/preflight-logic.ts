@@ -21,6 +21,7 @@ export function computePreflight(env: NodeJS.ProcessEnv | Record<string, string 
   if (twilioEnabled) {
     if (!env.TWILIO_ACCOUNT_SID) missing.push('TWILIO_ACCOUNT_SID')
     if (!env.TWILIO_AUTH_TOKEN) missing.push('TWILIO_AUTH_TOKEN')
+    if (!env.TWILIO_ADDRESS_SID) missing.push('TWILIO_ADDRESS_SID')
     if (!env.APP_URL && !env.NEXT_PUBLIC_APP_URL) {
       missing.push('APP_URL (or NEXT_PUBLIC_APP_URL)')
     }
