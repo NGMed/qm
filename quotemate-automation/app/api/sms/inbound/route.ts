@@ -615,6 +615,16 @@ export async function POST(req: Request) {
   const conversationId = conversation.id
   const initialAssumptions = (conversation.assumptions_made as string[] | null) ?? []
   const initialTurnCount = conversation.turn_count
+  // Capture pre-reuse quote state. When a conversation is reused under
+  // the done-grace path (status='done' for 60s-5min before the customer
+  // texts back), the route flips status to 'open' so the dialog can
+  // append normally. But "status was done before we reopened it" is the
+  // ground-truth signal that a quote was ALREADY drafted on this
+  // conversation. Capturing it as a closure variable lets the after()
+  // guard refuse to re-fire intake/quote even if the freshly-queried
+  // intake_id is somehow racy or stale.
+  const priorIntakeId = (conversation.intake_id as string | null) ?? null
+  const quoteAlreadyDrafted = !!priorIntakeId || prior?.status === 'done' || prior?.status === 'structuring'
   // Slot state captured at request entry. Inside after() we run the slot
   // extractor against the customer's latest inbound and merge any updates
   // back into this state, then persist + pass into the dialog Haiku call.
@@ -953,16 +963,32 @@ export async function POST(req: Request) {
       // courtesy response, but the side effects don't fire twice.
       // Multi-quote-per-conversation (genuine add-ons) is a future feature
       // — for v1 the SOP is the tradie handles add-ons manually.
+      // Two-signal duplicate guard:
+      //   1. Fresh DB read of conversation.intake_id (catches the common case)
+      //   2. Pre-reuse status snapshot captured at request entry, BEFORE
+      //      the reuse-done-grace path flipped status back to 'open'. If
+      //      prior.status was 'done' or 'structuring' when we picked up
+      //      this inbound, a quote pipeline had already been triggered
+      //      and we should never re-fire — even in a race where the
+      //      DB read returns a stale null.
+      // Either signal is sufficient. Both must be true for normal flow.
       const { data: convoState } = await supabase
         .from('sms_conversations')
         .select('intake_id')
         .eq('id', conversationId)
         .maybeSingle()
-      const hasExistingIntake = !!convoState?.intake_id
+      const freshIntakeId = (convoState?.intake_id as string | null) ?? null
+      const hasExistingIntake = !!freshIntakeId || quoteAlreadyDrafted
       if (hasExistingIntake) {
         console.log(
-          '[sms/inbound:after] intake_id already set on conversation — suppressing photo + handoff to avoid duplicate quote',
-          { conversationId, existingIntakeId: convoState!.intake_id },
+          '[sms/inbound:after] quote already drafted on this conversation — suppressing photo + handoff',
+          {
+            conversationId,
+            freshIntakeId,
+            priorIntakeId,
+            priorStatusBeforeReopen: prior?.status,
+            quoteAlreadyDrafted,
+          },
         )
       }
 
