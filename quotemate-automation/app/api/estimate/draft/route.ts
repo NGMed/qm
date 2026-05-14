@@ -479,6 +479,27 @@ export async function POST(req: Request) {
         return
       }
 
+      // Test-mode skip — when the customer's number is a designated test
+      // sender (n8n harness, internal QA mobile), do NOT fire the tradie
+      // notification SMS. Without this, every stress-test run spams the
+      // real tradie owner. Added 2026-05-14 after Jeph received two
+      // unexpected "[QuoteMate] New SMS quote drafted" SMSes on his
+      // personal mobile during a debug session.
+      //
+      // Configure via env: TEST_CUSTOMER_NUMBERS=+61489083371,+61400000000
+      // The hardcoded fallback covers the existing n8n test harness.
+      const testNumbers = new Set(
+        (process.env.TEST_CUSTOMER_NUMBERS ?? '+61489083371')
+          .split(',').map((s) => s.trim()).filter(Boolean),
+      )
+      if (callerNumber && testNumbers.has(callerNumber)) {
+        dispatch.ok('tradie notify skipped — test customer number', {
+          callerNumber,
+          test_numbers: Array.from(testNumbers),
+        })
+        return
+      }
+
       // v6 multi-tenant: notify the actual TENANT owner, not a shared
       // env-var mobile. The tradie's personal mobile + the from-number
       // used for that notify both come from the tenant row so each
