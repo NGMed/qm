@@ -202,7 +202,11 @@ async function classifyIntentWithHaiku(
     })
 
     const { object } = await generateObject({
-      model: anthropic('claude-haiku-4-5-20251001'),
+      // Upgraded 2026-05-14 from Haiku 4.5 → Sonnet 4.6 alongside the
+      // dialog and slot extractor. Intent classification (customer-vs-tradie,
+      // payment ack vs follow-up question) gets sharper with Sonnet on the
+      // short ambiguous messages where Haiku occasionally misroutes.
+      model: anthropic('claude-sonnet-4-6'),
       schema: Schema,
       system: HAIKU_SYSTEM_PROMPT,
       prompt: `Customer message: "${message.slice(0, 500)}"`,

@@ -434,7 +434,16 @@ export async function extractSlots(args: {
 
   const { object } = await withRetry(
     () => generateObject({
-      model: anthropic('claude-haiku-4-5-20251001'),
+      // Upgraded 2026-05-14 from Haiku 4.5 → Sonnet 4.6. The extractor is
+      // the layer that pulls every fact (name, suburb, room, count,
+      // replace-vs-new, fuel type, ceiling type) out of long multi-fact
+      // opening messages. Sonnet is markedly better at not missing
+      // buried facts (e.g. "in the laundry as I said" still produces
+      // room="laundry"; "replacing the old battery ones" still produces
+      // replace_or_new="replace"). The dialog Rule 0 + the new rule 0b
+      // worked examples in this prompt only help if the extractor sees
+      // every fact in the first place.
+      model: anthropic('claude-sonnet-4-6'),
       schema: SlotExtractionSchema,
       system: SYSTEM_PROMPT,
       prompt: [

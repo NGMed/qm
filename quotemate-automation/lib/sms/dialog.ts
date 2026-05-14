@@ -1032,7 +1032,14 @@ export async function decideNextTurn(args: {
   // (DIALOG_FALLBACK_REPLY) still catches genuine multi-attempt failures.
   const { object } = await withRetry(
     () => generateObject({
-      model: anthropic('claude-haiku-4-5-20251001'),
+      // Upgraded 2026-05-14 from Haiku 4.5 → Sonnet 4.6 to fix the
+      // dialog precision bugs found in stress testing (Bugs #1/4/7/8 —
+      // re-asking info already in the customer's opening message). Sonnet
+      // follows the new Rule 0 ("read the customer's message before
+      // asking anything") far more reliably. Cost is ~5× per call, but
+      // the SMS reply is the customer's primary touchpoint — accuracy
+      // beats price here.
+      model: anthropic('claude-sonnet-4-6'),
       schema: TurnDecisionSchema,
       system: SYSTEM_PROMPT,
       prompt: [

@@ -13,13 +13,26 @@ import {
   useEffect,
   useMemo,
   useState,
+  type ComponentType,
   type FormEvent,
   type ReactNode,
 } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import {
+  LayoutDashboard,
+  FileText,
+  MessageSquare,
+  User,
+  DollarSign,
+  Wrench,
+  LogOut,
+  type LucideProps,
+} from 'lucide-react'
 import { getBrowserSupabase } from '@/lib/supabase/client'
 import { ErrorBanner, Field, INPUT } from '../signup/page'
+
+type NavIcon = ComponentType<LucideProps>
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -428,13 +441,15 @@ function Shell({
               type="button"
               onClick={onSignOut}
               aria-label="Sign out"
-              className="text-xs font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors cursor-pointer px-2 py-2 -mx-2"
+              className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors cursor-pointer px-2 py-2 -mx-2"
             >
-              {/* Full word on >= sm, compact glyph on mobile so the
-                  nav doesn't wrap. The pseudo-icon (→]) reads as
-                  "exit" without needing an SVG dependency. */}
+              <LogOut
+                size={16}
+                strokeWidth={1.75}
+                aria-hidden="true"
+                className="shrink-0"
+              />
               <span className="hidden sm:inline">Sign out</span>
-              <span className="sm:hidden font-mono text-base">→]</span>
             </button>
           </div>
         </div>
@@ -523,18 +538,23 @@ function ProfileChip({
 type NavItem = {
   tab: Tab
   label: string
+  /** Lucide icon component rendered to the left of the label. Picked
+   *  to match a tradie's mental model: dashboard for overview,
+   *  document for quotes, message bubble for chats, user for account,
+   *  dollar sign for pricing, wrench (trade tools) for services. */
+  icon: NavIcon
   /** Optional badge count rendered next to the label (e.g. quote count). */
   count?: number | null
 }
 
 function buildNav(quoteCount: number): NavItem[] {
   return [
-    { tab: 'overview', label: 'Overview' },
-    { tab: 'quotes', label: 'Quotes', count: quoteCount },
-    { tab: 'chats', label: 'Chats' },
-    { tab: 'account', label: 'Account' },
-    { tab: 'pricing', label: 'Pricing' },
-    { tab: 'services', label: 'Services' },
+    { tab: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { tab: 'quotes', label: 'Quotes', icon: FileText, count: quoteCount },
+    { tab: 'chats', label: 'Chats', icon: MessageSquare },
+    { tab: 'account', label: 'Account', icon: User },
+    { tab: 'pricing', label: 'Pricing', icon: DollarSign },
+    { tab: 'services', label: 'Services', icon: Wrench },
   ]
 }
 
@@ -562,6 +582,7 @@ function Sidebar({
         <ul className="py-2">
           {items.map((item) => {
             const active = item.tab === tab
+            const Icon = item.icon
             return (
               <li key={item.tab}>
                 <button
@@ -574,10 +595,18 @@ function Sidebar({
                   }`}
                   aria-current={active ? 'page' : undefined}
                 >
-                  <span>{item.label}</span>
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <Icon
+                      size={16}
+                      strokeWidth={1.75}
+                      aria-hidden="true"
+                      className="shrink-0"
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </span>
                   {typeof item.count === 'number' && item.count > 0 && (
                     <span
-                      className={`font-mono text-[0.6rem] px-1.5 py-0.5 border ${
+                      className={`font-mono text-[0.6rem] px-1.5 py-0.5 border shrink-0 ${
                         active
                           ? 'border-accent/60 text-accent'
                           : 'border-ink-line text-text-sec'
@@ -617,12 +646,13 @@ function MobileTabBar({
     >
       {items.map((item, i) => {
         const active = item.tab === tab
+        const Icon = item.icon
         return (
           <button
             key={item.tab}
             type="button"
             onClick={() => setTab(item.tab)}
-            className={`shrink-0 px-4 py-3 font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold transition-colors cursor-pointer ${
+            className={`shrink-0 inline-flex items-center gap-2 px-4 py-3 font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold transition-colors cursor-pointer ${
               i === 0 ? 'pl-4 sm:pl-0' : ''
             } ${
               active
@@ -631,9 +661,10 @@ function MobileTabBar({
             }`}
             aria-current={active ? 'page' : undefined}
           >
-            {item.label}
+            <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>{item.label}</span>
             {typeof item.count === 'number' && item.count > 0 && (
-              <span className="ml-2 text-text-sec">({item.count})</span>
+              <span className="ml-1 text-text-sec">({item.count})</span>
             )}
           </button>
         )
