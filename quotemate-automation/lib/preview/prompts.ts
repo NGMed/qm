@@ -595,7 +595,25 @@ function masterRules(): string {
     `     3D-render-looking, NOT staged-stock-photo.`,
     `     FAILURE: cartoonish, plastic-looking, or unrealistic.`,
     ``,
-    `  7. FINAL OUTCOME — render the JOB COMPLETED.`,
+    `  7. PHOTO FIDELITY — PREVIEW EDIT SHOTS ONLY.`,
+    `     When the Series role is "PREVIEW edit" and a customer photo`,
+    `     is attached, the output MUST be an EDIT of THAT photo —`,
+    `     not a freshly-generated lookalike room. Preserve the`,
+    `     customer's actual walls, paint colour, flooring, cabinets,`,
+    `     furniture, decor, perspective, camera angle, and ambient`,
+    `     lighting EXACTLY as in the source image. The ONLY pixels`,
+    `     allowed to change are the fittings being installed or`,
+    `     replaced. The customer must recognise their own space the`,
+    `     moment the image loads.`,
+    `     FAILURE: rendering a different room that "looks like" the`,
+    `     customer's photo. Changing wall colour, flooring, furniture,`,
+    `     or layout. Shifting the camera angle or perspective. Any`,
+    `     non-fitting pixel that differs from the source.`,
+    `     (This rule does NOT apply to WIDE / CLOSE-UP / IN-USE`,
+    `     sample shots — those use the photo as style reference only`,
+    `     and may re-frame the room from new angles.)`,
+    ``,
+    `  8. FINAL OUTCOME — render the JOB COMPLETED.`,
     `     The image MUST depict the install or repair FULLY`,
     `     APPLIED — the after state, day-of-handover, ready`,
     `     for the customer to walk into and use. Show the`,
@@ -609,7 +627,7 @@ function masterRules(): string {
     `     visible, exposed connections still being made, a`,
     `     tradesperson working on the install.`,
     ``,
-    `  8. SELF-VERIFY BEFORE EMITTING.`,
+    `  9. SELF-VERIFY BEFORE EMITTING.`,
     `     Before committing the image, mentally run through every`,
     `     rule above and the FINAL CHECKLIST at the bottom of`,
     `     this prompt. If any single check fails, redraft.`,
@@ -642,6 +660,7 @@ function finalChecklist(ctx: PromptContext): string {
     `  [ ] No people: no humans, hands, pets, body parts anywhere in frame.`,
     `  [ ] No text: no captions, annotations, brand logos, or text — only the approved small watermark.`,
     `  [ ] Photorealism: magazine-quality Australian interior, not cartoon or 3D render.`,
+    `  [ ] Photo fidelity (PREVIEW edit only): walls / floor / furniture / perspective match the source photo exactly — only the fittings have changed.`,
     `  [ ] Final outcome: image shows the install FULLY COMPLETED — day-of-handover state, no tools, no packaging, no mid-install work, no tradies in frame.`,
     ``,
     `If ANY box is unchecked, DO NOT emit. Redraft until all pass.`,
@@ -693,11 +712,15 @@ export function buildPreviewPrompt(ctx: PromptContext): SystemUserPrompt {
   const anchor = pickAnchorProduct(ctx)
 
   const shotContext = [
-    `  An EDIT of ${callerPossessive} OWN PHOTO of their ${room}. The user message includes ${callerLabel}'s actual photo — edit it to show their requested install. Keep the walls, floor, furniture, decor, perspective, and camera angle exactly as in the photo; only the relevant fixture area changes. If ${callerPossessive} photo already contains existing ${jobLabelPlural} of this job type, REMOVE them and replace with the ANCHOR PRODUCT above — do not keep them and add more on top.`,
+    `  Series role: PREVIEW edit — an EDIT of ${callerPossessive} OWN PHOTO of their ${room}, NOT a freshly-generated lookalike.`,
+    ``,
+    `  PHOTO FIDELITY (see MASTER RULE 7): the user message includes ${callerLabel}'s actual photo. You MUST edit THAT image. Preserve every non-fitting pixel — walls, paint colour, flooring, cabinets, furniture, decor, perspective, camera angle, lighting direction — exactly as in the source. The ONLY pixels allowed to change are the fittings being installed or replaced. ${callerLabel} must recognise their own ${room} the moment the image loads. If you find yourself rendering a "similar-looking" Aussie ${room} instead of editing the attached one, STOP and start over — that is a failed output.`,
+    ``,
+    `  If ${callerPossessive} photo already contains existing ${jobLabelPlural} of this job type, REMOVE them and replace with the ANCHOR PRODUCT above — do not keep them and add more on top.`,
     ``,
     isReplacement
-      ? `  THIS IS A REPLACEMENT JOB. ${callerPossessive} photo shows their EXISTING fitting (the one being replaced). Your edited image MUST depict the NEW ANCHOR PRODUCT installed in place of the existing one. The output MUST look visibly DIFFERENT from the input photo${anchor ? ` — the new product (${anchor}) has a different style/finish/form from what is currently there, and that visual change MUST be apparent` : ''}. If your output looks IDENTICAL to the customer's input photo, you have failed the task — re-render and show the replacement.`
-      : `  This is a NEW INSTALL. ${callerPossessive} photo shows the surface BEFORE installation. Your edited image must depict the ANCHOR PRODUCT newly installed in the appropriate position.`,
+      ? `  THIS IS A REPLACEMENT JOB. ${callerPossessive} photo shows their EXISTING fitting (the one being replaced). Your edited image MUST depict the NEW ANCHOR PRODUCT installed in place of the existing one — but every OTHER pixel stays identical to the source. The output MUST look visibly DIFFERENT from the input photo at the fitting location ONLY${anchor ? ` — the new product (${anchor}) has a different style/finish/form from what is currently there, and that visual change MUST be apparent` : ''}. If your output looks IDENTICAL to the customer's input photo, you have failed the task — re-render and show the replacement.`
+      : `  This is a NEW INSTALL. ${callerPossessive} photo shows the surface BEFORE installation. Your edited image must depict the ANCHOR PRODUCT newly installed in the appropriate position — everything else in the photo stays exactly as it was.`,
     ``,
     `  Watermark: a small "AI PREVIEW" mark in the bottom-right corner.`,
   ].join('\n')
@@ -710,12 +733,14 @@ export function buildPreviewPrompt(ctx: PromptContext): SystemUserPrompt {
     `Before emitting, run the FINAL CHECKLIST from the system instruction:`,
     `  · count matches exactly`,
     `  · ANCHOR PRODUCT (brand + style) is depicted, NOT the existing fitting`,
-    `  · the edited image looks visibly DIFFERENT from the input photo (the new product replaces the old)`,
+    `  · photo fidelity — walls, floor, furniture, perspective, lighting all match the source photo; only the fittings have changed`,
+    `  · the edited image looks visibly DIFFERENT from the input photo AT THE FITTING LOCATION ONLY (the new product replaces the old)`,
+    `  · final outcome — the install is FULLY COMPLETED in the edited photo, day-of-handover state`,
     `  · no extra features the customer did not request`,
     `  · no people, no text, no logos`,
     `  · photorealistic — magazine-quality, not cartoon or 3D render`,
     ``,
-    `If any check fails, redraft. Do not return the input photo unchanged.`,
+    `If any check fails, redraft. Do not return the input photo unchanged, and do not return a generic-looking room that isn't the customer's actual space.`,
   ].join('\n')
 
   return {
@@ -756,7 +781,7 @@ export function buildSamplePrompts(ctx: PromptContext, opts: SamplePromptOpts = 
 
   // ─── WIDE ───
   // All three sample shots depict the AFTER state — the job COMPLETED,
-  // fully installed and tidied. See MASTER RULE 7 (FINAL OUTCOME).
+  // fully installed and tidied. See MASTER RULE 8 (FINAL OUTCOME).
   const wideShot = [
     `  Series role: WIDE-ANGLE OVERVIEW (image 1 of 3 in this sample series).`,
     `  A wide-angle view of ${usingPhoto ? `${callerPossessive} ${room} (reference photo attached)` : `a contemporary Australian ${room}`} AFTER the install is FULLY COMPLETED. The entire space is visible and EVERY one of the requested ${jobLabelPlural} is mounted, finished, and ready for use — day-of-handover state. All depicted fittings must be the ANCHOR PRODUCT.`,

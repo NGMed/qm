@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════
 // AI sample-gallery generation — 3 coherent Gemini renders of the
 // FULLY COMPLETED install (the after state, day-of-handover), framed
-// as wide / close-up / in-use. See MASTER RULE 7 (FINAL OUTCOME) in
+// as wide / close-up / in-use. See MASTER RULE 8 (FINAL OUTCOME) in
 // lib/preview/prompts.ts — every shot must show the finished result,
 // not a "proposed install" or work-in-progress concept render.
 //
