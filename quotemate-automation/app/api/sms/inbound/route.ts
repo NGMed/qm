@@ -1053,6 +1053,36 @@ export async function POST(req: Request) {
           /(what suburb|suburb is the job|suburb'?s the job|what suburb's)/i.test(t.body),
       )
 
+      // BUG D fix: if Haiku's CURRENT reply (this turn) is already asking
+      // for the name or suburb, the guard should stand down. Without this
+      // check, the guard overwrites Haiku's correct first-time intro
+      // ("G'day, thanks for messaging QuoteMate, I'm the AI quoting
+      // assistant. What's your first name?") with the bare guard text
+      // ("No worries - quick one, what's your first name?"), losing the
+      // personalised greeting on turn 1.
+      const currentReplyAsksForName =
+        /(first name|what'?s your name|grab your (first )?name|your name\?)/i.test(decision.reply_to_send)
+      const currentReplyAsksForSuburb =
+        /(what suburb|suburb is the job|suburb'?s the job|what suburb's|what'?s the suburb)/i.test(decision.reply_to_send)
+
+      // BUG D fix part 2: scan the latest inbound text for an inline name
+      // statement that the slot extractor may have missed. Customers
+      // packing their first message ("Hot water replacement, Sarah in
+      // Coogee.") expect the agent to capture name + suburb without
+      // re-asking. The slot extractor sometimes misses these when the name
+      // is embedded mid-sentence. Conservative pattern: look for "I'm X"
+      // / "name is X" / "this is X" / "X here" / "X in <suburb>".
+      const latestInbound =
+        [...turns].reverse().find((t) => t.direction === 'inbound')?.body ?? ''
+      const inlineNameMatch =
+        latestInbound.match(/\b(?:i'?m|name'?s|name is|this is)\s+([A-Z][a-z]+)\b/i) ||
+        latestInbound.match(/\b([A-Z][a-z]{1,30})\s+(?:in|from|at)\s+[A-Z][a-z]+/) ||
+        latestInbound.match(/\b([A-Z][a-z]{1,30})\s+here\b/i)
+      const inlineNameInTranscript = !!inlineNameMatch
+      const inlineSuburbMatch =
+        latestInbound.match(/\b(?:in|from|at)\s+([A-Z][a-z]{2,30})\b/)
+      const inlineSuburbInTranscript = !!inlineSuburbMatch
+
       const isDialogSteering =
         decision.action !== 'escalate_inspection' &&
         decision.action !== 'end_conversation'
@@ -1061,14 +1091,18 @@ export async function POST(req: Request) {
         isDialogSteering &&
         jobTypeIdentified &&
         !haveNameSignal &&
-        !agentAlreadyAskedName
+        !inlineNameInTranscript &&         // BUG D fix part 2
+        !agentAlreadyAskedName &&
+        !currentReplyAsksForName            // BUG D fix part 1
 
       const shouldForceSuburb =
         isDialogSteering &&
         jobTypeIdentified &&
         haveNameSignal &&        // Rule 5 → Rule 6 ordering
         !haveSuburbSignal &&
-        !agentAlreadyAskedSuburb
+        !inlineSuburbInTranscript &&        // BUG D fix part 2
+        !agentAlreadyAskedSuburb &&
+        !currentReplyAsksForSuburb          // BUG D fix part 1
 
       if (shouldForceName) {
         console.warn('[sms/inbound:after] RULE 5 GUARD — Haiku skipped name question; overriding', {
@@ -1205,12 +1239,22 @@ export async function POST(req: Request) {
       const finishFallbackTrigger =
         decision.action === 'finish' &&
         EASY_5_JOB_TYPES.has(decision.job_type_guess)
+      // BUG E fix: photos are an electrical-only product feature. Haiku
+      // sometimes sets request_photo_link=true for plumbing jobs (it's
+      // trying to be helpful), but we don't want to send a photo upload
+      // link for "blocked drain" or "hot water" - the customer hasn't
+      // got anything visual to upload that helps the plumber. Gate the
+      // photo SMS by EASY_5_JOB_TYPES regardless of whether Haiku
+      // requested it.
+      const jobTypeQualifiesForPhoto =
+        EASY_5_JOB_TYPES.has(decision.job_type_guess)
       const shouldSendPhotoRequest =
         photoRequestToken &&
         !photoRequestAlreadySent &&
         !hasExistingIntake &&
         decision.action !== 'escalate_inspection' &&
         decision.action !== 'end_conversation' &&
+        jobTypeQualifiesForPhoto &&
         (haikuRequestedPhoto || finishFallbackTrigger)
 
       if (shouldSendPhotoRequest) {
