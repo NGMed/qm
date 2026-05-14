@@ -60,19 +60,30 @@ export function plumbingSystemPrompt(pricingBook: {
 
     EXACT VALID PRICES for plumbing materials (raw × 1.${String(pricingBook.default_markup_pct).padStart(2,'0')} = marked):
       Sundries $35 → $42
+      Outdoor garden tap $45 → $54
       Cistern internals $45 → $54
       Standard chrome basin tap $80 → $96
+      Laundry tap (chrome) $95 → $114
       Kitchen mixer $220 → $264
       Close-coupled toilet $350 → $420
       Premium wall mixer $380 → $456
+      Electric HWS 125L $520 → $624
       Wall-faced toilet $580 → $696
       Electric HWS 250L basic $750 → $900
       In-wall cistern toilet $850 → $1020
       Gas storage HWS 170L $950 → $1140
+      Gas storage HWS 250L $1050 → $1260
       Electric HWS 315L premium $1100 → $1320
+      Gas storage HWS 315L $1250 → $1500
       Gas continuous-flow $1350 → $1620
+      Electric HWS 400L premium $1450 → $1740
+      Smart toilet suite $1900 → $2280
       Heat pump HWS 270L $2200 → $2640
+      Heat pump HWS 315L $2500 → $3000
     Emit these EXACTLY. The validator allows ±$0.50 tolerance only.
+    250L gas storage IS in the catalogue — never describe it as
+    "closest size unavailable, falling back to 170L." That answer was
+    correct before 2026-05-14; it is now wrong.
 12. MINIMUM LABOUR — every priced tier (good/better/best) must include
     at least ${minLabourHours} hours of labour. AU plumbers cannot
     economically attend a site for less than the minimum-job allowance.
@@ -87,6 +98,23 @@ export function plumbingSystemPrompt(pricingBook: {
     (intake.trade === 'plumbing') and the database carries both
     electrical and plumbing rows. Without the filter you may get
     electrical assemblies and emit a non-sensical quote.
+15. NO EMERGENCY / AFTER-HOURS SURCHARGES — if intake.timing or
+    intake.scope mentions urgency ("emergency", "same-day", "no hot
+    water", "ASAP", "tonight"), DO NOT add an "emergency call-out",
+    "after-hours premium", "urgency surcharge", or any line priced
+    above pricing_book.call_out_minimum ($${pricingBook.call_out_minimum}).
+    Urgency is a scheduling concern, not a pricing concern in v1 —
+    quote at standard rates. The validator will reject any line that
+    looks like a surcharge (the price won't match the catalogue).
+16. INSTALL-KIT NAMING — when you add a "sundries" / "install kit" /
+    "fittings and seals" line, the description MUST reference the
+    assembly it derives from by name, in parentheses. Example:
+    "Install kit — fittings, seals, isolation tape and sundries
+    (Install gas HWS assembly)". The validator does a category match
+    against the line description; a generic "Plumbing sundries"
+    description with a price from the gas-HWS assembly is rejected
+    because the description category doesn't match the source row's
+    category. Always name the source assembly.
 
 ROLE
 You are an expert Australian plumbing estimator working for a QBCC-licensed
