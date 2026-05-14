@@ -8,6 +8,108 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./_shared.css">
+  <style>
+    /* ─── DUAL-LANE JOURNEY DIAGRAM ──────────────────────────── */
+    .journey-wrap {
+      background: var(--ink-card);
+      border: 1px solid var(--ink-line);
+      padding: 2rem 1rem 1.5rem;
+      overflow-x: auto;
+    }
+    .journey-wrap svg {
+      display: block;
+      margin: 0 auto;
+      width: 100%;
+      max-width: 960px;
+      height: auto;
+    }
+
+    /* lane headers */
+    .lane-header {
+      fill: var(--text-pri);
+      font-family: 'Manrope', sans-serif;
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .lane-header.tradie   { fill: var(--accent); }
+    .lane-header.customer { fill: var(--teal-glow); }
+
+    /* zone band labels */
+    .zone-band {
+      fill: rgba(255, 255, 255, 0.02);
+      stroke: var(--ink-line);
+      stroke-width: 1;
+      stroke-dasharray: 3 3;
+    }
+    .zone-label {
+      fill: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    /* boxes */
+    .step rect.body {
+      fill: var(--ink-deep);
+      stroke: var(--ink-line);
+      stroke-width: 1;
+    }
+    .step.built   rect.stripe { fill: var(--success); }
+    .step.partial rect.stripe { fill: var(--warning); }
+    .step.built   rect.body   { stroke: rgba(22, 163, 74, 0.4); }
+    .step.partial rect.body   { stroke: rgba(217, 119, 6, 0.4); }
+    .step.milestone rect.body {
+      fill: rgba(255, 90, 31, 0.06);
+      stroke: var(--accent);
+      stroke-width: 1.5;
+    }
+    .step.milestone rect.stripe { fill: var(--accent); }
+    .step .num {
+      fill: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+    .step .title {
+      fill: var(--text-pri);
+      font-family: 'Manrope', sans-serif;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.01em;
+    }
+    .step.milestone .title { fill: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+    .step .sub {
+      fill: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+    }
+
+    /* lines */
+    .lane-line {
+      stroke: var(--text-dim);
+      stroke-width: 1.4;
+      fill: none;
+      opacity: 0.6;
+    }
+    .handoff {
+      stroke: var(--accent);
+      stroke-width: 1.6;
+      fill: none;
+    }
+    .handoff-label {
+      fill: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+  </style>
 </head>
 <body>
   <div class="container">
@@ -53,113 +155,190 @@
       </div>
     </div>
 
-    <!-- ─── SECTION 01: CUSTOMER JOURNEY ───────────────────── -->
+    <!-- ─── SECTION 01: DUAL-LANE JOURNEY ──────────────────── -->
     <section>
       <div class="section-head">
         <span class="num">01</span>
-        <h2>Customer Journey</h2>
+        <h2>Two-Sided Flow · Tradie + Customer</h2>
       </div>
-      <p>What a homeowner experiences from first text to paid deposit.</p>
+      <p>Tradie sets up the platform once (top). After that, every customer text triggers the
+      recurring flow on the right. Orange arrows show the three real handoffs between the two
+      sides.</p>
 
-      <div class="swim">
-        <div class="swim-lane">
-          <div class="swim-label">
-            <div class="who">Customer</div>
-            <div class="what">Mobile-first, SMS-driven</div>
-          </div>
-          <div class="swim-flow">
-            <div class="step built">
-              <div class="step-num">01</div>
-              <div class="step-name">Texts the tradie's number</div>
-              <div class="step-desc">Lands at the AU mobile shown on the tradie's site or business card.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">02</div>
-              <div class="step-name">AI replies in seconds</div>
-              <div class="step-desc">Asks for name, suburb, and what the job is in plain English.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">03</div>
-              <div class="step-name">Sends photos</div>
-              <div class="step-desc">Camera or gallery via a one-tap link, or MMS straight to the conversation.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">04</div>
-              <div class="step-name">Gets a quote SMS</div>
-              <div class="step-desc">Three options — Good, Better, Best — with prices and a Stripe deposit link each.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">05</div>
-              <div class="step-name">Opens the quote page</div>
-              <div class="step-desc">Mobile quote with scope, assumptions, and photos. Picks a tier.</div>
-            </div>
-            <div class="step partial">
-              <div class="step-num">06</div>
-              <div class="step-name">Pays deposit</div>
-              <div class="step-desc">Stripe Checkout. 30% on auto-quote jobs, $199 flat on inspection-only.</div>
-            </div>
-            <div class="step partial">
-              <div class="step-num">07</div>
-              <div class="step-name">Books a slot</div>
-              <div class="step-desc">Picks a time, both sides get a confirmation SMS.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+      <div class="journey-wrap">
+        <svg viewBox="0 0 960 1560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="QuoteMate two-sided process flow — tradie and customer">
+          <defs>
+            <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#7A8699"/>
+            </marker>
+            <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#FF5A1F"/>
+            </marker>
+          </defs>
 
-    <!-- ─── SECTION 02: TRADIE JOURNEY ─────────────────────── -->
-    <section>
-      <div class="section-head">
-        <span class="num">02</span>
-        <h2>Tradie Journey</h2>
-      </div>
-      <p>What a tradie experiences from sign-up to running their own AI receptionist.</p>
+          <!-- ═══════ COLUMN HEADERS ═══════ -->
+          <text class="lane-header tradie"   x="230" y="32" text-anchor="middle">Tradie</text>
+          <text class="lane-header customer" x="730" y="32" text-anchor="middle">Customer</text>
 
-      <div class="swim">
-        <div class="swim-lane">
-          <div class="swim-label">
-            <div class="who">Tradie</div>
-            <div class="what">Web portal + SMS-initiated signup</div>
-          </div>
-          <div class="swim-flow">
-            <div class="step built">
-              <div class="step-num">01</div>
-              <div class="step-name">Signs up</div>
-              <div class="step-desc">Via website OR by texting the QuoteMate shared number — gets a personal link back.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">02</div>
-              <div class="step-name">Picks trades</div>
-              <div class="step-desc">Electrical, plumbing, or both. Per-trade rate, markup, licence.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">03</div>
-              <div class="step-name">Hits Activate</div>
-              <div class="step-desc">System buys an AU number, spins up the AI assistant, sends them a welcome SMS.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">04</div>
-              <div class="step-name">Receptionist live</div>
-              <div class="step-desc">Number on their site is now answered by the AI 24/7.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">05</div>
-              <div class="step-name">Quotes appear</div>
-              <div class="step-desc">Every customer text becomes a draft quote on the tradie dashboard.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">06</div>
-              <div class="step-name">Reviews + edits</div>
-              <div class="step-desc">Tweaks any line item across all three tiers. Stripe links rebuild automatically.</div>
-            </div>
-            <div class="step built">
-              <div class="step-num">07</div>
-              <div class="step-name">Sends + gets paid</div>
-              <div class="step-desc">Customer pays the deposit, tradie shows up to a confirmed booking.</div>
-            </div>
-          </div>
-        </div>
+          <!-- ═══════ ZONE 1 · PLATFORM SETUP (Tradie only) ═══════ -->
+          <rect class="zone-band" x="20" y="60" width="920" height="500"/>
+          <text class="zone-label" x="40" y="84">Platform Setup · once</text>
+
+          <!-- T1 Signs up -->
+          <g class="step built" transform="translate(130, 110)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 01</text>
+            <text class="title" x="14" y="42">Signs up</text>
+            <text class="sub"   x="14" y="58">Web · or SMS link</text>
+          </g>
+          <path class="lane-line" d="M 230 178 L 230 210" marker-end="url(#arrow-grey)"/>
+
+          <!-- T2 Picks trades -->
+          <g class="step built" transform="translate(130, 215)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 02</text>
+            <text class="title" x="14" y="42">Picks trades</text>
+            <text class="sub"   x="14" y="58">Electrical · plumbing · both</text>
+          </g>
+          <path class="lane-line" d="M 230 283 L 230 315" marker-end="url(#arrow-grey)"/>
+
+          <!-- T3 Activates -->
+          <g class="step built" transform="translate(130, 320)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 03</text>
+            <text class="title" x="14" y="42">Hits Activate</text>
+            <text class="sub"   x="14" y="58">One tap · auto-provision</text>
+          </g>
+          <path class="lane-line" d="M 230 388 L 230 420" marker-end="url(#arrow-grey)"/>
+
+          <!-- T4 Receptionist LIVE (milestone) -->
+          <g class="step built milestone" transform="translate(130, 425)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 04 · MILESTONE</text>
+            <text class="title" x="14" y="42">Receptionist live</text>
+            <text class="sub"   x="14" y="58">AU number · AI on 24/7</text>
+          </g>
+
+          <!-- HANDOFF 1 · T4 enables the customer side -->
+          <path class="handoff" d="M 330 459 L 460 459 L 460 645 L 630 645" marker-end="url(#arrow-orange)"/>
+          <text class="handoff-label" x="470" y="450">enables →</text>
+
+          <!-- ═══════ ZONE 2 · EVERY JOB (recurring) ═══════ -->
+          <rect class="zone-band" x="20" y="600" width="920" height="940"/>
+          <text class="zone-label" x="40" y="624">Every Job · recurring</text>
+
+          <!-- C1 Texts the number -->
+          <g class="step built" transform="translate(630, 650)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 01</text>
+            <text class="title" x="14" y="42">Texts the number</text>
+            <text class="sub"   x="14" y="58">Their tradie's AU mobile</text>
+          </g>
+          <path class="lane-line" d="M 730 718 L 730 750" marker-end="url(#arrow-grey)"/>
+
+          <!-- C2 AI conversation -->
+          <g class="step built" transform="translate(630, 755)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 02</text>
+            <text class="title" x="14" y="42">AI conversation</text>
+            <text class="sub"   x="14" y="58">Haiku 4.5 · ≤ 4 turns</text>
+          </g>
+          <path class="lane-line" d="M 730 823 L 730 855" marker-end="url(#arrow-grey)"/>
+
+          <!-- C3 Sends photos -->
+          <g class="step built" transform="translate(630, 860)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 03</text>
+            <text class="title" x="14" y="42">Sends photos</text>
+            <text class="sub"   x="14" y="58">Camera · gallery · MMS</text>
+          </g>
+
+          <!-- HANDOFF 2 · customer info crosses to tradie dashboard -->
+          <path class="handoff" d="M 630 894 L 480 894 L 480 974 L 330 974" marker-end="url(#arrow-orange)"/>
+          <text class="handoff-label" x="370" y="884">← AI drafts quote</text>
+
+          <!-- T5 Quote appears -->
+          <g class="step built" transform="translate(130, 940)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 05</text>
+            <text class="title" x="14" y="42">Quote appears</text>
+            <text class="sub"   x="14" y="58">On the tradie dashboard</text>
+          </g>
+          <path class="lane-line" d="M 230 1008 L 230 1040" marker-end="url(#arrow-grey)"/>
+
+          <!-- T6 Reviews + sends -->
+          <g class="step built" transform="translate(130, 1045)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 06</text>
+            <text class="title" x="14" y="42">Reviews + sends</text>
+            <text class="sub"   x="14" y="58">Edits any tier · re-stripes</text>
+          </g>
+
+          <!-- HANDOFF 3 · tradie's reviewed quote crosses back to customer -->
+          <path class="handoff" d="M 330 1079 L 480 1079 L 480 1164 L 630 1164" marker-end="url(#arrow-orange)"/>
+          <text class="handoff-label" x="500" y="1070">quote sent →</text>
+
+          <!-- C4 Gets quote SMS -->
+          <g class="step built" transform="translate(630, 1130)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 04</text>
+            <text class="title" x="14" y="42">Gets quote SMS</text>
+            <text class="sub"   x="14" y="58">3 tier prices + link</text>
+          </g>
+          <path class="lane-line" d="M 730 1198 L 730 1230" marker-end="url(#arrow-grey)"/>
+
+          <!-- C5 Opens quote page -->
+          <g class="step built" transform="translate(630, 1235)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 05</text>
+            <text class="title" x="14" y="42">Opens quote page</text>
+            <text class="sub"   x="14" y="58">Mobile · picks a tier</text>
+          </g>
+          <path class="lane-line" d="M 730 1303 L 730 1335" marker-end="url(#arrow-grey)"/>
+
+          <!-- C6 Pays deposit -->
+          <g class="step partial" transform="translate(630, 1340)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 06</text>
+            <text class="title" x="14" y="42">Pays deposit</text>
+            <text class="sub"   x="14" y="58">Stripe · 30% or $199</text>
+          </g>
+
+          <!-- HANDOFF 4 · payment notifies tradie -->
+          <path class="handoff" d="M 630 1374 L 480 1374 L 480 1374 L 330 1374" marker-end="url(#arrow-orange)"/>
+          <text class="handoff-label" x="430" y="1362">← paid</text>
+
+          <!-- T7 Paid + booked -->
+          <g class="step partial" transform="translate(130, 1340)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">T · 07</text>
+            <text class="title" x="14" y="42">Paid + booked</text>
+            <text class="sub"   x="14" y="58">Webhook · slot confirmed</text>
+          </g>
+          <path class="lane-line" d="M 730 1408 L 730 1440" marker-end="url(#arrow-grey)"/>
+
+          <!-- C7 Books slot -->
+          <g class="step partial" transform="translate(630, 1445)">
+            <rect class="body" width="200" height="68" rx="4"/>
+            <rect class="stripe" width="3" height="68"/>
+            <text class="num"   x="14" y="22">C · 07</text>
+            <text class="title" x="14" y="42">Books a slot</text>
+            <text class="sub"   x="14" y="58">Both get confirm SMS</text>
+          </g>
+        </svg>
       </div>
 
       <div class="legend">
@@ -178,10 +357,10 @@
       </div>
     </section>
 
-    <!-- ─── SECTION 03: WHAT'S BUILT VS WHAT'S NEXT ────────── -->
+    <!-- ─── SECTION 02: WHAT'S BUILT VS WHAT'S NEXT ────────── -->
     <section>
       <div class="section-head">
-        <span class="num">03</span>
+        <span class="num">02</span>
         <h2>What's Built · What's Next</h2>
       </div>
 
@@ -230,10 +409,10 @@
       </div>
     </section>
 
-    <!-- ─── SECTION 04: WHY IT WORKS ───────────────────────── -->
+    <!-- ─── SECTION 03: WHY IT WORKS ───────────────────────── -->
     <section>
       <div class="section-head">
-        <span class="num">04</span>
+        <span class="num">03</span>
         <h2>Why This Wins</h2>
       </div>
       <div class="card-grid">
