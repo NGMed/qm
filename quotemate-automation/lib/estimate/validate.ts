@@ -111,7 +111,13 @@ export function categorise(text: string): Set<Category> {
   }
   if (/\bdownlight/.test(t)) cats.add('downlight')
   if (/\b(gpo|power\s*point|socket|wall\s*outlet|\busb\s*out)/.test(t)) cats.add('gpo')
-  if (/\bsmoke\s*alarm|\binterconnect(?:ed)?\s+alarm/.test(t)) cats.add('smoke_alarm')
+  // smoke_alarm: "smoke alarm" / "interconnected alarm" / "240V alarm" /
+  // "hardwire ... alarm" / "alarm install" / "alarm replacement" — broader
+  // pattern so Opus's "Install kit ... terminate each alarm" line lands in
+  // the smoke_alarm bucket (caught in 2026-05-15 E4 stress test where the
+  // line was mis-categorised as [general] and the matching $40.80 row
+  // existed only in [smoke_alarm], causing all 3 tiers to fail grounding).
+  if (/\bsmoke\s*alarm|\binterconnect(?:ed)?\s+alarm|\b240v\s*alarm|\bhardwire[ds]?\b.*\balarm|\balarm\s+(?:install|replace|terminate|hardwire|kit)/.test(t)) cats.add('smoke_alarm')
   if (/\b(ceiling\s*fan|\bfan\b)/.test(t)) cats.add('fan')
   if (/\b(rcbo|safety\s*switch|safety\s*breaker|circuit\s*breaker)\b/.test(t)) cats.add('rcbo')
   if (/\b(oven|cooktop|stove|range\s*hood)\b/.test(t)) cats.add('oven_cooktop')
