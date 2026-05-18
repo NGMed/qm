@@ -1,0 +1,10 @@
+[mcp_servers.n8n-mcp]
+args = [
+    "-y",
+    "n8n-mcp",
+]
+command = "npx"
+
+[mcp_servers.n8n-mcp.env]
+N8N_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlZDc2OTIxZC1lNTYxLTRkMjAtYTljYi1hMTlkNTI3NmI3NjYiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiYmEyOGU2ZDAtZmVkMy00Y2FkLWE5Y2ItZmJkMDQzMzQ2ZjAxIiwiaWF0IjoxNzc4NDY2NDA0LCJleHAiOjE3ODEwNDI0MDB9.FnvqbqOm33tKMyL7l5Y3r2Q97V80JHbsorp8mXSbKXg"
+N8N_API_URL = "https://n8n.nomanuai.com/api/v1"

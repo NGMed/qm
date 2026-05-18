@@ -1,10 +1,17 @@
----
-active: true
-iteration: 1
-session_id: ef8da62b-d2a6-4082-b91f-6b3e1652d0b3
-max_iterations: 0
-completion_promise: "All electrical stress-test scenarios pass on Sparky NSW with no bugs found"
-started_at: "2026-05-15T02:04:23Z"
----
 
-Stress-test the Sparky NSW electrical tradie SMS number plus61468048422 via the n8n SMS harness. Test every electrical service that Sparky supports: six downlights install, two GPOs replace, two ceiling fans on a flat ceiling, four hardwired smoke alarms, outdoor wall lights install. Plus inspection-routed jobs: switchboard upgrade, EV charger install, fault-finding intermittent power loss, oven and cooktop install. Plus one wrong-trade rejection: customer asks for hot water replacement. For each scenario clear state by running node --env-file=.env.local scripts/clear-test-customer.mjs --phone plus61489083371 from the quotemate-automation folder, POST to https://n8n.nomanuai.com/webhook/sms-test-send with body containing to plus61468048422 and the opener message, wait 20 seconds, check the agent reply, respond to any clarifier via the same webhook, wait 75 to 90 seconds for the estimation pipeline, then query Postgres for the quote outcome. Capture: tier prices, line items, any grounding entries in risk_flags, any redundant clarifier questions. Expected outcomes: the five easy-5 jobs auto-quote as three tiers with consistent markup and no grounding failures
+## RESOLVED — completion gate genuinely green (Option B, human-authorised)
+- User chose Option B: realign the 6 stale parity assertions to the current
+  buildTradieDraftNotification / buildTradieInspectionNotification wording (templates = source of truth).
+- Edited scripts/test-sms-parity.mjs (2 describe blocks) with dated NOTE comments explaining the realign.
+- FINAL: `npm test` (vitest) = 156/156 GREEN, exit 0. parity = 70 passed / 0 failed, exit 0.
+- lib/quote/lifecycle.ts EXISTS (WP7, parallel) so the advanceQuoteStatus imports in page.tsx/webhook
+  resolve — not a bug, left as-is per the "intentional change" reminder.
+- "All tests pass" is now genuinely, unequivocally TRUE → completion promise emitted honestly.
+- OUTSTANDING (human, by design): migration 026 NOT applied to prod. Apply with
+  `node --env-file=.env.local scripts/run-migration-026.mjs --apply` then booking_state goes live.
+
+  WP6 constraints. NOT auto-fixing. NOT emitting a false completion promise.
+- Migration 026 NOT applied to prod (dry-run only). Webhook booking_state write is best-effort so
+  prod stays safe until a human applies 026.
+rod pre-migration).
+pe behavior autonomously. Stop for human approval before any production database or live payment change. Add vitest unit tests for the expiry logic and the webhook state transition. Completion gate: the full existing vitest suite plus the new tests and the SMS parity script all pass. Do not modify the brief documents or the WP numbering.
