@@ -956,6 +956,47 @@ export async function POST(req: Request) {
       // returning → "welcome back", continuing → no greeting.
       // photoLink drives Rule 10 (photo heads-up): will_send_now → tell the
       // customer a link is coming; already_sent → don't repeat.
+      // ─── Tenant custom services (migration 023) ───────────────────
+      // The dialog's built-in scope only knows the hardcoded easy-5 per
+      // trade. Without the tradie's OWN enabled custom services in the
+      // prompt, the agent refuses them ("we're plumbers only, dishwasher
+      // installs are outside what we do") even though the tradie added
+      // and enabled "Install dishwasher" on the dashboard. We fetch only
+      // enabled rows so a turned-off toggle genuinely removes the service
+      // from what the AI will take. Fail-soft: a DB hiccup here must
+      // never block the customer's reply — fall back to no custom block
+      // (legacy behaviour) and log.
+      let customAssemblies:
+        | Array<{ name: string; description: string | null; always_inspection: boolean }>
+        | undefined
+      if (tenant?.id) {
+        const { data: caRows, error: caErr } = await supabase
+          .from('tenant_custom_assemblies')
+          .select('name, description, always_inspection')
+          .eq('tenant_id', tenant.id)
+          .eq('enabled', true)
+          .order('trade')
+          .order('name')
+        if (caErr) {
+          console.warn('[sms/inbound:after] custom-services fetch failed — continuing without custom scope', {
+            tenantId: tenant.id,
+            message: caErr.message,
+          })
+        } else if (caRows && caRows.length > 0) {
+          customAssemblies = caRows.map((r) => ({
+            name: r.name as string,
+            description: (r.description as string | null) ?? null,
+            always_inspection: !!r.always_inspection,
+          }))
+          console.log('[sms/inbound:after] custom services in dialog scope', {
+            tenantId: tenant.id,
+            count: customAssemblies.length,
+            autoQuote: customAssemblies.filter((c) => !c.always_inspection).length,
+            inspectionOnly: customAssemblies.filter((c) => c.always_inspection).length,
+          })
+        }
+      }
+
       let decision: Awaited<ReturnType<typeof decideNextTurn>>
       try {
         decision = await decideNextTurn({
@@ -963,6 +1004,10 @@ export async function POST(req: Request) {
           inboundCount,
           customerHistory,
           photoLink: photoLinkHint,
+          // Tenant's own enabled custom services (dishwasher install,
+          // garbage disposal, etc.) — makes them in-scope so the dialog
+          // quotes/inspects them instead of refusing as wrong-trade.
+          customAssemblies,
           // PR-B: per-conversation slot state is the new source of truth.
           // The dialog prompt + deterministic scrub both read from this.
           conversationState,

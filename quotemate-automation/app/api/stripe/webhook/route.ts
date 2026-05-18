@@ -6,6 +6,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
 import { pipelineLog } from '@/lib/log/pipeline'
+import { bookingStateAfterDepositPaid } from '@/lib/quote/hold'
+import { advanceQuoteStatus } from '@/lib/quote/lifecycle'
 import type Stripe from 'stripe'
 
 export const maxDuration = 30
@@ -84,6 +86,40 @@ export async function POST(req: Request) {
     log.err('quote update failed', error.message, { quote_id: quoteId })
     return new Response('DB update failed', { status: 500 })
   }
+
+  // WP6 — the deposit moves the quote into an explicit 'reserved' state
+  // (the deposit -> reserved -> booked handoff; the booking route later
+  // promotes 'reserved' -> 'booked' when a slot is picked). This reaches
+  // this point only on the FIRST time we record payment (re-deliveries +
+  // already-paid quotes returned above), so prior booking_state is null
+  // and 'reserved' is always correct. Best-effort + isolated: if the
+  // booking_state column is not yet present (production before migration
+  // 026 is applied), this MUST NOT fail the webhook — paid_at is the
+  // authoritative "paid" signal and is already committed. Never throws.
+  try {
+    const nextState = bookingStateAfterDepositPaid(null)
+    const { error: bsErr } = await supabase
+      .from('quotes')
+      .update({ booking_state: nextState })
+      .eq('id', quoteId)
+    if (bsErr) {
+      log.err('booking_state set skipped (non-fatal — paid_at IS committed)', bsErr.message, {
+        quote_id: quoteId,
+        hint: 'apply migration 026 to enable quotes.booking_state',
+      })
+    } else {
+      log.ok('booking_state set', { quote_id: quoteId, booking_state: nextState })
+    }
+  } catch (e: any) {
+    log.err('booking_state update threw (non-fatal)', e?.message ?? String(e), { quote_id: quoteId })
+  }
+
+  // WP7 — advance the lifecycle ladder to 'paid' so the follow-up queue
+  // stops chasing a customer who has paid (paid_at alone never moved the
+  // status column before). Monotonic + non-throwing: it won't regress an
+  // already-'accepted' quote and a failure here can't undo the committed
+  // payment. Mirrors the booking_state best-effort block above.
+  await advanceQuoteStatus(supabase, quoteId, 'paid')
 
   log.done('quote marked paid', {
     quote_id: quoteId,

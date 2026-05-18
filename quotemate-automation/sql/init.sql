@@ -113,7 +113,13 @@ create table if not exists quotes (
 
   created_at timestamptz default now(),
   sent_at timestamptz,
-  accepted_at timestamptz
+  accepted_at timestamptz,
+
+  -- WP6 (migration 026): price-hold / urgency + post-deposit booking state.
+  -- price_hold_until: when the quoted price stops being held (urgency).
+  -- booking_state: null | 'reserved' (deposit paid) | 'booked' (slot chosen).
+  price_hold_until timestamptz,
+  booking_state text
 );
 
 create table if not exists quote_line_items (

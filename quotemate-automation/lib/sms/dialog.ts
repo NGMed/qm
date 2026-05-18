@@ -965,6 +965,94 @@ function tradeScopeDirective(trades: ReadonlyArray<'electrical' | 'plumbing'> | 
   return 'TENANT TRADE SCOPE: unknown — proceed as if both trades are supported. (Audit: tenant.trades was empty.)'
 }
 
+/** One enabled tenant-owned custom assembly (migration 023), passed in
+ *  from the SMS inbound route. `always_inspection=true` means the tradie
+ *  wants this service routed to the $199 paid inspection rather than
+ *  auto-quoted. Disabled rows are filtered out by the caller and never
+ *  reach this directive. */
+export type CustomServiceScope = {
+  name: string
+  description: string | null
+  always_inspection: boolean
+}
+
+// Trade-scope (above) only knows the hardcoded easy-5 per trade. Tradies
+// can add their own services on the dashboard (Services tab → custom
+// assemblies, migration 023). Without this directive the dialog has NO
+// idea those services exist, so it (correctly, per Rule 4/6) refuses
+// them as "outside SMS scope" or — worse — ends the conversation as a
+// wrong-trade job ("we're plumbers only, dishwasher installs are
+// outside what we do"). This block makes the tenant's OWN enabled
+// services first-class, in-scope work and is authoritative: it OVERRIDES
+// Rule 4/6's "job outside the easy lists → escalate" AND the trade-scope
+// "wrong trade → end_conversation" redirect whenever the customer's
+// request matches a listed service.
+//
+// Bounded so a tradie with a huge custom catalogue can't blow the prompt
+// budget: at most MAX_LISTED rows, descriptions clipped.
+const MAX_LISTED_CUSTOM_SERVICES = 40
+const MAX_CUSTOM_DESC_CHARS = 110
+
+function customServicesDirective(
+  services: ReadonlyArray<CustomServiceScope> | undefined,
+): string {
+  if (!services || services.length === 0) return ''
+
+  const clip = (s: string) =>
+    s.length > MAX_CUSTOM_DESC_CHARS
+      ? `${s.slice(0, MAX_CUSTOM_DESC_CHARS - 1).trimEnd()}…`
+      : s
+  const fmt = (s: CustomServiceScope) => {
+    const desc = (s.description ?? '').trim()
+    return desc ? `      - ${s.name} (${clip(desc)})` : `      - ${s.name}`
+  }
+
+  const autoQuote = services
+    .filter((s) => !s.always_inspection)
+    .slice(0, MAX_LISTED_CUSTOM_SERVICES)
+  const inspectionOnly = services
+    .filter((s) => s.always_inspection)
+    .slice(0, MAX_LISTED_CUSTOM_SERVICES)
+
+  const lines: string[] = [
+    'TENANT CUSTOM SERVICES (authoritative — like the TENANT TRADE SCOPE',
+    'block, this OVERRIDES the system prompt defaults. This tradie added',
+    'these to their own service list; they ARE in scope and OVERRIDE both',
+    'Rule 4/6 ("job outside SMS scope -> escalate") AND the trade-scope',
+    'wrong-trade redirect for any customer request that matches one):',
+  ]
+
+  if (autoQuote.length > 0) {
+    lines.push(
+      '  ★ AUTO-QUOTEABLE custom services — treat EXACTLY like an easy-5 job:',
+      '    gather the universal must-ask fields (name, suburb, scope) and',
+      '    finish so a quote drafts. Do NOT escalate to inspection and do',
+      '    NOT end the conversation as "wrong trade" / "not something we do":',
+      ...autoQuote.map(fmt),
+    )
+  }
+  if (inspectionOnly.length > 0) {
+    lines.push(
+      '  ★ INSPECTION-ONLY custom services — the tradie does these but wants',
+      '    a site visit first. If the customer asks for one, this is IN',
+      '    scope: set action=\'escalate_inspection\' and offer the $199',
+      '    booking. Do NOT end the conversation as "we don\'t do that":',
+      ...inspectionOnly.map(fmt),
+    )
+  }
+
+  lines.push(
+    '  Matching is by meaning, not exact words ("can you put in a',
+    '  dishwasher" matches "Install dishwasher"). When a request clearly',
+    '  matches one of the services above, that classification WINS over',
+    '  any easy-5 / trade-scope reasoning. Leave job_type_guess=\'unknown\'',
+    '  for these (the downstream estimator prices them from the tradie\'s',
+    '  own catalogue by name) — \'unknown\' here is correct, not a failure.',
+  )
+
+  return lines.join('\n')
+}
+
 // Maps the PhotoLinkHint to a directive for Haiku (Rule 10).
 function photoLinkDirective(hint: PhotoLinkHint): string {
   switch (hint) {
@@ -1019,6 +1107,17 @@ export async function decideNextTurn(args: {
    * for legacy pre-v6 traffic.
    */
   tenantTrades?: ReadonlyArray<'electrical' | 'plumbing'>
+  /**
+   * Enabled tenant-owned custom assemblies (migration 023) for the tenant
+   * who owns the destination number. Drives the TENANT CUSTOM SERVICES
+   * block so the dialog treats the tradie's own added services as
+   * in-scope instead of refusing them as "outside SMS scope" / wrong
+   * trade. The route filters to `enabled=true` rows only — disabled
+   * custom services are intentionally absent so a turned-off toggle
+   * really does remove the service from what the AI will take.
+   * Empty / undefined → no custom-services block (legacy behaviour).
+   */
+  customAssemblies?: ReadonlyArray<CustomServiceScope>
 }): Promise<TurnDecision> {
   // Build the memory block for the prompt. Prefer the state-based block
   // (PR-B) when state has slots; fall back to the legacy customerContext
@@ -1050,6 +1149,11 @@ export async function decideNextTurn(args: {
         // conversation history so it anchors every downstream decision
         // (opener wording, job_type acceptance, off-trade redirect).
         tradeScopeDirective(args.tenantTrades),
+        // Tenant's own enabled custom services. Placed AFTER the trade
+        // scope so it can override the wrong-trade redirect for services
+        // the tradie explicitly offers. Empty string when none → dropped
+        // by the .filter(Boolean) below.
+        customServicesDirective(args.customAssemblies),
         `PHOTO LINK STATE: ${args.photoLink ?? 'not_applicable'}`,
         photoLinkDirective(args.photoLink ?? 'not_applicable'),
         // Memory injection — state-based when PR-B's conversation_state

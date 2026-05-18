@@ -12,8 +12,11 @@ import { pipelineLog } from '@/lib/log/pipeline'
 import { createCheckoutSessionsForQuote, createInspectionCheckoutSession, generateShareToken } from '@/lib/stripe/checkout'
 import { withRetry } from '@/lib/util/retry'
 import { decideRouting } from '@/lib/routing/decide'
+import { advanceQuoteStatus } from '@/lib/quote/lifecycle'
+import { computePriceHoldUntil } from '@/lib/quote/hold'
 import { generatePreviewImage } from '@/lib/preview/generate'
 import { generateSampleImages } from '@/lib/preview/samples'
+import { resolvePricingBookForIntake } from '@/lib/estimate/pricing-book'
 
 export const maxDuration = 300
 
@@ -32,66 +35,55 @@ export async function POST(req: Request) {
     const { data: intake } = await supabase.from('intakes').select('*').eq('id', intakeId).single()
 
     // v5 multi-trade: pick the pricing_book row matching intake.trade.
-    // Legacy intake rows pre-dating v5 have no trade field — fall back to
-    // 'electrical' for them (the existing NSW/NECA pilot tenant).
+    // Legacy intake rows pre-dating v5 have no trade field — default to
+    // 'electrical' (the original NSW/NECA pilot trade).
     const intakeTrade = (intake?.trade as 'electrical' | 'plumbing' | undefined) ?? 'electrical'
-    // v6 multi-tenant: prefer the pricing_book row owned by THIS tenant.
-    // Falls back to a trade-only lookup (legacy pilot rows) when tenant_id
-    // is null or no per-tenant row exists yet.
     const intakeTenantId = (intake?.tenant_id as string | null) ?? null
-    let pricingBook: Record<string, unknown> | null = null
+
+    // WP1 — tenant-scoped lookup ONLY. The old "no row for this tenant →
+    // grab the oldest book for the trade" fallback is deliberately gone:
+    // it silently quoted one tradie's job on another tradie's rates and
+    // markup, with no error a human would notice. If the book can't be
+    // resolved for THIS tenant we route to the paid inspection (below),
+    // with the reason logged — never a silent default.
+    let tenantBook: Record<string, unknown> | null = null
     if (intakeTenantId) {
-      const { data: tenantBook } = await supabase
+      const { data } = await supabase
         .from('pricing_book')
         .select('*')
         .eq('tenant_id', intakeTenantId)
         .eq('trade', intakeTrade)
         .maybeSingle()
-      pricingBook = tenantBook ?? null
+      tenantBook = data ?? null
     }
-    if (!pricingBook) {
-      // Fallback: pick a stable pricing_book row for this trade.
-      // Bug #10 fix (2026-05-14): the previous `.limit(1)` had no
-      // ORDER BY, so Postgres returned whichever row happened to be
-      // physically first. With multiple plumbing tenants, this could
-      // silently switch books between deploys, producing inconsistent
-      // call-out fees and markups for intakes without a tenant_id.
-      // `order by id asc` gives a stable, deterministic choice
-      // (pricing_book has no created_at column — IDs are UUIDs but
-      // lexicographic order is sufficient for determinism). Used when
-      // the intake has no tenant_id (dev line / legacy) or when the
-      // tenant's own row hasn't been inserted yet.
-      const { data: anyBook } = await supabase
-        .from('pricing_book')
-        .select('*')
-        .eq('trade', intakeTrade)
-        .order('id', { ascending: true })
-        .limit(1)
-        .maybeSingle()
-      pricingBook = anyBook ?? null
-      if (pricingBook) {
-        log.ok('using fallback pricing_book row', {
-          trade: intakeTrade,
-          pricing_book_id: pricingBook.id,
-          pricing_book_tenant: pricingBook.tenant_id,
-          hourly_rate: pricingBook.hourly_rate,
-          call_out_minimum: pricingBook.call_out_minimum,
-          default_markup_pct: pricingBook.default_markup_pct,
-          reason: intakeTenantId
-            ? 'no pricing_book row for this tenant + trade — falling back to oldest row for the trade'
-            : 'intake has no tenant_id — falling back to oldest row for the trade',
-        })
-      }
-    }
-    if (!pricingBook) {
-      log.err('no pricing_book row for trade — aborting', null, {
-        trade: intakeTrade,
+
+    const bookResolution = resolvePricingBookForIntake({
+      intakeTenantId,
+      intakeTrade,
+      tenantBook,
+    })
+    const pricingBook: Record<string, unknown> | null = bookResolution.ok
+      ? (bookResolution.pricingBook as Record<string, unknown>)
+      : null
+
+    if (!bookResolution.ok) {
+      // Hard rule fired. We CANNOT price this job (no pricing book that
+      // provably belongs to this tenant). Do not call the estimator, do
+      // not borrow another tradie's numbers — route straight to the $199
+      // inspection with the reason persisted on the quote and logged so
+      // the misconfigured tenant is visible instead of silently wrong.
+      log.err('WP1: pricing_book did not resolve for this tenant — routing to inspection', null, {
+        code: bookResolution.code,
+        reason: bookResolution.reason,
         tenant_id: intakeTenantId,
+        trade: intakeTrade,
       })
-      return Response.json(
-        { ok: false, error: `No pricing_book row for trade=${intakeTrade}` },
-        { status: 500 },
-      )
+    } else {
+      log.ok('pricing_book resolved for tenant', {
+        tenant_id: intakeTenantId,
+        trade: intakeTrade,
+        pricing_book_id: pricingBook!.id,
+      })
     }
 
     // v6 multi-tenant: load the tenant's provisioned Twilio number +
@@ -155,38 +147,66 @@ export async function POST(req: Request) {
       job_type: intake.job_type,
       confidence: intake.confidence,
       caller_number: call?.caller_number ? 'set' : 'null',
-      hourly_rate: pricingBook.hourly_rate,
+      hourly_rate: pricingBook?.hourly_rate ?? null,
       sms_conversation_id: smsConversationId ?? 'n/a',
     })
 
-    const MODEL_CASCADE = [
-      { id: 'claude-opus-4-7',   label: 'Opus 4.7'   },
-      { id: 'claude-opus-4-6',   label: 'Opus 4.6'   },
-      { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-    ] as const
-    let modelIdx = 0
-
-    log.step(`running estimate — model cascade: ${MODEL_CASCADE.map(m => m.label).join(' → ')}, up to ${MODEL_CASCADE.length} attempts`)
-    const estimation = await withRetry(
-      () => {
-        const m = MODEL_CASCADE[Math.min(modelIdx++, MODEL_CASCADE.length - 1)]
-        return runEstimation(intake, pricingBook, m.id)
-      },
-      {
-        maxAttempts: MODEL_CASCADE.length,
-        baseDelayMs: 2000,
-        onAttemptFailed: (err, attempt, willRetry) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          const used = MODEL_CASCADE[Math.min(attempt - 1, MODEL_CASCADE.length - 1)]
-          const next = MODEL_CASCADE[Math.min(attempt, MODEL_CASCADE.length - 1)]
-          if (willRetry) {
-            log.err(`${used.label} attempt ${attempt}/${MODEL_CASCADE.length} failed — retrying with ${next.label}`, msg)
-          } else {
-            log.err(`${used.label} attempt ${attempt}/${MODEL_CASCADE.length} failed — giving up`, msg)
-          }
+    let estimation: Awaited<ReturnType<typeof runEstimation>>
+    if (!bookResolution.ok) {
+      // No valid tenant pricing book → synthesize an inspection-only draft
+      // and SKIP the estimator entirely. There is nothing to price against;
+      // calling the LLM here would only invite a hallucinated number the
+      // grounding validator would reject anyway. Tiers are nulled; the
+      // downstream inspection path forces the $199 total.
+      estimation = {
+        draft: {
+          needs_inspection: true,
+          inspection_reason: bookResolution.reason,
+          scope_of_works: `Site inspection required before this job can be quoted. ${bookResolution.reason}`,
+          scope_short: 'Site inspection required',
+          assumptions: [],
+          risk_flags: [`[pricing-book] ${bookResolution.code}: ${bookResolution.reason}`],
+          optional_upsells: [],
+          estimated_timeframe: 'After site visit (within 5 business days)',
+          gst_note: null,
+          good: null,
+          better: null,
+          best: null,
         },
       }
-    )
+      log.ok('estimation skipped — inspection-only draft synthesized (WP1 hard rule)', {
+        code: bookResolution.code,
+      })
+    } else {
+      const MODEL_CASCADE = [
+        { id: 'claude-opus-4-7',   label: 'Opus 4.7'   },
+        { id: 'claude-opus-4-6',   label: 'Opus 4.6'   },
+        { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+      ] as const
+      let modelIdx = 0
+
+      log.step(`running estimate — model cascade: ${MODEL_CASCADE.map(m => m.label).join(' → ')}, up to ${MODEL_CASCADE.length} attempts`)
+      estimation = await withRetry(
+        () => {
+          const m = MODEL_CASCADE[Math.min(modelIdx++, MODEL_CASCADE.length - 1)]
+          return runEstimation(intake, bookResolution.pricingBook, m.id)
+        },
+        {
+          maxAttempts: MODEL_CASCADE.length,
+          baseDelayMs: 2000,
+          onAttemptFailed: (err, attempt, willRetry) => {
+            const msg = err instanceof Error ? err.message : String(err)
+            const used = MODEL_CASCADE[Math.min(attempt - 1, MODEL_CASCADE.length - 1)]
+            const next = MODEL_CASCADE[Math.min(attempt, MODEL_CASCADE.length - 1)]
+            if (willRetry) {
+              log.err(`${used.label} attempt ${attempt}/${MODEL_CASCADE.length} failed — retrying with ${next.label}`, msg)
+            } else {
+              log.err(`${used.label} attempt ${attempt}/${MODEL_CASCADE.length} failed — giving up`, msg)
+            }
+          },
+        }
+      )
+    }
     const draft = estimation.draft
 
     // Surface grounding failures clearly in the Vercel logs. Log EVERY
@@ -266,7 +286,7 @@ export async function POST(req: Request) {
       const defaultTier = draft.better ?? draft.good
       selectedTier = 'better'
       selectedSubtotal = defaultTier?.subtotal_ex_gst ?? 0
-      gst = pricingBook.gst_registered ? +(selectedSubtotal * 0.10).toFixed(2) : 0
+      gst = pricingBook?.gst_registered ? +(selectedSubtotal * 0.10).toFixed(2) : 0
       total = +(selectedSubtotal + gst).toFixed(2)
     }
 
@@ -302,6 +322,10 @@ export async function POST(req: Request) {
       // up every quote drafted from that tradie's inbound traffic.
       tenant_id: intakeTenantId,
       status: 'draft',
+      // WP6 — stamp the price-hold window at creation so the customer SMS
+      // and the quote page show a consistent "held until" countdown. The
+      // page still derives from created_at as a legacy fallback when null.
+      price_hold_until:    computePriceHoldUntil(new Date().toISOString()),
       scope_of_works:      draft.scope_of_works,
       assumptions:         draft.assumptions      ?? [],
       risk_flags:          riskFlags,
@@ -470,6 +494,13 @@ export async function POST(req: Request) {
             })
           }
           dispatch.done('quote dispatched to caller', { quote_id: quote!.id, channel: result.channel })
+          // WP7 — the customer has now received the quote. Advance the
+          // lifecycle to 'sent' so the follow-up queue can tell who got
+          // a quote but hasn't acted. Monotonic + non-throwing: a
+          // re-draft / duplicate dispatch is a no-op and a failure here
+          // never undoes the (already-delivered) SMS. Inspection-routed
+          // quotes are still "sent" — the customer received something.
+          await advanceQuoteStatus(supabase, quote!.id, 'sent')
         } else {
           dispatch.err('both SMS and WhatsApp failed', null, {
             sms_code: result.smsAttempt.code,

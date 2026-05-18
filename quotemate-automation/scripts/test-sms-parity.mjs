@@ -186,11 +186,15 @@ describe("buildTradieDraftNotification — Phase 4 / SMS-source notify", () => {
     quoteUrl: "https://quote-mate-rho.vercel.app/q/abc123def456",
   });
 
-  it("is prefixed with the [QuoteMate] tag", () => {
-    assert.match(body, /^\[QuoteMate\] /);
+  // NOTE: realigned 2026-05-18 (WP6, Option B) — these assertions were
+  // stale vs. the current intended buildTradieDraftNotification wording
+  // ("Hi, <first> has requested a quote ... Quote: <url>"). Updated to
+  // match the templates, which are the source of truth here.
+  it("leads with a greeting + the customer's first name", () => {
+    assert.match(body, /^Hi, Mike has requested a quote\b/);
   });
-  it("identifies the customer by first name", () => {
-    assert.match(body, /for Mike\b/);
+  it("states the customer has requested a quote", () => {
+    assert.match(body, /\bMike has requested a quote\b/);
   });
   it("includes the item count + job type", () => {
     assert.match(body, /5 downlights/);
@@ -198,8 +202,8 @@ describe("buildTradieDraftNotification — Phase 4 / SMS-source notify", () => {
   it("includes the total inc GST", () => {
     assert.match(body, /\$880 inc GST/);
   });
-  it("includes a review URL pointing at the customer-facing quote page", () => {
-    assert.match(body, /Review: https:\/\/quote-mate-rho\.vercel\.app\/q\/abc123def456/);
+  it("includes the quote URL pointing at the customer-facing quote page", () => {
+    assert.match(body, /Quote: https:\/\/quote-mate-rho\.vercel\.app\/q\/abc123def456/);
   });
   it("is GSM-7 safe", () => {
     assert.equal(/[^\x20-\x7E\n]/.test(body), false);
@@ -215,14 +219,18 @@ describe("buildTradieInspectionNotification — Phase 4 / inspection variant", (
     quoteUrl: "https://quote-mate-rho.vercel.app/q/xyz789",
   });
 
-  it("is prefixed with the [QuoteMate] tag", () => {
-    assert.match(body, /^\[QuoteMate\] /);
+  // NOTE: realigned 2026-05-18 (WP6, Option B) — stale vs. the current
+  // intended buildTradieInspectionNotification wording ("Hi, <first> has
+  // requested work that needs a site visit ... $199 inspection. Details:
+  // <url>"). Updated to match the templates (source of truth).
+  it("leads with a greeting + the customer's first name", () => {
+    assert.match(body, /^Hi, Mike has requested work that needs a site visit\b/);
   });
-  it("flags it as an inspection booking", () => {
-    assert.match(body, /SMS inspection booking/);
+  it("flags it as needing a site visit", () => {
+    assert.match(body, /needs a site visit/);
   });
-  it("includes the $199 site-visit anchor", () => {
-    assert.match(body, /\$199 site visit/);
+  it("includes the $199 inspection anchor", () => {
+    assert.match(body, /\$199 inspection\b/);
   });
   it("includes the customer-facing quote URL", () => {
     assert.match(body, /Details: https:\/\/quote-mate-rho\.vercel\.app\/q\/xyz789/);

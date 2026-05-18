@@ -4,8 +4,26 @@
 // to track conversation state. Each customer typically only sees ONE
 // instance of any given template per conversation, so the variation is
 // noticeable across customers, not within a single thread.
+import { priceHoldStatus, fmtHoldUntilAU } from '@/lib/quote/hold'
+
 function pickVariant<T>(variants: readonly T[]): T {
   return variants[Math.floor(Math.random() * variants.length)]
+}
+
+// WP6 — appends a "Price held until <date>" urgency line to a quote SMS.
+// Strictly conditional on quote.price_hold_until being set, so legacy
+// quotes and the SMS-parity fixture (which omit the field) are unchanged
+// — this is purely additive and cannot regress existing parity asserts.
+function pushPriceHoldLine(lines: string[], holdUntil: string | null | undefined): void {
+  if (!holdUntil) return
+  const h = priceHoldStatus(holdUntil)
+  if (h.state === 'held') {
+    lines.push(`Price held until ${fmtHoldUntilAU(h.holdUntil)} - lock in a tier to secure it.`)
+    lines.push('')
+  } else if (h.state === 'expired') {
+    lines.push(`Heads up: this price expired ${fmtHoldUntilAU(holdUntil)} - reply for a fresh quote.`)
+    lines.push('')
+  }
 }
 
 /** Capitalise the first character of a string for use mid-sentence. */
@@ -95,6 +113,8 @@ export function buildQuoteUpdatedSms(intake: Intake, quote: Quote): string {
 
     lines.push('')
   }
+
+  pushPriceHoldLine(lines, quote.price_hold_until)
 
   lines.push('Reply or call back if anything looks off.')
   lines.push('')
@@ -536,6 +556,10 @@ type Quote = {
    *  templates render a "View full quote" line near the top so the customer
    *  can see scope, line items, risks, and CTAs in one place. */
   quote_view_url?: string | null
+  /** WP6 — ISO timestamp the quoted price is held until. When present the
+   *  SMS adds a "Price held until <date>" urgency line. Absent on legacy
+   *  quotes and on the parity fixture, so this field is purely additive. */
+  price_hold_until?: string | null
 }
 
 const JOB_TYPE_LABEL: Record<string, string> = {
@@ -693,6 +717,8 @@ export function buildQuoteSms(intake: Intake, quote: Quote): string {
     lines.push(`SCOPE: ${scopeLine}`)
     lines.push('')
   }
+
+  pushPriceHoldLine(lines, quote.price_hold_until)
 
   lines.push('Reply or call back to confirm a tier and we will book you in.')
   lines.push('')

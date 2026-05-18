@@ -109,6 +109,12 @@ export async function POST(
       scheduled_at: slot,
       status: 'accepted',
       accepted_at: nowIso,
+      // WP7 — keep the single sortable "last activity" column in step
+      // with the lifecycle. 'accepted' is the top of the ladder so this
+      // write stays atomic with scheduled_at (no separate advance call
+      // that could miss the slot write); the booking precondition above
+      // already guarantees we only get here from a paid quote.
+      last_status_at: nowIso,
     })
     .eq('id', quote.id)
 

@@ -173,17 +173,46 @@ export async function POST(req: Request) {
       }
     })
 
-    // upsert handles the rare race where a duplicate pricing_book row
-    // exists for the same (tenant_id, trade) — the migration 015 index
-    // on (tenant_id, trade) is unique, so the conflict target lines up.
-    const { error: pbErr } = await supabase
+    // We deliberately do NOT use `.upsert(..., { onConflict: 'tenant_id,trade' })`
+    // here. Migration 015 created `pricing_book_tenant_trade_unique` as a
+    // PARTIAL index (`WHERE tenant_id is not null`). PostgREST cannot infer
+    // a partial unique index for ON CONFLICT (it has no way to emit the
+    // matching WHERE predicate), so the upsert fails at runtime with
+    // "there is no unique or exclusion constraint matching the ON CONFLICT
+    // specification". Migration 024 makes the index non-partial, but this
+    // route must keep working even on databases where 024 hasn't run yet.
+    //
+    // Idempotent strategy without conflict-target inference:
+    //   1. Read which of the toAdd trades already have a pricing_book row.
+    //   2. Insert only the genuinely-missing rows. An already-present row
+    //      (stale state, double-submit, or a prior partial failure) is
+    //      LEFT AS-IS — re-adding a trade must never clobber the rates the
+    //      tradie already configured for it.
+    //   3. Swallow a 23505 unique-violation as success: it just means a
+    //      concurrent request inserted the row first. Re-adding the trade
+    //      is still satisfied.
+    const { data: existingPb } = await supabase
       .from('pricing_book')
-      .upsert(rows, { onConflict: 'tenant_id,trade' })
-    if (pbErr) {
-      return Response.json(
-        { ok: false, error: `pricing_book insert failed: ${pbErr.message}` },
-        { status: 500 },
-      )
+      .select('trade')
+      .eq('tenant_id', tenant.id)
+      .in('trade', toAdd)
+    const alreadyHavePb = new Set(
+      (existingPb ?? []).map((r) => r.trade as string),
+    )
+    const rowsToInsert = rows.filter((r) => !alreadyHavePb.has(r.trade))
+
+    if (rowsToInsert.length > 0) {
+      const { error: pbErr } = await supabase
+        .from('pricing_book')
+        .insert(rowsToInsert)
+      // 23505 = unique_violation: a concurrent request beat us to it. The
+      // row exists, which is exactly the post-condition we wanted.
+      if (pbErr && (pbErr as { code?: string }).code !== '23505') {
+        return Response.json(
+          { ok: false, error: `pricing_book insert failed: ${pbErr.message}` },
+          { status: 500 },
+        )
+      }
     }
 
     // Seed service offerings for each added trade. Core easy-5 rows

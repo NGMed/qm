@@ -21,6 +21,8 @@ import { generatePreviewImage } from '@/lib/preview/generate'
 import { generateSampleImages } from '@/lib/preview/samples'
 import { PreviewSection } from './PreviewSection'
 import TradieEditor from './TradieEditor'
+import { computePriceHoldUntil, priceHoldStatus, fmtHoldUntilAU } from '@/lib/quote/hold'
+import { advanceQuoteStatus } from '@/lib/quote/lifecycle'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,7 +100,7 @@ export default async function PublicQuotePage(props: {
 
   const { data: quote } = await supabase
     .from('quotes')
-    .select('id, intake_id, status, scope_of_works, assumptions, risk_flags, good, better, best, optional_upsells, estimated_timeframe, needs_inspection, inspection_reason, gst_note, selected_tier, share_token, stripe_links, paid_at, paid_tier, created_at, preview_status, preview_image_path, preview_image_paths, samples_status, sample_image_paths')
+    .select('id, intake_id, tenant_id, status, scope_of_works, assumptions, risk_flags, good, better, best, optional_upsells, estimated_timeframe, needs_inspection, inspection_reason, gst_note, selected_tier, share_token, stripe_links, paid_at, paid_tier, created_at, price_hold_until, booking_state, preview_status, preview_image_path, preview_image_paths, samples_status, sample_image_paths')
     .eq('share_token', token)
     .maybeSingle()
 
@@ -115,11 +117,22 @@ export default async function PublicQuotePage(props: {
     .eq('id', quote.intake_id)
     .maybeSingle()
   const intakeTrade = ((intake as { trade?: string } | null)?.trade as 'electrical' | 'plumbing' | undefined) ?? 'electrical'
-  const { data: pricingBook } = await supabase
+  // WP1 — the licence number + GST status shown to the customer must be
+  // THIS quote's tradie, never "whichever pricing_book row Postgres returns
+  // first for the trade". Showing another tradie's licence on a quote is a
+  // compliance problem, not just a cosmetic one. Scope by the quote's
+  // tenant_id when we have it; only legacy pre-v6 quotes (tenant_id null,
+  // single-pilot era, one book per trade) fall back to a deterministic
+  // trade-only lookup.
+  const quoteTenantId = (quote as { tenant_id?: string | null }).tenant_id ?? null
+  let pricingBookQuery = supabase
     .from('pricing_book')
     .select('licence_type, licence_number, licence_state, gst_registered')
     .eq('trade', intakeTrade)
-    .maybeSingle()
+  pricingBookQuery = quoteTenantId
+    ? pricingBookQuery.eq('tenant_id', quoteTenantId)
+    : pricingBookQuery.order('id', { ascending: true }).limit(1)
+  const { data: pricingBook } = await pricingBookQuery.maybeSingle()
 
   // Photo rendering — STRICT per-quote scoping.
   //
@@ -266,6 +279,18 @@ export default async function PublicQuotePage(props: {
     })
   }
 
+  // WP7 — record that the customer opened their quote. This is the
+  // 'viewed' lifecycle event the follow-up queue uses to tell "sent but
+  // never looked at" apart from "looked but didn't pay". Runs in
+  // after() so it never delays the render, and advanceQuoteStatus is
+  // monotonic + non-throwing: it no-ops once the quote is already
+  // viewed/paid/accepted and never rewrites the first-view timestamp,
+  // so repeated opens (and the rare tradie self-open) can't corrupt the
+  // signal or downgrade a converted quote.
+  after(async () => {
+    await advanceQuoteStatus(supabase, quote.id as string, 'viewed')
+  })
+
   const firstName = (intake?.caller?.name ?? '').toString().split(' ')[0] || 'there'
   const jobLabel = JOB_TYPE_LABEL[intake?.job_type ?? ''] ?? 'job'
   const itemCount: number | undefined = intake?.scope?.item_count
@@ -280,6 +305,17 @@ export default async function PublicQuotePage(props: {
     : null
 
   const depositPct = isInspection ? null : 30
+
+  // WP6 — price-hold / urgency. Use the persisted price_hold_until when
+  // present (migration 026); otherwise derive it from created_at so the
+  // countdown works on every quote even before the column is populated.
+  // The banner only shows pre-deposit on auto-priced quotes — once the
+  // customer has paid, urgency is moot and the paid chip takes over.
+  const effectiveHoldUntil =
+    ((quote as { price_hold_until?: string | null }).price_hold_until ?? null) ??
+    computePriceHoldUntil(quote.created_at as string | null)
+  const hold = priceHoldStatus(effectiveHoldUntil)
+  const showHoldBanner = !isPaid && !isInspection && hold.state !== 'none'
 
   const tierCount = ([quote.good, quote.better, quote.best].filter(Boolean) as Tier[]).length
 
@@ -379,6 +415,9 @@ export default async function PublicQuotePage(props: {
             </p>
           ) : null}
         </section>
+
+        {/* ─── WP6 · Price-hold / urgency banner ─────────── */}
+        {showHoldBanner ? <PriceHoldBanner hold={hold} depositPct={depositPct ?? 30} /> : null}
 
         {/* ─── Scope of works ────────────────────────────── */}
         {quote.scope_of_works ? (
@@ -670,6 +709,56 @@ function StatusChip({
       <span className="w-1.5 h-1.5 rounded-full bg-current mr-2 animate-pulse" />
       {label}
     </span>
+  )
+}
+
+function PriceHoldBanner({
+  hold,
+  depositPct,
+}: {
+  hold: ReturnType<typeof priceHoldStatus>
+  depositPct: number
+}) {
+  if (hold.state === 'expired') {
+    return (
+      <section className="mt-8 bg-ink-card border-l-2 border-l-warning border-y border-r border-ink-line p-5 sm:p-6">
+        <div className="font-mono text-[0.65rem] uppercase tracking-[0.15em] text-warning mb-2">
+          Price expired
+        </div>
+        <p className="text-sm leading-relaxed text-text-sec sm:text-base">
+          The price on this quote was held until{' '}
+          <span className="font-semibold text-text-pri">{fmtHoldUntilAU(hold.holdUntil)}</span> and
+          has now lapsed. Reply to your tradie&apos;s SMS for a refreshed quote — pricing may have
+          changed.
+        </p>
+      </section>
+    )
+  }
+
+  // state === 'held'
+  const days = hold.daysRemaining
+  const remaining =
+    days >= 1
+      ? `${days} day${days === 1 ? '' : 's'} left`
+      : 'Last day to lock it in'
+  return (
+    <section className="mt-8 bg-ink-card border border-accent/50 p-5 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-mono text-[0.65rem] uppercase tracking-[0.15em] text-accent mb-1">
+            Price held · {remaining}
+          </div>
+          <p className="text-sm leading-relaxed text-text-sec sm:text-base">
+            We&apos;re holding this price until{' '}
+            <span className="font-semibold text-text-pri">{fmtHoldUntilAU(hold.holdUntil)}</span>.
+            Lock it in with your {depositPct}% deposit to secure it before it changes.
+          </p>
+        </div>
+        <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] bg-accent text-white px-2.5 py-1 font-bold shrink-0">
+          Held until {fmtHoldUntilAU(hold.holdUntil)}
+        </span>
+      </div>
+    </section>
   )
 }
 

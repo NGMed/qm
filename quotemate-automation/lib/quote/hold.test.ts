@@ -1,0 +1,106 @@
+// WP6 regression coverage — price-hold / urgency + booking-state model.
+//
+// Locks in the behaviour the brief demands: a quote shows a real
+// "held until" window, the window expires deterministically, and a
+// paid deposit moves the quote into an explicit reserved/booked state
+// without ever downgrading a job that is already booked.
+
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_HOLD_DAYS,
+  BOOKING_STATE,
+  computePriceHoldUntil,
+  priceHoldStatus,
+  fmtHoldUntilAU,
+  bookingStateAfterDepositPaid,
+  bookingStateAfterSlotPicked,
+  bookingStateLabel,
+} from './hold'
+
+const DAY = 24 * 60 * 60 * 1000
+const CREATED = '2026-05-18T00:00:00.000Z'
+
+describe('computePriceHoldUntil', () => {
+  it('defaults to created_at + DEFAULT_HOLD_DAYS', () => {
+    const out = computePriceHoldUntil(CREATED)
+    expect(out).toBe(new Date(Date.parse(CREATED) + DEFAULT_HOLD_DAYS * DAY).toISOString())
+  })
+  it('honours a custom day count', () => {
+    const out = computePriceHoldUntil(CREATED, 3)
+    expect(out).toBe(new Date(Date.parse(CREATED) + 3 * DAY).toISOString())
+  })
+  it('returns null for missing input', () => {
+    expect(computePriceHoldUntil(null)).toBeNull()
+    expect(computePriceHoldUntil(undefined)).toBeNull()
+  })
+  it('returns null for an unparseable date', () => {
+    expect(computePriceHoldUntil('not-a-date')).toBeNull()
+  })
+})
+
+describe('priceHoldStatus', () => {
+  it("state 'none' when no hold is set", () => {
+    const s = priceHoldStatus(null)
+    expect(s.state).toBe('none')
+    expect(s.holdUntil).toBeNull()
+    expect(s.daysRemaining).toBe(0)
+  })
+  it("state 'none' for an unparseable hold value", () => {
+    expect(priceHoldStatus('garbage').state).toBe('none')
+  })
+  it("state 'held' with correct daysRemaining when in the future", () => {
+    const now = Date.parse(CREATED)
+    const until = new Date(now + 3 * DAY + 5000).toISOString()
+    const s = priceHoldStatus(until, now)
+    expect(s.state).toBe('held')
+    expect(s.daysRemaining).toBe(3)
+    expect(s.msRemaining).toBeGreaterThan(0)
+    expect(s.holdUntil).toBe(until)
+  })
+  it("state 'expired' once the hold has passed", () => {
+    const now = Date.parse(CREATED)
+    const until = new Date(now - 1000).toISOString()
+    const s = priceHoldStatus(until, now)
+    expect(s.state).toBe('expired')
+    expect(s.daysRemaining).toBe(0)
+    expect(s.msRemaining).toBeLessThan(0)
+  })
+  it("treats the exact expiry instant as 'expired' (boundary)", () => {
+    const now = Date.parse(CREATED)
+    expect(priceHoldStatus(new Date(now).toISOString(), now).state).toBe('expired')
+  })
+})
+
+describe('fmtHoldUntilAU', () => {
+  it('produces an ASCII-only short AU label', () => {
+    const label = fmtHoldUntilAU('2026-05-22T03:00:00.000Z')
+    expect(label.length).toBeGreaterThan(0)
+    expect(/^[\x20-\x7E]+$/.test(label)).toBe(true)
+    expect(label).toMatch(/May/)
+  })
+  it('returns empty string for missing/invalid input', () => {
+    expect(fmtHoldUntilAU(null)).toBe('')
+    expect(fmtHoldUntilAU('nope')).toBe('')
+  })
+})
+
+describe('booking-state transitions', () => {
+  it('deposit paid on a fresh quote -> reserved', () => {
+    expect(bookingStateAfterDepositPaid(null)).toBe(BOOKING_STATE.RESERVED)
+    expect(bookingStateAfterDepositPaid(undefined)).toBe('reserved')
+  })
+  it('deposit paid is idempotent on an already-reserved quote', () => {
+    expect(bookingStateAfterDepositPaid('reserved')).toBe(BOOKING_STATE.RESERVED)
+  })
+  it('deposit paid NEVER downgrades an already-booked quote', () => {
+    expect(bookingStateAfterDepositPaid('booked')).toBe(BOOKING_STATE.BOOKED)
+  })
+  it('slot picked -> booked (terminal)', () => {
+    expect(bookingStateAfterSlotPicked()).toBe(BOOKING_STATE.BOOKED)
+  })
+  it('labels map to customer-facing words', () => {
+    expect(bookingStateLabel(null)).toBe('Draft')
+    expect(bookingStateLabel('reserved')).toBe('Reserved')
+    expect(bookingStateLabel('booked')).toBe('Booked')
+  })
+})

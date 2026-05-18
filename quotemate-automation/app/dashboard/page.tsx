@@ -10,6 +10,7 @@
 'use client'
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -27,6 +28,7 @@ import {
   DollarSign,
   Wrench,
   LogOut,
+  PhoneCall,
   type LucideProps,
 } from 'lucide-react'
 import { getBrowserSupabase } from '@/lib/supabase/client'
@@ -177,7 +179,14 @@ type DashboardData = {
   material_preferences: Record<string, string>
 }
 
-type Tab = 'overview' | 'account' | 'pricing' | 'services' | 'quotes' | 'chats'
+type Tab =
+  | 'overview'
+  | 'account'
+  | 'pricing'
+  | 'services'
+  | 'quotes'
+  | 'chats'
+  | 'followups'
 
 /** SMS conversation summary returned by /api/tenant/chats. Drives the
  *  Chats tab — communication history including leads that didn't
@@ -446,6 +455,9 @@ export default function DashboardPage() {
               />
             )}
             {tab === 'quotes' && <QuotesTab data={data} />}
+            {tab === 'followups' && (
+              <FollowupsTab accessToken={accessToken} />
+            )}
             {tab === 'chats' && (
               <ChatsTab accessToken={accessToken} isMultiTrade={
                 Array.isArray(data.tenant.trades) && data.tenant.trades.length > 1
@@ -636,6 +648,7 @@ function buildNav(quoteCount: number): NavItem[] {
   return [
     { tab: 'overview', label: 'Overview', icon: LayoutDashboard },
     { tab: 'quotes', label: 'Quotes', icon: FileText, count: quoteCount },
+    { tab: 'followups', label: 'Follow-ups', icon: PhoneCall },
     { tab: 'chats', label: 'Chats', icon: MessageSquare },
     { tab: 'account', label: 'Account', icon: User },
     { tab: 'pricing', label: 'Pricing', icon: DollarSign },
@@ -3493,6 +3506,295 @@ function Transcript({
   )
 }
 
+// ─── Follow-ups tab (WP7) ─────────────────────────────────────────
+//
+// The "setter" queue: customers who received a quote but did NOT accept
+// it, stale enough to chase, oldest-first. A VA opens this tab and can
+// immediately see who to contact, why, the quote summary, and a direct
+// tap-to-call / tap-to-text path — then "Mark contacted" to clear it.
+// Data + filtering come from /api/tenant/followups (single-sourced with
+// the unit-tested lib/quote/followup.ts selector).
+
+type FollowupItem = {
+  quote_id: string
+  share_token: string | null
+  status: string | null
+  followup_reason: string
+  last_activity: string | null
+  age_hours: number | null
+  total_inc_gst: number | null
+  selected_tier: string | null
+  job_type: string | null
+  needs_inspection: boolean
+  scope_of_works: string | null
+  followed_up_at: string | null
+  followup_note: string | null
+  customer: {
+    first_name: string | null
+    full_name: string | null
+    phone: string | null
+    suburb: string | null
+    email: string | null
+  }
+}
+
+function fmtAgeHours(h: number | null): string {
+  if (h === null || !Number.isFinite(h)) return 'unknown'
+  if (h < 48) return `${Math.max(0, Math.round(h))}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
+
+function fmtAUD(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return '—'
+  return `$${Math.round(n).toLocaleString('en-AU')}`
+}
+
+function fmtJobType(j: string | null): string {
+  if (!j) return 'Job'
+  return j.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// tel:/sms: hrefs want a dial-safe string (digits + leading +).
+function dialHref(scheme: 'tel' | 'sms', phone: string | null): string | null {
+  if (!phone) return null
+  const cleaned = phone.replace(/[^\d+]/g, '')
+  if (cleaned.replace(/\D/g, '').length < 6) return null
+  return `${scheme}:${cleaned}`
+}
+
+function FollowupsTab({ accessToken }: { accessToken: string | null }) {
+  const [rows, setRows] = useState<FollowupItem[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [minAgeHours, setMinAgeHours] = useState<number | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!accessToken) {
+      setError('Not signed in')
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/tenant/followups', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store',
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string
+        }
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      const json = (await res.json()) as {
+        followups: FollowupItem[]
+        meta: { min_age_hours: number }
+      }
+      setRows(json.followups)
+      setMinAgeHours(json.meta?.min_age_hours ?? null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [accessToken])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (cancelled) return
+      await load()
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [load])
+
+  async function markContacted(quoteId: string) {
+    if (!accessToken) return
+    setBusyId(quoteId)
+    try {
+      const res = await fetch('/api/tenant/followups', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ quoteId, action: 'mark_contacted' }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string
+        }
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      // Optimistic: a contacted lead drops out of the active queue.
+      setRows((prev) =>
+        prev ? prev.filter((r) => r.quote_id !== quoteId) : prev,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card title="Follow-ups">
+        <p className="text-sm text-text-dim">Loading the follow-up queue…</p>
+      </Card>
+    )
+  }
+  if (error) {
+    return (
+      <Card title="Follow-ups">
+        <p className="text-sm text-amber-300">{error}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="mt-4 inline-flex items-center gap-2 border border-ink-line bg-ink-card hover:bg-ink-deep text-text-pri font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-5 py-3 min-h-[44px] transition-colors cursor-pointer"
+        >
+          Retry
+        </button>
+      </Card>
+    )
+  }
+
+  const list = rows ?? []
+  const thresholdNote =
+    minAgeHours !== null
+      ? `Quotes sent over ${
+          minAgeHours >= 48
+            ? `${Math.round(minAgeHours / 24)} days`
+            : `${minAgeHours}h`
+        } ago with no payment.`
+      : 'Quotes sent but not accepted.'
+
+  if (list.length === 0) {
+    return (
+      <Card
+        title="Follow-ups"
+        subtitle={`${thresholdNote} Nothing to chase right now.`}
+      >
+        <p className="text-sm text-text-dim">
+          No follow-ups. Every quote is either too recent, already paid, or
+          accepted — or you have contacted them all. Newly sent quotes will
+          appear here once they go stale without converting.
+        </p>
+      </Card>
+    )
+  }
+
+  return (
+    <Card
+      title="Follow-ups"
+      subtitle={`${list.length} ${
+        list.length === 1 ? 'customer' : 'customers'
+      } to chase · ${thresholdNote} Oldest first.`}
+    >
+      <div className="space-y-3">
+        {list.map((f) => {
+          const name = f.customer.full_name || 'Unknown customer'
+          const tel = dialHref('tel', f.customer.phone)
+          const sms = dialHref('sms', f.customer.phone)
+          const opened = f.followup_reason.startsWith('Opened')
+          return (
+            <div
+              key={f.quote_id}
+              className="border border-ink-line bg-ink p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-extrabold text-text-pri truncate">
+                      {name}
+                    </span>
+                    <span
+                      className={`font-mono text-[0.6rem] uppercase tracking-[0.16em] font-bold px-2 py-0.5 border ${
+                        opened
+                          ? 'border-amber-500/60 text-amber-300'
+                          : 'border-accent/60 text-accent'
+                      }`}
+                    >
+                      {f.followup_reason}
+                    </span>
+                    {f.needs_inspection && (
+                      <span className="font-mono text-[0.6rem] uppercase tracking-[0.16em] font-bold px-2 py-0.5 border border-ink-line text-text-dim">
+                        Inspection
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-sm text-text-sec">
+                    {fmtJobType(f.job_type)}
+                    {f.customer.suburb ? ` · ${f.customer.suburb}` : ''} ·{' '}
+                    {fmtAUD(f.total_inc_gst)} inc GST
+                    {f.selected_tier ? ` · ${f.selected_tier} tier` : ''}
+                  </p>
+                  <p className="mt-1 font-mono text-[0.62rem] uppercase tracking-[0.14em] text-text-dim">
+                    Last activity {fmtAgeHours(f.age_hours)}
+                  </p>
+                </div>
+                <div className="flex flex-col items-stretch gap-2 shrink-0">
+                  <div className="flex gap-2">
+                    {tel ? (
+                      <a
+                        href={tel}
+                        className="inline-flex items-center justify-center gap-1.5 bg-accent hover:bg-accent-press text-white font-mono text-[0.62rem] uppercase tracking-[0.14em] font-bold px-3 py-2 min-h-[40px] transition-colors"
+                      >
+                        Call
+                      </a>
+                    ) : null}
+                    {sms ? (
+                      <a
+                        href={sms}
+                        className="inline-flex items-center justify-center gap-1.5 border border-accent/60 text-accent hover:bg-accent/10 font-mono text-[0.62rem] uppercase tracking-[0.14em] font-bold px-3 py-2 min-h-[40px] transition-colors"
+                      >
+                        Text
+                      </a>
+                    ) : null}
+                  </div>
+                  {!tel && !sms && (
+                    <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-amber-300">
+                      No phone on file
+                    </span>
+                  )}
+                  {f.customer.phone && (
+                    <span className="text-center text-xs text-text-dim tabular-nums">
+                      {f.customer.phone}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-line pt-3">
+                {f.share_token && (
+                  <Link
+                    href={`/q/${f.share_token}`}
+                    target="_blank"
+                    className="font-mono text-[0.62rem] uppercase tracking-[0.14em] font-bold text-accent hover:text-accent-press"
+                  >
+                    Open quote ↗
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  disabled={busyId === f.quote_id}
+                  onClick={() => void markContacted(f.quote_id)}
+                  className="ml-auto inline-flex items-center gap-2 border border-ink-line bg-ink-card hover:bg-ink-deep text-text-pri font-mono text-[0.62rem] uppercase tracking-[0.16em] font-bold px-4 py-2 min-h-[40px] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {busyId === f.quote_id ? 'Saving…' : 'Mark contacted'}
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 // ─── Chats tab ────────────────────────────────────────────────────
 //
 // Lazy-loaded communication-history view. Lists every SMS conversation
@@ -3886,6 +4188,8 @@ function tabLabel(t: Tab): string {
       return 'Quotes'
     case 'chats':
       return 'Chats'
+    case 'followups':
+      return 'Follow-ups'
   }
 }
 
