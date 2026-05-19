@@ -261,23 +261,19 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
               })
             }
 
-            // ── Step 2: still wrong → show the EXACT product photo ──
+            // ── Step 2: still wrong → log only ─────────────────────
+            // Do NOT push the raw product photo into the room-preview
+            // gallery — a floating product on a white background shown
+            // as "AI PREVIEW · YOUR ROOM" confuses customers (it looks
+            // like a broken render). The customer already sees the real
+            // product in the quote line + catalogue; the room gallery
+            // must contain ONLY actual room renders. We just record the
+            // mismatch for diagnostics.
             if (!recovered) {
-              const refExt = productRef.mime === 'image/png' ? 'png' : 'jpg'
-              const refPath = `${intake.id}/product-ref-${Date.now()}.${refExt}`
-              const { error: upErr } = await supabase.storage
-                .from(BUCKET)
-                .upload(refPath, Buffer.from(productRef.base64, 'base64'), {
-                  contentType: productRef.mime,
-                  upsert: false,
-                })
-              if (!upErr) {
-                succeededPaths.push(refPath)
-                console.warn(
-                  '[preview] WP4 product mismatch (after re-render) — appended exact product photo',
-                  { quoteId, reason: verdict.reason },
-                )
-              }
+              console.warn(
+                '[preview] WP4 product mismatch persisted after re-render (no gallery pollution)',
+                { quoteId, reason: verdict.reason },
+              )
             }
           }
         }
@@ -366,7 +362,12 @@ async function generateOnePreview(opts: {
                       'PRODUCT REFERENCE — the FINAL image below is the EXACT real product ' +
                       'the customer is quoted and will receive. Replicate it precisely in the ' +
                       'install (same brand, model, shape, colour, finish). It is the literal ' +
-                      'product, NOT a style hint. Do not substitute a generic fitting.',
+                      'product, NOT a style hint. Do not substitute a generic fitting. ' +
+                      'OVERRIDE: this product wins over the job-type label and any ' +
+                      'count/placement guidance about fixture appearance — if the job says ' +
+                      '"downlights" but this reference is a different fixture type (bulb, ' +
+                      'pendant, batten, panel, etc.), install THIS product’s exact form, ' +
+                      'not a generic downlight. Keep the requested quantity.',
                   },
                   {
                     inline_data: {
