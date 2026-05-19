@@ -8,6 +8,7 @@ import {
   buildProductOptionsSms,
   buildChoiceHoldSms,
   interpretChoiceReply,
+  recommendedOption,
   applyChoiceSelection,
   categoryForJobType,
   describeChosenProductDirective,
@@ -70,7 +71,7 @@ describe('buildProductOptionsSms', () => {
     const sms = buildProductOptionsSms(opts, 'https://qm.co/q/choose/abc', 'tap')
     expect(sms).toContain('$120')
     expect(sms).toContain('$150')
-    expect(sms).toMatch(/reply 1 or 2/i)
+    expect(sms).toMatch(/reply 1, 2, or "you pick"/i) // 1/2 + defer instruction
     expect(sms).toContain('https://qm.co/q/choose/abc')
   })
   it('never exceeds the dialog 320-char reply cap even with huge names', () => {
@@ -115,6 +116,27 @@ describe('interpretChoiceReply', () => {
     expect(interpretChoiceReply('', opts)).toBeNull()
     expect(interpretChoiceReply('1 or 2?', opts)).toBeNull() // both signals → ambiguous
   })
+  it('maps tier words to the right option', () => {
+    expect(interpretChoiceReply('the cheaper one', opts)?.catalogue_id).toBe('P-good')
+    expect(interpretChoiceReply('go basic thanks', opts)?.catalogue_id).toBe('P-good')
+    expect(interpretChoiceReply('the better one', opts)?.catalogue_id).toBe('P-better')
+    expect(interpretChoiceReply('premium please', opts)?.catalogue_id).toBe('P-better')
+  })
+  it('"you pick / no preference" → the recommended (Better) option', () => {
+    for (const r of [
+      'you pick', 'whatever you recommend', 'no preference', 'up to you',
+      'either is fine', "doesn't matter", 'surprise me', "you're the expert",
+    ]) {
+      expect(interpretChoiceReply(r, opts)?.catalogue_id).toBe('P-better')
+    }
+  })
+})
+
+describe('recommendedOption', () => {
+  it('is the Better (premium) option', () => {
+    const o = selectProductOptions(taps, 'tap')!
+    expect(recommendedOption(o).catalogue_id).toBe('P-better')
+  })
 })
 
 describe('applyChoiceSelection', () => {
@@ -135,6 +157,11 @@ describe('applyChoiceSelection', () => {
     const s = applyChoiceSelection(base(), { reply: '1' }, 'NOW')!
     expect(s.status).toBe('chosen')
     expect(s.chosen_catalogue_id).toBe('P-good')
+  })
+  it('defer:true (page "let tradie choose") → recommended option', () => {
+    const s = applyChoiceSelection(base(), { defer: true }, 'NOW')!
+    expect(s.status).toBe('chosen')
+    expect(s.chosen_catalogue_id).toBe('P-better') // the recommended one
   })
   it('is idempotent — an already-chosen state is returned unchanged', () => {
     const chosen = applyChoiceSelection(base(), { reply: '2' }, 'T1')!

@@ -145,12 +145,11 @@ export function buildProductOptionsSms(
   const [a, b] = options
   const label = categoryLabel(category)
   const compose = (n1: string, n2: string) =>
-    `This'll be quick — we've got a couple of ${label} options in our ` +
-    `catalogue for you to choose from. Tap to see the photos & prices ` +
-    `and pick one: ${chooseUrl}\n` +
+    `Quick one — 2 ${label} options in our catalogue. Tap for photos ` +
+    `+ to pick: ${chooseUrl}\n` +
     `1. ${n1} (Good) — ${money(a.price_ex_gst)}\n` +
     `2. ${n2} (Better) — ${money(b.price_ex_gst)}\n` +
-    `Or just reply 1 or 2.`
+    `Reply 1, 2, or "you pick" for our pick.`
 
   let msg = compose(a.name, b.name)
   if (msg.length <= 320) return msg
@@ -172,15 +171,33 @@ export function buildProductOptionsSms(
 export function buildChoiceHoldSms(): string {
   return (
     "Take your pick from the 2 options above — reply 1 or 2 (or tap the " +
-    "link) and I'll lock that into your quote."
+    "link). No preference? Just say \"you pick\" and I'll go with our " +
+    "recommended one."
   )
 }
 
+/** The option we'd recommend when the customer doesn't want to choose
+ *  ("you pick"). The "Better" option (index 1) — the premium one the
+ *  offer SMS labels (Better). Pure. */
+export function recommendedOption(
+  options: [ProductOption, ProductOption],
+): ProductOption {
+  return options[1] ?? options[0]
+}
+
+// "Don't make me choose — you pick / whatever you recommend" signals.
+// Curated so it can't swallow a real question; checked only AFTER the
+// explicit 1/2 + name matching below.
+const DEFER_RE =
+  /\b(you (pick|choose|decide)|your (choice|call|recommendation)|up to you|whatever('?s| is| you)|recommend(ed)?|no (pref(erence)?|idea)|don'?t mind|doesn'?t matter|either( one| is fine)?|surprise me|you'?re the expert|trust you|i'?ll trust|just (pick|choose|go ahead)|skip|no thanks)\b/i
+
 /**
  * Interpret a customer reply into the chosen option. Accepts "1"/"2",
- * "one"/"two", "first"/"second", or a clear product/brand-name match.
- * Returns null when it isn't an unambiguous choice (the dialog then
- * handles the message normally — WP9 never hijacks a real question).
+ * "one"/"two", "first"/"second", a clear product/brand-name match,
+ * the tier words "good/cheaper" vs "better/premium", OR a "you pick /
+ * no preference" reply (→ the recommended option). Returns null only
+ * when it isn't an unambiguous choice (the dialog then handles the
+ * message normally — WP9 never hijacks a real question).
  */
 export function interpretChoiceReply(
   body: string,
@@ -219,6 +236,18 @@ export function interpretChoiceReply(
     if (ha && !hb) return a
     if (hb && !ha) return b
   }
+
+  // Tier words — natural replies to a "Good vs Better" offer.
+  const cheap = has(/\b(good|cheap(er|est)?|basic|budget|standard|lower)\b/)
+  const prem = has(/\b(better|premium|dearer|nicer|higher|top|best)\b/)
+  if (cheap && !prem) return a
+  if (prem && !cheap) return b
+
+  // "You pick / no preference" → the recommended (Better) option, so
+  // the customer is never trapped by the hold and the quote still uses
+  // a real catalogue product + price.
+  if (DEFER_RE.test(t)) return recommendedOption(options)
+
   return null
 }
 
@@ -233,7 +262,7 @@ export function interpretChoiceReply(
  */
 export function applyChoiceSelection(
   choice: ProductChoiceState | null | undefined,
-  input: { catalogueId?: string | null; reply?: string | null },
+  input: { catalogueId?: string | null; reply?: string | null; defer?: boolean },
   nowIso: string = new Date().toISOString(),
 ): ProductChoiceState | null {
   if (!choice) return null
@@ -244,7 +273,10 @@ export function applyChoiceSelection(
 
   let picked: ProductOption | null = null
   const id = (input.catalogueId ?? '').trim()
-  if (id) {
+  if (input.defer === true) {
+    // "Let the tradie choose" (page button) → the recommended option.
+    picked = recommendedOption(pair)
+  } else if (id) {
     picked = opts.find((o) => o.catalogue_id === id) ?? null
   } else if (input.reply != null) {
     picked = interpretChoiceReply(input.reply, pair)

@@ -68,9 +68,9 @@ export async function POST(
   ctx: { params: Promise<{ token: string }> },
 ) {
   const { token } = await ctx.params
-  let body: { catalogue_id?: string } = {}
+  let body: { catalogue_id?: string; defer?: boolean } = {}
   try {
-    body = (await req.json()) as { catalogue_id?: string }
+    body = (await req.json()) as { catalogue_id?: string; defer?: boolean }
   } catch {
     return Response.json({ error: 'invalid_json' }, { status: 400 })
   }
@@ -79,6 +79,7 @@ export async function POST(
 
   const next = applyChoiceSelection(row.choice, {
     catalogueId: body.catalogue_id ?? null,
+    defer: body.defer === true,
   })
   if (!next) {
     return Response.json({ error: 'invalid_choice' }, { status: 400 })

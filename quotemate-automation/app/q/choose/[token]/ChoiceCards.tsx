@@ -57,6 +57,31 @@ export function ChoiceCards({
     }
   }
 
+  // "I don't mind — go with the recommended one." Resolves server-side
+  // to the recommended option so the customer is never forced to pick.
+  async function chooseDefer() {
+    if (busy || chosenId) return
+    setBusy('__defer__')
+    setError(null)
+    try {
+      const res = await fetch(`/api/q/choose/${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defer: true }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string
+        chosen_catalogue_id?: string | null
+      }
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      setChosenId(json.chosen_catalogue_id ?? null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div>
       {chosenId && (
@@ -120,6 +145,18 @@ export function ChoiceCards({
           )
         })}
       </div>
+      {!chosenId && (
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={chooseDefer}
+          className="mt-4 w-full text-center border border-ink-line bg-ink-card px-4 py-3 text-sm text-text-sec hover:border-accent/50 hover:text-text-pri transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {busy === '__defer__'
+            ? 'Saving…'
+            : "No preference — let my tradie choose (recommended)"}
+        </button>
+      )}
       {error && <p className="mt-4 text-sm text-warning">{error}</p>}
     </div>
   )
