@@ -310,3 +310,51 @@ describe('applyChosenProduct (WP9 — chosen product gates the quote)', () => {
     expect(applyChosenProduct(d, { ...chosen, price_ex_gst: NaN }).applied).toEqual([])
   })
 })
+
+// PROOF for the exact real-world case Jon reported: a generic Opus
+// draft (all tiers ~$759) + the customer's catalogue pick must produce
+// the CATALOGUE price, not the generic number.
+describe('applyChosenProduct — Jon\'s scenario (6 downlights, GST maths)', () => {
+  // A realistic generic Opus draft: 6 generic downlights + 3h labour.
+  const genericDraft = () => ({
+    good: {
+      subtotal_ex_gst: 690, // ~$759 inc GST — the wrong generic number
+      line_items: [
+        { description: 'Warm-white LED downlight', source: 'material', quantity: 6, unit: 'each', unit_price_ex_gst: 60, total_ex_gst: 360 },
+        { description: 'Labour', source: 'labour', quantity: 3, unit: 'hr', unit_price_ex_gst: 110, total_ex_gst: 330 },
+      ],
+    },
+  })
+  const incGst = (exGst: number) => +(exGst * 1.1).toFixed(2)
+
+  it('Clipsal Downlight ($56) → 6×$56 + 3h labour ≈ $733 inc GST (NOT $759)', () => {
+    const r = applyChosenProduct(genericDraft(), {
+      catalogue_id: 'P-clipsal',
+      name: 'Clipsal Downlight',
+      price_ex_gst: 56,
+      image_path: 'clipsal.jpg',
+    })
+    const t = r.draft.good
+    const mat = t.line_items[0]
+    expect(mat.description).toBe('Clipsal Downlight') // exact catalogue name
+    expect(mat.unit_price_ex_gst).toBe(56) // exact catalogue price, no markup
+    expect(mat.total_ex_gst).toBe(336) // 6 × 56
+    expect(mat.image_path).toBe('clipsal.jpg') // → Gemini render
+    expect(t.subtotal_ex_gst).toBe(666) // 336 + 330 labour (generic 60 gone)
+    expect(incGst(t.subtotal_ex_gst)).toBe(732.6) // ≈ $730, NOT $759
+  })
+
+  it('Black Fireflies ($69) → 6×$69 + 3h labour ≈ $818 inc GST', () => {
+    const r = applyChosenProduct(genericDraft(), {
+      catalogue_id: 'P-fireflies',
+      name: 'Black Fireflies',
+      price_ex_gst: 69,
+      image_path: 'ff.jpg',
+    })
+    const t = r.draft.good
+    expect(t.line_items[0].unit_price_ex_gst).toBe(69)
+    expect(t.line_items[0].total_ex_gst).toBe(414) // 6 × 69
+    expect(t.subtotal_ex_gst).toBe(744) // 414 + 330
+    expect(incGst(t.subtotal_ex_gst)).toBe(818.4) // ≈ $820
+  })
+})
