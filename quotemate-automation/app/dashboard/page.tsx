@@ -2172,21 +2172,47 @@ function ServicesTab({
 
   const dirty = Object.keys(pending).length > 0
 
-  function toggle(assemblyId: string, current: boolean) {
-    setPending((prev) => {
-      const next = { ...prev }
-      if (next[assemblyId] !== undefined) {
-        // Already toggled in this session → revert removes it from pending
-        if (next[assemblyId] !== current) {
-          delete next[assemblyId]
-        } else {
-          next[assemblyId] = !current
-        }
-      } else {
-        next[assemblyId] = !current
-      }
-      return next
-    })
+  // Persist EVERY toggle immediately (optimistic UI + write-through),
+  // exactly like the Catalogue tab. The old model buffered changes in
+  // `pending` and only wrote on a separate "Save" click, and a second
+  // toggle of the same service deleted the pending change — so the AI
+  // kept reading the stale DB state (the bug Jon hit: "I enabled it but
+  // it still says not offered"). Writing on each toggle removes that
+  // whole class of bug: what you see is what's saved.
+  async function toggle(assemblyId: string, current: boolean) {
+    if (busy) return // ignore rapid double-clicks while a save is in flight
+    const svc = data.services.find((s) => s.assembly_id === assemblyId)
+    const liveNow =
+      pending[assemblyId] !== undefined ? pending[assemblyId] : current
+    const nextVal = !liveNow
+    // Optimistic flip so the switch responds instantly.
+    setPending((p) => ({ ...p, [assemblyId]: nextVal }))
+    setError(null)
+    setBusy(true)
+    try {
+      const payload: Record<string, unknown> = svc?.is_custom
+        ? { custom_services: { [assemblyId]: nextVal } }
+        : { services: { [assemblyId]: nextVal } }
+      await onSave(payload) // PATCH /api/tenant/me → upsert → re-fetch
+      // onSave re-fetched authoritative data; drop the optimistic entry
+      // so the switch now reflects the saved state.
+      setPending((p) => {
+        const n = { ...p }
+        delete n[assemblyId]
+        return n
+      })
+      setSavedAt(Date.now())
+    } catch (e: any) {
+      // Revert the optimistic flip.
+      setPending((p) => {
+        const n = { ...p }
+        delete n[assemblyId]
+        return n
+      })
+      setError(e?.message ?? 'Save failed')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function saveAll() {
