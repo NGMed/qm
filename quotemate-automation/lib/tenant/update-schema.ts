@@ -162,6 +162,14 @@ export const MaterialCatalogueSchema = z.object({
     .or(z.null()),
   tier_hint: TIER_ENUM.optional().or(z.literal('')),
   image_path: z.string().trim().max(300).optional().or(z.literal('')),
+  // WP2 completion (migration 034). cost_price = what the tradie PAYS
+  // (margin insight; never a sell price — estimator/validator ignore
+  // it). description = operator's own product blurb. is_preferred =
+  // their go-to product for the category (soft chooseMaterial
+  // tiebreaker only).
+  cost_price_ex_gst: z.coerce.number().min(0).max(100_000).optional().or(z.null()),
+  description: z.string().trim().max(500).optional().or(z.literal('')),
+  is_preferred: z.boolean().optional(),
   active: z.boolean().optional(),
 })
 export type MaterialCatalogueInput = z.input<typeof MaterialCatalogueSchema>

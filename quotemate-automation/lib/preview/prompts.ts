@@ -69,6 +69,11 @@ export type PromptLineItem = {
   description: string
   quantity?: number | null
   source?: string | null // 'material' | 'labour' | 'call_out'
+  // WP4 — the operator catalogue product this line was priced from.
+  // image_path is the real product photo passed to Gemini as the
+  // "match this EXACT product" reference.
+  catalogue_id?: string | null
+  image_path?: string | null
 }
 
 export type PromptCorrection = {
@@ -220,7 +225,7 @@ function buildCountBlock(jobType: string, count: number | null, jobLabel: string
 //   4. Otherwise pick the first remaining material
 //   5. Return null if no anchor can be derived; the prompt then falls
 //      back to the generic job-type label.
-function pickAnchorProduct(ctx: PromptContext): string | null {
+function pickAnchorLine(ctx: PromptContext): PromptLineItem | null {
   if (!ctx.lineItems || ctx.lineItems.length === 0) return null
   const tier = ctx.quote?.selected_tier ?? 'better'
   const count = ctx.intake.scope?.item_count ?? null
@@ -247,8 +252,23 @@ function pickAnchorProduct(ctx: PromptContext): string | null {
   const matchByCount = count !== null
     ? materials.find(m => m.quantity === count)
     : null
-  const pick = matchByCount ?? materials[0]
-  return pick.description
+  return matchByCount ?? materials[0]
+}
+
+// The headline product NAME (text anchor — unchanged behaviour).
+function pickAnchorProduct(ctx: PromptContext): string | null {
+  return pickAnchorLine(ctx)?.description ?? null
+}
+
+// WP4 — the headline product's real PHOTO (URL or storage path), when
+// the line was linked back to an operator catalogue product. null when
+// there's no anchor or no photo (→ today's text-only render, no
+// regression). generate.ts / samples.ts resolve the bytes and attach
+// it to Gemini as the "match this EXACT product" reference.
+export function pickAnchorImagePath(ctx: PromptContext): string | null {
+  const a = pickAnchorLine(ctx)
+  const p = a?.image_path
+  return typeof p === 'string' && p.trim() !== '' ? p.trim() : null
 }
 
 // ─── RENDER DIRECTIVE — declarative key/value block ───
@@ -565,6 +585,19 @@ function masterRules(): string {
     `     wall-faced, plain LED when anchor is tri-colour, generic`,
     `     basin tap when anchor is a Phoenix wall-mounted mixer).`,
     ``,
+    `  2b. PRODUCT REFERENCE PHOTO — REPLICATE IT EXACTLY.`,
+    `     If the user message includes a PRODUCT REFERENCE photo (it`,
+    `     is explicitly labelled and is the FINAL attached image), that`,
+    `     photo is the EXACT real product the customer is being quoted`,
+    `     and will receive. The installed/fitted product you render`,
+    `     MUST replicate it precisely — same brand, model, shape,`,
+    `     colour, finish and proportions. It is NOT a style hint; it`,
+    `     is the literal product. Do NOT generalise it to a similar`,
+    `     fitting. The customer will visually compare the two.`,
+    `     FAILURE: the installed product differs from the product`,
+    `     reference photo (different model/finish/shape), or a generic`,
+    `     fitting is shown when a reference photo was supplied.`,
+    ``,
     `  3. CUSTOMER'S OWN WORDS WIN.`,
     `     Where the verbatim SMS or CONFIRMED PREFERENCES specify`,
     `     a value (room, style, colour, finish, count), match it.`,
@@ -855,6 +888,7 @@ function buildSystemInstructionV2(ctx: PromptContext, args: {
       ? `- EDIT the attached photo, do not generate a lookalike room. Preserve walls, flooring, furniture, perspective, camera angle, ambient lighting exactly. Only the fittings change.`
       : `- Generate photoreal Australian residential imagery. Neutral walls, blonde-oak flooring, minimal furniture.`,
     `- Photoreal magazine-quality interior photography.`,
+    `- If a PRODUCT REFERENCE photo is attached (the final, labelled image), replicate THAT exact product — same brand, model, shape, colour, finish. It is the literal product quoted, not a style hint. Never substitute a generic fitting.`,
     ...(args.extraMust ?? []),
   ].filter((l): l is string => l !== null)
 

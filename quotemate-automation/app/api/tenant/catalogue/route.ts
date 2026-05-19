@@ -105,6 +105,12 @@ export async function POST(req: Request) {
         : parsed.data.customer_supply_price_ex_gst,
     tier_hint: emptyToNull(parsed.data.tier_hint as string | undefined),
     image_path: emptyToNull(parsed.data.image_path),
+    description: emptyToNull(parsed.data.description),
+    cost_price_ex_gst:
+      parsed.data.cost_price_ex_gst == null
+        ? null
+        : parsed.data.cost_price_ex_gst,
+    is_preferred: parsed.data.is_preferred ?? false,
     active: parsed.data.active ?? true,
   }
 

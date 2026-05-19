@@ -26,8 +26,9 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { createClient } from '@supabase/supabase-js'
-import { buildSamplePrompts, type PromptIntake, type SystemUserPrompt } from './prompts'
+import { buildSamplePrompts, pickAnchorImagePath, type PromptIntake, type SystemUserPrompt } from './prompts'
 import { loadPromptContext } from './generate'
+import { resolveProductImage, type ProductImage } from './product-image'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -131,6 +132,14 @@ export async function generateSampleImages(quoteId: string): Promise<SamplesResu
     // Best-effort — degrades gracefully if any fetch fails.
     const ctx = await loadPromptContext(quoteId, intake as PromptIntake)
 
+    // WP4 — the EXACT product photo, resolved once and shared across
+    // all 3 sample shots so wide / close-up / in-use show the SAME
+    // product (consistency requirement). null → today's behaviour.
+    const productRef = await resolveProductImage(pickAnchorImagePath(ctx))
+    if (productRef) {
+      console.log('[samples] product reference photo attached (WP4)', { quoteId })
+    }
+
     const prompts = buildSamplePrompts(ctx, {
       usePhotoReference: referencePhoto !== null,
     })
@@ -152,9 +161,9 @@ export async function generateSampleImages(quoteId: string): Promise<SamplesResu
       mode: referencePhoto ? 'photo-tailored' : 'text-to-image',
     })
     const results = await Promise.allSettled([
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.wide,   label: 'wide',   referencePhoto }),
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.detail, label: 'detail', referencePhoto }),
-      generateOneSample({ intakeId: intake.id as string, prompt: prompts.lit,    label: 'lit',    referencePhoto }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.wide,   label: 'wide',   referencePhoto, productRef }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.detail, label: 'detail', referencePhoto, productRef }),
+      generateOneSample({ intakeId: intake.id as string, prompt: prompts.lit,    label: 'lit',    referencePhoto, productRef }),
     ])
     const labels = ['wide', 'detail', 'lit'] as const
     results.forEach((r, i) => {
@@ -210,6 +219,7 @@ async function generateOneSample(opts: {
   prompt: SystemUserPrompt
   label: 'wide' | 'detail' | 'lit'
   referencePhoto: { base64: string; mime: string } | null
+  productRef?: ProductImage | null
 }): Promise<{ path: string; imageBytes: Buffer; mimeType: string }> {
   const apiUrl = `${GEMINI_ENDPOINT(GEMINI_MODEL)}?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`
 
@@ -225,6 +235,22 @@ async function generateOneSample(opts: {
       inline_data: {
         mime_type: opts.referencePhoto.mime,
         data: opts.referencePhoto.base64,
+      },
+    })
+  }
+  // WP4 — the EXACT product photo, attached LAST + labelled so all 3
+  // sample shots replicate the same real product (MASTER RULE 2b).
+  if (opts.productRef) {
+    userParts.push({
+      text:
+        'PRODUCT REFERENCE — the FINAL image below is the EXACT real product ' +
+        'the customer is quoted. Replicate it precisely (brand, model, shape, ' +
+        'colour, finish). It is the literal product, not a style hint.',
+    })
+    userParts.push({
+      inline_data: {
+        mime_type: opts.productRef.mime,
+        data: opts.productRef.base64,
       },
     })
   }

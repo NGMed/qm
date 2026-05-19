@@ -26,7 +26,18 @@ export interface TenantMaterial {
   unit?: string | null
   unit_price_ex_gst: number | string
   customer_supply_price_ex_gst?: number | string | null
+  /** What the tradie PAYS (margin insight only — never a sell price;
+   *  the estimator and grounding validator never read this). */
+  cost_price_ex_gst?: number | string | null
+  /** Operator's own product blurb (display + later WP9 option labels). */
+  description?: string | null
+  /** Real product photo (WP4 render reference — URL or storage path).
+   *  Carried through so the rendered preview shows THE EXACT product. */
+  image_path?: string | null
   tier_hint?: Tier | null
+  /** "My go-to product for this category" — a SOFT tiebreaker in
+   *  chooseMaterial(), strictly below an exact brand/range/tier match. */
+  is_preferred?: boolean | null
   active?: boolean | null
 }
 
@@ -118,6 +129,11 @@ export function chooseMaterial(input: ChooseMaterialInput): ChosenMaterial {
       if (eqi(r.range_series, input.range)) s += 4
       const rowTier = resolveTierForBrandRange(r.brand, r.range_series, r.tier_hint ?? null)
       if (input.tier && rowTier === input.tier) s += 2
+      // "My go-to product" — a SOFT +1 tiebreaker only. Deliberately
+      // below brand (+4), range (+4) and tier (+2) so it can ONLY decide
+      // between rows that are otherwise an equal match; it never pulls
+      // the estimator off an exact brand/range/tier hit.
+      if (r.is_preferred === true) s += 1
       return { r, s }
     })
     scored.sort((a, b) => b.s - a.s)
@@ -184,13 +200,25 @@ export interface QuoteLine {
   unit_price_ex_gst: number
   total_ex_gst: number
   source: string
+  /** WP4 — which operator catalogue product priced this line (render
+   *  reference). Render-only metadata: NEVER read by the grounding
+   *  validator or any price math, so it cannot affect money/routing. */
+  catalogue_id?: string | null
+  image_path?: string | null
 }
 export interface BuildBomInput {
   bom: BomLine[]
   /** Resolve a marked-up unit price + display name for a material category.
    *  Injected so this stays DB-free and unit-testable. Return null when the
-   *  category cannot be priced (caller routes to inspection). */
-  resolveMaterial: (category: string) => { name: string; markedUpPrice: number } | null
+   *  category cannot be priced (caller routes to inspection). The optional
+   *  catalogue_id/image_path are WP4 render metadata only — they never
+   *  influence price. */
+  resolveMaterial: (category: string) => {
+    name: string
+    markedUpPrice: number
+    catalogue_id?: string | null
+    image_path?: string | null
+  } | null
   labourHours: number
   labourRate: number
   includeOptional?: boolean
@@ -232,6 +260,9 @@ export function buildBomQuoteLines(input: BuildBomInput): BuildBomResult {
       unit_price_ex_gst: unitPrice,
       total_ex_gst: money(unitPrice * qty),
       source: 'material',
+      // WP4 — stamp the priced product so the render can show it.
+      ...(m.catalogue_id ? { catalogue_id: m.catalogue_id } : {}),
+      ...(m.image_path ? { image_path: m.image_path } : {}),
     })
   }
   const lh = num(input.labourHours)
@@ -327,4 +358,97 @@ export function formatBomHint(rows: BomHintRow[]): string | null {
     ...lines,
     'These are the baseline parts. Price each from the catalogue / shared materials.',
   ].join('\n')
+}
+
+// ── Catalogue ↔ Recipe coverage (Phase 1 sync visibility) ───────────
+// The estimator joins a Recipe line to a Catalogue product by matching
+// their category strings. If those strings don't line up, the tradie's
+// real product + price is silently dropped and the line falls back to a
+// generic price (or inspection). These helpers are the ONE definition of
+// "same category" so the dashboard badge — and any future estimator-side
+// check — agree. Pure; unit-tested in catalogue.test.ts.
+
+/** Trim + lowercase, the single canonical category comparison form. */
+export function normaliseCategory(c: string | null | undefined): string {
+  return (c ?? '').trim().toLowerCase()
+}
+
+/**
+ * True when the tradie has at least one priced, active catalogue product
+ * in this recipe line's category. Drives the Recipes "priced from your
+ * catalogue" vs "no product — generic price" badge so a silent
+ * Catalogue↔Recipe category mismatch becomes visible instead of quietly
+ * costing the operator their real product and price.
+ */
+export function categoryHasCatalogueProduct(
+  recipeCategory: string | null | undefined,
+  catalogueCategories: Array<string | null | undefined>,
+): boolean {
+  const target = normaliseCategory(recipeCategory)
+  if (!target) return false
+  return catalogueCategories.some((c) => normaliseCategory(c) === target)
+}
+
+// ── WP4 — link quote lines back to the catalogue product ────────────
+// The Opus draft writes line items as free text ("Caroma Liano tap").
+// AFTER grounding has PASSED, match each material line back to the
+// operator catalogue row that priced it (by normalised name) and stamp
+// catalogue_id + image_path so the render step can show THE EXACT
+// product. This is render-only metadata: it runs after pricing +
+// validation, never touches a price/total/route, and only fills fields
+// that are MISSING (so the deterministic path's own stamping always
+// wins and the helper is idempotent). Pure; unit-tested.
+
+export interface CatalogueProductRef {
+  id?: string | null
+  name: string
+  image_path?: string | null
+}
+
+export interface EnrichResult {
+  draft: any
+  /** How many line items got an operator product linked (for logging). */
+  linked: number
+}
+
+/** Canonical product-name comparison form (trim + lowercase + collapse
+ *  internal whitespace) so "Caroma  Liano Tap" == "caroma liano tap". */
+function normaliseName(s: string | null | undefined): string {
+  return (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+export function enrichLinesWithCatalogue(
+  draft: any,
+  catalogue: CatalogueProductRef[],
+): EnrichResult {
+  if (!draft || draft.needs_inspection === true) return { draft, linked: 0 }
+  const byName = new Map<string, CatalogueProductRef>()
+  for (const p of catalogue ?? []) {
+    const k = normaliseName(p?.name)
+    if (k && !byName.has(k)) byName.set(k, p)
+  }
+  if (byName.size === 0) return { draft, linked: 0 }
+
+  let linked = 0
+  for (const tierKey of ['good', 'better', 'best'] as const) {
+    const tier = draft[tierKey] as
+      | { line_items?: Array<Record<string, unknown>> }
+      | null
+      | undefined
+    if (!tier || !Array.isArray(tier.line_items)) continue
+    for (const li of tier.line_items) {
+      if (!li) continue
+      const src = li.source
+      if (src === 'labour' || src === 'call_out') continue
+      // Never overwrite an explicit link — the deterministic builder
+      // already stamped the exact source product.
+      if (li.catalogue_id) continue
+      const hit = byName.get(normaliseName(li.description as string))
+      if (!hit) continue
+      if (hit.id) li.catalogue_id = hit.id
+      if (hit.image_path) li.image_path = hit.image_path
+      if (hit.id || hit.image_path) linked++
+    }
+  }
+  return { draft, linked }
 }

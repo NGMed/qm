@@ -11,6 +11,9 @@ import {
   effectiveAssembly,
   buildBomQuoteLines,
   catalogueCandidateRows,
+  normaliseCategory,
+  categoryHasCatalogueProduct,
+  enrichLinesWithCatalogue,
   type TenantMaterial,
 } from './catalogue'
 
@@ -60,6 +63,29 @@ describe('chooseMaterial', () => {
   })
   it('returns null when nothing can be priced', () => {
     expect(chooseMaterial({ tenantRows: [], sharedRows: [], category: 'gpo' })).toBeNull()
+  })
+
+  it('is_preferred breaks a tie between otherwise-equal rows (WP2)', () => {
+    const rows: TenantMaterial[] = [
+      { category: 'tap', name: 'Plain tap', brand: 'Acme', unit_price_ex_gst: 50, active: true },
+      { category: 'tap', name: 'Go-to tap', brand: 'Acme', unit_price_ex_gst: 60, active: true, is_preferred: true },
+    ]
+    // No brand/range/tier signal → both score equally except the
+    // preferred flag, which must win.
+    const r = chooseMaterial({ tenantRows: rows, sharedRows: [], category: 'tap' })
+    expect(r?.source).toBe('tenant')
+    expect(r && 'row' in r && (r.row as TenantMaterial).name).toBe('Go-to tap')
+  })
+
+  it('is_preferred NEVER overrides a stronger brand/range match (WP2)', () => {
+    const rows: TenantMaterial[] = [
+      { category: 'tap', name: 'Preferred generic', brand: 'Acme', range_series: 'Basic', unit_price_ex_gst: 40, active: true, is_preferred: true },
+      { category: 'tap', name: 'Exact match', brand: 'Caroma', range_series: 'Liano', unit_price_ex_gst: 90, active: true },
+    ]
+    // Customer/tier asked for Caroma Liano — the exact brand+range hit
+    // (+8) must beat the preferred-but-wrong product (+1).
+    const r = chooseMaterial({ tenantRows: rows, sharedRows: [], category: 'tap', brand: 'Caroma', range: 'Liano' })
+    expect(r && 'row' in r && (r.row as TenantMaterial).name).toBe('Exact match')
   })
 })
 
@@ -136,5 +162,101 @@ describe('catalogueCandidateRows (the WP2 trap feed)', () => {
       { name: 'Phoenix mixer', price: 180 },
       { name: 'Phoenix mixer', price: 90 },
     ])
+  })
+})
+
+describe('categoryHasCatalogueProduct (Catalogue↔Recipe sync badge)', () => {
+  it('matches case- and whitespace-insensitively', () => {
+    expect(categoryHasCatalogueProduct('Downlight', ['downlight'])).toBe(true)
+    expect(categoryHasCatalogueProduct('  tap ', ['tap', 'gpo'])).toBe(true)
+    expect(categoryHasCatalogueProduct('GPO', ['  gpo  '])).toBe(true)
+  })
+  it('is false when no catalogue product covers the recipe category', () => {
+    // The exact silent-mispricing bug: recipe "downlights" vs catalogue "downlight".
+    expect(categoryHasCatalogueProduct('downlights', ['downlight'])).toBe(false)
+    expect(categoryHasCatalogueProduct('tap', [])).toBe(false)
+    expect(categoryHasCatalogueProduct('tap', ['gpo', 'fan'])).toBe(false)
+  })
+  it('is false for empty / nullish recipe category or empty catalogue', () => {
+    expect(categoryHasCatalogueProduct('', ['tap'])).toBe(false)
+    expect(categoryHasCatalogueProduct(null, ['tap'])).toBe(false)
+    expect(categoryHasCatalogueProduct(undefined, ['tap'])).toBe(false)
+    expect(categoryHasCatalogueProduct('tap', [null, undefined, ''])).toBe(false)
+  })
+  it('normaliseCategory is the single canonical comparison form', () => {
+    expect(normaliseCategory('  Hot_Water ')).toBe('hot_water')
+    expect(normaliseCategory(null)).toBe('')
+    expect(normaliseCategory(undefined)).toBe('')
+  })
+})
+
+describe('buildBomQuoteLines — WP4 catalogue stamping', () => {
+  const bom = [{ material_category: 'tap', quantity: 1, required: true }]
+  it('stamps catalogue_id + image_path when the resolver supplies them', () => {
+    const r = buildBomQuoteLines({
+      bom,
+      resolveMaterial: () => ({
+        name: 'Caroma Liano Tap',
+        markedUpPrice: 150,
+        catalogue_id: 'P-123',
+        image_path: 'https://x/caroma.jpg',
+      }),
+      labourHours: 1,
+      labourRate: 110,
+    })
+    const mat = r.lines.find((l) => l.source === 'material')!
+    expect(mat.catalogue_id).toBe('P-123')
+    expect(mat.image_path).toBe('https://x/caroma.jpg')
+  })
+  it('omits the fields entirely for a shared (no-id) product', () => {
+    const r = buildBomQuoteLines({
+      bom,
+      resolveMaterial: () => ({ name: 'Generic tap', markedUpPrice: 90 }),
+      labourHours: 1,
+      labourRate: 110,
+    })
+    const mat = r.lines.find((l) => l.source === 'material')!
+    expect('catalogue_id' in mat).toBe(false)
+    expect('image_path' in mat).toBe(false)
+  })
+})
+
+describe('enrichLinesWithCatalogue (WP4 — link Opus lines to products)', () => {
+  const catalogue = [
+    { id: 'P-1', name: 'Caroma Liano Tap', image_path: 'https://x/liano.jpg' },
+    { id: 'P-2', name: 'Clipsal Iconic GPO', image_path: 'https://x/iconic.jpg' },
+  ]
+  it('links a material line by case/space-insensitive name match', () => {
+    const draft = {
+      good: {
+        line_items: [
+          { description: 'caroma   liano tap', source: 'material' },
+          { description: 'Labour', source: 'labour' },
+        ],
+      },
+    }
+    const r = enrichLinesWithCatalogue(draft, catalogue)
+    expect(r.linked).toBe(1)
+    expect(r.draft.good.line_items[0].catalogue_id).toBe('P-1')
+    expect(r.draft.good.line_items[0].image_path).toBe('https://x/liano.jpg')
+    // labour line untouched
+    expect(r.draft.good.line_items[1].catalogue_id).toBeUndefined()
+  })
+  it('never overwrites an explicit link (deterministic stamping wins)', () => {
+    const draft = {
+      better: { line_items: [{ description: 'Caroma Liano Tap', source: 'material', catalogue_id: 'KEEP' }] },
+    }
+    const r = enrichLinesWithCatalogue(draft, catalogue)
+    expect(r.draft.better.line_items[0].catalogue_id).toBe('KEEP')
+    expect(r.linked).toBe(0)
+  })
+  it('is a no-op for inspection drafts, empty catalogue, and is idempotent', () => {
+    expect(enrichLinesWithCatalogue({ needs_inspection: true, good: {} }, catalogue).linked).toBe(0)
+    const d = { good: { line_items: [{ description: 'Caroma Liano Tap', source: 'material' }] } }
+    expect(enrichLinesWithCatalogue(d, []).linked).toBe(0)
+    const once = enrichLinesWithCatalogue(d, catalogue)
+    const twice = enrichLinesWithCatalogue(once.draft, catalogue)
+    expect(twice.linked).toBe(0) // already linked → idempotent
+    expect(once.draft.good.line_items[0].catalogue_id).toBe('P-1')
   })
 })

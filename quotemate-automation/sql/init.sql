@@ -27,7 +27,8 @@ create table if not exists shared_assemblies (
   default_unit_price_ex_gst numeric(10,2),
   default_labour_hours numeric(6,2),
   default_exclusions text,
-  category text  -- explicit grounding category (migration 029); NULL → categorise() name regex
+  category text,  -- explicit grounding category (migration 029); NULL → categorise() name regex
+  clarifying_questions jsonb  -- mandated MUST-ASK script (migration 032); NULL → universal name+suburb+scope only
 );
 
 create table if not exists shared_materials (

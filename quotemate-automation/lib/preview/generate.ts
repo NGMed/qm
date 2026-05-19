@@ -18,6 +18,7 @@ import { createClient } from '@supabase/supabase-js'
 import {
   buildPreviewPrompt,
   buildPreviewPromptV2,
+  pickAnchorImagePath,
   type PromptContext,
   type PromptIntake,
   type PromptQuote,
@@ -25,6 +26,8 @@ import {
   type PromptCorrection,
   type SystemUserPrompt,
 } from './prompts'
+import { resolveProductImage, type ProductImage } from './product-image'
+import { renderVerifyEnabled, verifyRenderMatchesProduct } from './verify'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -133,6 +136,15 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     const t0 = Date.now()
     const promptText = `[system v=${promptVersion}]\n${prompt.system}\n\n[user]\n${prompt.user}`
 
+    // WP4 — resolve the anchor product's real photo ONCE and reuse it
+    // across every per-photo preview call so all N previews show the
+    // SAME exact product. null → today's text-only render (no
+    // regression). Best-effort; never throws.
+    const productRef = await resolveProductImage(pickAnchorImagePath(ctx))
+    if (productRef) {
+      console.log('[preview] product reference photo attached (WP4)', { quoteId })
+    }
+
     // Generate ONE preview per uploaded customer photo, in parallel.
     // Each gets its own Gemini call with that specific photo as the
     // reference. Result: N customer photos → N edited previews, all
@@ -143,6 +155,7 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
         sourcePath: path,
         index: i,
         prompt,
+        productRef,
       }))
     )
 
@@ -166,10 +179,60 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
       failed: failureReasons.length,
     })
 
+    // Status reflects ONLY the actual room previews — computed before
+    // the WP4 step so appending the exact-product photo can never flip
+    // a 'ready' set to 'partial'.
     let finalStatus: PreviewStatus
     if (succeededPaths.length === photoPaths.length) finalStatus = 'ready'
     else if (succeededPaths.length > 0) finalStatus = 'partial'
     else finalStatus = 'failed'
+
+    // ── WP4 step 4 — render-accuracy quality gate (flag-gated) ───────
+    // Verify the rendered preview actually shows the quoted product. On
+    // a confirmed mismatch, append the REAL product photo as an extra
+    // image so the customer always sees the exact product they'll get
+    // ("here's the exact product you'll get"). Default OFF → not one
+    // extra Gemini call, behaviour identical to today. Best-effort:
+    // any error never blocks or discards a good render.
+    if (renderVerifyEnabled() && productRef && succeededPaths.length > 0) {
+      try {
+        const { data: rblob } = await supabase.storage
+          .from(BUCKET)
+          .download(succeededPaths[0])
+        if (rblob) {
+          const rbuf = Buffer.from(await rblob.arrayBuffer())
+          const verdict = await verifyRenderMatchesProduct({
+            rendered: { base64: rbuf.toString('base64'), mime: rblob.type || 'image/png' },
+            product: productRef,
+          })
+          console.log('[preview] WP4 render verification', { quoteId, verdict })
+          if (verdict.match === false) {
+            // Quality gate failed → show the customer the exact product
+            // photo directly, appended after the room render.
+            const refExt = productRef.mime === 'image/png' ? 'png' : 'jpg'
+            const refPath = `${intake.id}/product-ref-${Date.now()}.${refExt}`
+            const { error: upErr } = await supabase.storage
+              .from(BUCKET)
+              .upload(refPath, Buffer.from(productRef.base64, 'base64'), {
+                contentType: productRef.mime,
+                upsert: false,
+              })
+            if (!upErr) {
+              succeededPaths.push(refPath)
+              console.warn(
+                '[preview] WP4 product mismatch — appended exact product photo for the customer',
+                { quoteId, reason: verdict.reason },
+              )
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn('[preview] WP4 verification skipped (non-fatal)', {
+          quoteId,
+          error: e?.message ?? String(e),
+        })
+      }
+    }
 
     await supabase.from('quotes').update({
       // New plural column — primary read source.
@@ -201,6 +264,7 @@ async function generateOnePreview(opts: {
   sourcePath: string
   index: number
   prompt: SystemUserPrompt
+  productRef?: ProductImage | null
 }): Promise<string> {
   // Download the source photo from storage.
   const { data: blob, error: dlErr } = await supabase.storage
@@ -229,6 +293,27 @@ async function generateOnePreview(opts: {
           parts: [
             { text: opts.prompt.user },
             { inline_data: { mime_type: refMime, data: refBase64 } },
+            // WP4 — the EXACT product photo, attached LAST and clearly
+            // labelled so Gemini replicates this specific product (see
+            // MASTER RULE 2b). Omitted when there's no catalogue photo
+            // → identical to today's text-only render.
+            ...(opts.productRef
+              ? [
+                  {
+                    text:
+                      'PRODUCT REFERENCE — the FINAL image below is the EXACT real product ' +
+                      'the customer is quoted and will receive. Replicate it precisely in the ' +
+                      'install (same brand, model, shape, colour, finish). It is the literal ' +
+                      'product, NOT a style hint. Do not substitute a generic fitting.',
+                  },
+                  {
+                    inline_data: {
+                      mime_type: opts.productRef.mime,
+                      data: opts.productRef.base64,
+                    },
+                  },
+                ]
+              : []),
           ],
         },
       ],
@@ -357,7 +442,16 @@ export async function loadPromptContext(
       if (s === 'labour') return 'labour'
       return s
     }
-    type InlineLi = { description?: string; quantity?: number; source?: string }
+    type InlineLi = {
+      description?: string
+      quantity?: number
+      source?: string
+      // WP4 — render-link stamped by enrichLinesWithCatalogue / the
+      // deterministic builder. Carried through so the preview can show
+      // THE EXACT product.
+      catalogue_id?: string | null
+      image_path?: string | null
+    }
     type InlineTier = { line_items?: InlineLi[] } | null | undefined
     const tiers: Array<['good' | 'better' | 'best', InlineTier]> = [
       ['good',   quoteRes.data.good   as InlineTier],
@@ -373,6 +467,8 @@ export async function loadPromptContext(
           description: li.description,
           quantity: li.quantity ?? null,
           source: flattenSource(li.source),
+          catalogue_id: li.catalogue_id ?? null,
+          image_path: li.image_path ?? null,
         })
       }
     }

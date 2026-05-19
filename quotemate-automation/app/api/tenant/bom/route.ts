@@ -71,10 +71,32 @@ export async function GET(req: Request) {
     .order('sort', { ascending: true })
   if (lErr) return Response.json({ error: lErr.message }, { status: 500 })
 
+  // Which material categories this tradie actually has a priced, active
+  // product for (their Catalogue). The Recipes UI uses this to badge each
+  // line "priced from your catalogue" vs "no product — generic price", so
+  // the Catalogue↔Recipes join is visible instead of silently breaking.
+  // Resilient: absent table (pre-028 prod) / error → [] so GET still
+  // returns assemblies + lines (no behaviour change).
+  let cq = supabase
+    .from('tenant_material_catalogue')
+    .select('category')
+    .eq('tenant_id', tenant.id)
+    .eq('active', true)
+  if (trades.length > 0) cq = cq.in('trade', trades)
+  const { data: catRows } = await cq
+  const catalogueCategories = Array.from(
+    new Set(
+      (catRows ?? [])
+        .map((r: { category: string | null }) => (r.category ?? '').trim().toLowerCase())
+        .filter((c: string) => c !== ''),
+    ),
+  )
+
   return Response.json({
     ok: true,
     assemblies: assemblies ?? [],
     lines: lines ?? [],
+    catalogue_categories: catalogueCategories,
   })
 }
 

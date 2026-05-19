@@ -21,6 +21,7 @@ import {
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { CATEGORIES } from '@/lib/estimate/categories'
+import { categoryHasCatalogueProduct } from '@/lib/estimate/catalogue'
 import {
   LayoutDashboard,
   FileText,
@@ -3628,7 +3629,11 @@ type CatalogueRow = {
   unit: string | null
   unit_price_ex_gst: number | string
   customer_supply_price_ex_gst: number | string | null
+  cost_price_ex_gst: number | string | null
+  description: string | null
   tier_hint: 'good' | 'better' | 'best' | null
+  image_path: string | null
+  is_preferred: boolean
   active: boolean
 }
 
@@ -3648,7 +3653,12 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
     range_series: '',
     supplier: '',
     unit_price_ex_gst: '',
+    customer_supply_price_ex_gst: '',
+    cost_price_ex_gst: '',
+    description: '',
+    image_path: '',
     tier_hint: '',
+    is_preferred: '',
   }
   const [form, setForm] = useState({ ...blankForm })
 
@@ -3742,7 +3752,12 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
           range_series: form.range_series.trim() || undefined,
           supplier: form.supplier.trim() || undefined,
           unit_price_ex_gst: form.unit_price_ex_gst,
+          customer_supply_price_ex_gst: form.customer_supply_price_ex_gst || undefined,
+          cost_price_ex_gst: form.cost_price_ex_gst || undefined,
+          description: form.description.trim() || undefined,
+          image_path: form.image_path.trim() || undefined,
           tier_hint: form.tier_hint || undefined,
+          is_preferred: form.is_preferred === 'yes',
         }),
       })
       const json = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
@@ -3837,12 +3852,21 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
           </label>
           <label className="flex flex-col gap-1">
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Category</span>
-            <input
+            <select
               value={form.category}
               onChange={(e) => set('category', e.target.value)}
-              placeholder="e.g. gpo, downlight, tap"
               className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
-            />
+            >
+              <option value="">— choose a category —</option>
+              {CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-[0.65rem] text-text-dim leading-snug">
+              This must match the category your Recipes use, so the AI prices this product on the right jobs.
+            </span>
           </label>
           <label className="flex flex-col gap-1 sm:col-span-2">
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Product name</span>
@@ -3887,6 +3911,60 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
               onChange={(e) => set('unit_price_ex_gst', e.target.value)}
               inputMode="decimal"
               placeholder="42"
+              className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">
+              Customer-supply price ex-GST (optional)
+            </span>
+            <input
+              value={form.customer_supply_price_ex_gst}
+              onChange={(e) => set('customer_supply_price_ex_gst', e.target.value)}
+              inputMode="decimal"
+              placeholder="Price if the customer buys this part themselves"
+              className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">
+              Cost price ex-GST (optional)
+            </span>
+            <input
+              value={form.cost_price_ex_gst}
+              onChange={(e) => set('cost_price_ex_gst', e.target.value)}
+              inputMode="decimal"
+              placeholder="What you pay for it — for your margin only, never quoted"
+              className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
+            />
+          </label>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">
+              Product description (optional)
+            </span>
+            <input
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              placeholder="e.g. Modern square matte-black finish"
+              className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-sec sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.is_preferred === 'yes'}
+              onChange={(e) => set('is_preferred', e.target.checked ? 'yes' : '')}
+            />
+            This is my go-to product for its category (preferred)
+          </label>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">
+              Product photo URL (optional)
+            </span>
+            <input
+              value={form.image_path}
+              onChange={(e) => set('image_path', e.target.value)}
+              placeholder="https://… link to a product image"
               className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
             />
           </label>
@@ -3937,25 +4015,48 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
                       r.active ? 'border-accent/60 bg-accent/5' : 'border-ink-line bg-ink-card'
                     }`}
                   >
-                    <div className="min-w-0">
-                      <div className={`font-semibold text-sm ${r.active ? 'text-text-pri' : 'text-text-sec'}`}>
-                        {r.name}
-                      </div>
-                      <div className="mt-1 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1">
-                        {money(r.unit_price_ex_gst) && <span>{money(r.unit_price_ex_gst)} ex-GST</span>}
-                        {money(r.customer_supply_price_ex_gst) && (
-                          <span>cust-supply {money(r.customer_supply_price_ex_gst)}</span>
-                        )}
-                        {(r.brand || r.range_series) && (
-                          <span className="text-text-dim/80">
-                            {[r.brand, r.range_series].filter(Boolean).join(' ')}
-                          </span>
-                        )}
-                        {r.supplier && <span className="text-text-dim/70">{r.supplier}</span>}
-                        {r.tier_hint && (
-                          <span className="px-2 py-0.5 border border-accent/40 text-accent">
-                            {r.tier_hint}
-                          </span>
+                    <div className="flex items-start gap-3 min-w-0">
+                      {r.image_path && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={r.image_path}
+                          alt={r.name}
+                          className="h-12 w-12 object-cover border border-ink-line shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <div className={`font-semibold text-sm ${r.active ? 'text-text-pri' : 'text-text-sec'}`}>
+                          {r.name}
+                        </div>
+                        <div className="mt-1 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1">
+                          {money(r.unit_price_ex_gst) && <span>{money(r.unit_price_ex_gst)} ex-GST</span>}
+                          {money(r.customer_supply_price_ex_gst) && (
+                            <span>cust-supply {money(r.customer_supply_price_ex_gst)}</span>
+                          )}
+                          {money(r.cost_price_ex_gst) && (
+                            <span className="text-text-dim/70">cost {money(r.cost_price_ex_gst)}</span>
+                          )}
+                          {(r.brand || r.range_series) && (
+                            <span className="text-text-dim/80">
+                              {[r.brand, r.range_series].filter(Boolean).join(' ')}
+                            </span>
+                          )}
+                          {r.supplier && <span className="text-text-dim/70">{r.supplier}</span>}
+                          {r.tier_hint && (
+                            <span className="px-2 py-0.5 border border-accent/40 text-accent">
+                              {r.tier_hint}
+                            </span>
+                          )}
+                          {r.is_preferred && (
+                            <span className="px-2 py-0.5 border border-accent/40 text-accent">
+                              ★ preferred
+                            </span>
+                          )}
+                        </div>
+                        {r.description && (
+                          <div className="mt-1 text-xs text-text-dim normal-case tracking-normal">
+                            {r.description}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -4036,6 +4137,10 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
   const [saving, setSaving] = useState(false)
   const [formErr, setFormErr] = useState<string | null>(null)
   const [draftQty, setDraftQty] = useState<Record<string, string>>({})
+  // Categories this tradie has a priced, active Catalogue product for —
+  // used to badge each recipe line so a Catalogue↔Recipe mismatch is
+  // visible instead of silently costing them their real product + price.
+  const [catalogueCats, setCatalogueCats] = useState<string[]>([])
   const blank = { material_category: '', quantity: '1', required: true, description: '' }
   const [form, setForm] = useState({ ...blank })
 
@@ -4056,9 +4161,14 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
         const b = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(b.error || `HTTP ${res.status}`)
       }
-      const json = (await res.json()) as { assemblies: AsmOpt[]; lines: BomLineRow[] }
+      const json = (await res.json()) as {
+        assemblies: AsmOpt[]
+        lines: BomLineRow[]
+        catalogue_categories?: string[]
+      }
       setAssemblies(json.assemblies)
       setLines(json.lines)
+      setCatalogueCats(json.catalogue_categories ?? [])
       setSelectedId((cur) => cur || (json.assemblies[0]?.id ?? ''))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -4211,6 +4321,7 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
             <div className="space-y-2">
               {jobLines.map((l) => {
                 const qv = draftQty[l.id] ?? String(Number(l.quantity))
+                const priced = categoryHasCatalogueProduct(l.material_category, catalogueCats)
                 return (
                   <div
                     key={l.id}
@@ -4221,6 +4332,20 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
                       {l.description && (
                         <div className="text-xs text-text-dim mt-0.5">{l.description}</div>
                       )}
+                      <div className="mt-1.5">
+                        {priced ? (
+                          <span className="inline-block px-1.5 py-0.5 border border-accent/40 text-accent font-mono text-[0.55rem] uppercase tracking-[0.15em]">
+                            ✓ priced from your catalogue
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-block px-1.5 py-0.5 border border-warning/50 text-warning font-mono text-[0.55rem] uppercase tracking-[0.15em]"
+                            title="No active Catalogue product in this category. The AI will fall back to a generic price (or inspection). Add a Catalogue product with this exact category to use your real product + price."
+                          >
+                            ⚠ no catalogue product — generic price
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <label className="flex items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-[0.14em] text-text-dim">
@@ -4274,12 +4399,21 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
           >
             <label className="flex flex-col gap-1">
               <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Material category</span>
-              <input
+              <select
                 value={form.material_category}
                 onChange={(e) => setForm((f) => ({ ...f, material_category: e.target.value }))}
-                placeholder="e.g. downlight, sundry, tap"
                 className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
-              />
+              >
+                <option value="">— choose a category —</option>
+                {CATEGORIES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[0.65rem] text-text-dim leading-snug">
+                Pick the same category you use in Catalogue so your real product (and price) is used for this part.
+              </span>
             </label>
             <label className="flex flex-col gap-1">
               <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Quantity</span>

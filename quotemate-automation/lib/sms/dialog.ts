@@ -56,6 +56,14 @@ export const TurnDecisionSchema = z.object({
   // so firing it too early on turn 1-2 (before customer gave name) no
   // longer happens. See Rule 10 in the system prompt for full timing.
   request_photo_link: z.boolean().default(false),
+  // WP9 — set true on the turn where offering the customer a real
+  // product choice ("Clipsal 2000 vs Caroma Iconic?") is natural:
+  // AFTER the job + product type are known, BEFORE finishing, when the
+  // operator's catalogue actually has 2+ options for that category.
+  // The inbound route gates the outbound options SMS on this flag and
+  // only acts when WP9_PRODUCT_OPTIONS is enabled, so it is inert until
+  // both the model asks for it AND the feature is switched on.
+  offer_product_choice: z.boolean().default(false),
 })
 
 export type TurnDecision = z.infer<typeof TurnDecisionSchema>
@@ -993,6 +1001,11 @@ export type CustomServiceScope = {
   name: string
   description: string | null
   always_inspection: boolean
+  /** Migration 032 — mandated MUST-ASK questions for this service,
+   *  authored from its pricing shape. When present, the dialog must
+   *  collect EVERY one (like an easy-5 per-job MUST-ASK) before it may
+   *  finish/quote. null / empty → universal fields only (legacy). */
+  clarifying_questions?: string[] | null
 }
 
 // Trade-scope (above) only knows the hardcoded easy-5 per trade. Tradies
@@ -1011,8 +1024,13 @@ export type CustomServiceScope = {
 // budget: at most MAX_LISTED rows, descriptions clipped.
 const MAX_LISTED_CUSTOM_SERVICES = 40
 const MAX_CUSTOM_DESC_CHARS = 110
+// Migration 032 — bound the mandated-questions render so a tradie with a
+// huge custom catalogue (or an over-long question list) can't blow the
+// prompt / cache budget.
+const MAX_MUSTASK_PER_SERVICE = 6
+const MAX_MUSTASK_CHARS = 140
 
-function customServicesDirective(
+export function customServicesDirective(
   services: ReadonlyArray<CustomServiceScope> | undefined,
 ): string {
   if (!services || services.length === 0) return ''
@@ -1024,6 +1042,25 @@ function customServicesDirective(
   const fmt = (s: CustomServiceScope) => {
     const desc = (s.description ?? '').trim()
     return desc ? `      - ${s.name} (${clip(desc)})` : `      - ${s.name}`
+  }
+  // Migration 032 — a service line PLUS its mandated MUST-ASK questions
+  // (authored from its pricing shape). No questions → just the name line
+  // (identical to legacy behaviour).
+  const clipQ = (q: string) =>
+    q.length > MAX_MUSTASK_CHARS
+      ? `${q.slice(0, MAX_MUSTASK_CHARS - 1).trimEnd()}…`
+      : q.trim()
+  const fmtWithQuestions = (s: CustomServiceScope): string[] => {
+    const qs = (s.clarifying_questions ?? [])
+      .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+      .slice(0, MAX_MUSTASK_PER_SERVICE)
+      .map(clipQ)
+    if (qs.length === 0) return [fmt(s)]
+    return [
+      fmt(s),
+      '          MUST ASK before any finish (one per turn, in order):',
+      ...qs.map((q, i) => `            ${i + 1}. ${q}`),
+    ]
   }
 
   const autoQuote = services
@@ -1045,11 +1082,16 @@ function customServicesDirective(
 
   if (autoQuote.length > 0) {
     lines.push(
-      '  ★ AUTO-QUOTEABLE custom services — treat EXACTLY like an easy-5 job:',
-      '    gather the universal must-ask fields (name, suburb, scope) and',
-      '    finish so a quote drafts. Do NOT escalate to inspection and do',
+      '  ★ AUTO-QUOTEABLE services — treat EXACTLY like an easy-5 job.',
+      '    Gather the universal must-ask fields (name, suburb, scope). If a',
+      '    service below lists "MUST ASK" questions, those are REQUIRED',
+      "    per-job fields: ask EVERY one (action='ask', ONE per turn, in",
+      '    the order shown) and get an answer, THEN run the Rule 11',
+      "    verification handshake, BEFORE action='finish'. Do NOT finish,",
+      '    draft, or say the quote is on its way while ANY listed question',
+      '    is still unanswered. Still: do NOT escalate to inspection and do',
       '    NOT end the conversation as "wrong trade" / "not something we do":',
-      ...autoQuote.map(fmt),
+      ...autoQuote.flatMap(fmtWithQuestions),
     )
   }
   if (inspectionOnly.length > 0) {

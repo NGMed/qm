@@ -172,3 +172,69 @@ describe('migration 029 — explicit row category grounds an opaque-named assemb
     expect(res.valid).toBe(false) // unchanged from the no-category case
   })
 })
+
+// The migration-032 promise: once the dialog has gathered the mandated
+// questions, a fully-priced plumbing extra must produce a GROUNDED quote
+// — i.e. it is NOT forced to the $199 inspection just because it is an
+// "extra". These pin that for both category paths.
+describe('plumbing pilot (mig 032) — a fully-priced extra grounds, no forced inspection', () => {
+  it('Install rainwater tank ($80, explicit category) grounds', () => {
+    const candidates = buildCandidatePrices(
+      [],
+      [{ name: 'Install rainwater tank', price: 80, category: 'rainwater_tank' }],
+      pricingBook,
+    )
+    const res = validateQuoteGrounding(
+      draftWithLine('Install rainwater tank', 102.4), // 80 × 1.28
+      pricingBook,
+      candidates,
+    )
+    expect(res.valid).toBe(true)
+  })
+
+  it('Gas appliance connection ($30, name-regex category only) grounds', () => {
+    const candidates = buildCandidatePrices(
+      [],
+      [{ name: 'Gas appliance connection', price: 30 }], // no explicit cat
+      pricingBook,
+    )
+    const res = validateQuoteGrounding(
+      draftWithLine('Gas appliance connection to existing bayonet', 38.4), // 30 × 1.28
+      pricingBook,
+      candidates,
+    )
+    expect(res.valid).toBe(true)
+  })
+})
+
+// Same promise for the electrical follow-up (migration 033). Both rely on
+// the name-regex category path (no explicit category column needed).
+describe('electrical follow-up (mig 033) — a fully-priced extra grounds, no forced inspection', () => {
+  it('Install EV charger ($120) grounds', () => {
+    const candidates = buildCandidatePrices(
+      [],
+      [{ name: 'Install EV charger', price: 120 }],
+      pricingBook,
+    )
+    const res = validateQuoteGrounding(
+      draftWithLine('Install EV charger on dedicated circuit', 153.6), // 120 × 1.28
+      pricingBook,
+      candidates,
+    )
+    expect(res.valid).toBe(true)
+  })
+
+  it('Hardwire oven ($35) grounds', () => {
+    const candidates = buildCandidatePrices(
+      [],
+      [{ name: 'Hardwire oven', price: 35 }],
+      pricingBook,
+    )
+    const res = validateQuoteGrounding(
+      draftWithLine('Hardwire oven on existing circuit', 44.8), // 35 × 1.28
+      pricingBook,
+      candidates,
+    )
+    expect(res.valid).toBe(true)
+  })
+})

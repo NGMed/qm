@@ -127,6 +127,23 @@ const NON_NAME_WORDS = new Set([
 ])
 
 // Best-effort first-name guess from prior customer turns. We iterate
+// Migration 032 — normalise a row's clarifying_questions jsonb into a
+// clean string[] (or null). Postgres jsonb arrives as a parsed JS value
+// via supabase-js; we defensively handle array / null / undefined / a
+// stray JSON string, drop blanks, and trim. null when there's nothing
+// usable → the dialog falls back to universal name+suburb+scope only.
+function normaliseQuestions(v: unknown): string[] | null {
+  let arr: unknown = v
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr) } catch { return null }
+  }
+  if (!Array.isArray(arr)) return null
+  const out = arr
+    .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+    .map((q) => q.trim())
+  return out.length > 0 ? out : null
+}
+
 // NEWEST → OLDEST so the most recent legitimate name candidate wins —
 // otherwise an early answer like "Warm White" gets picked before the
 // customer's actual name later in the dialog. Returns null if nothing
@@ -972,12 +989,19 @@ export async function POST(req: Request) {
       // never block the customer's reply — fall back to no custom block
       // (legacy behaviour) and log.
       let customAssemblies:
-        | Array<{ name: string; description: string | null; always_inspection: boolean }>
+        | Array<{
+            name: string
+            description: string | null
+            always_inspection: boolean
+            clarifying_questions?: string[] | null
+          }>
         | undefined
       if (tenant?.id) {
         const { data: caRows, error: caErr } = await supabase
           .from('tenant_custom_assemblies')
-          .select('name, description, always_inspection')
+          // select('*') (not an explicit list) so a pre-032 prod without
+          // the clarifying_questions column can't error → null scope.
+          .select('*')
           .eq('tenant_id', tenant.id)
           .eq('enabled', true)
           .order('trade')
@@ -992,6 +1016,9 @@ export async function POST(req: Request) {
             name: r.name as string,
             description: (r.description as string | null) ?? null,
             always_inspection: !!r.always_inspection,
+            clarifying_questions: normaliseQuestions(
+              (r as Record<string, unknown>).clarifying_questions,
+            ),
           }))
           console.log('[sms/inbound:after] custom services in dialog scope', {
             tenantId: tenant.id,
@@ -1027,7 +1054,9 @@ export async function POST(req: Request) {
           if (enabledIds.length > 0) {
             const { data: extras } = await supabase
               .from('shared_assemblies')
-              .select('name, description, trade, default_enabled')
+              // select('*') so a pre-032 prod without clarifying_questions
+              // can't error this block out (deploy-order-safe).
+              .select('*')
               .in('id', enabledIds)
               .eq('default_enabled', false)
               .order('trade')
@@ -1041,6 +1070,9 @@ export async function POST(req: Request) {
                   name: r.name as string,
                   description: (r.description as string | null) ?? null,
                   always_inspection: false,
+                  clarifying_questions: normaliseQuestions(
+                    (r as Record<string, unknown>).clarifying_questions,
+                  ),
                 }))
                 .filter((r) => {
                   const k = r.name.trim().toLowerCase()

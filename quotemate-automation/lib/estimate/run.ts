@@ -4,7 +4,21 @@ import { createClient } from '@supabase/supabase-js'
 import { systemPrompt } from './prompt'
 import { makeTools } from './tools'
 import { buildCandidatePrices, validateQuoteGrounding, type GroundingFailure, type PricingBookForValidation } from './validate'
-import { catalogueCandidateRows, formatCatalogueHint, formatBomHint, type CatalogueHintRow, type BomHintRow } from './catalogue'
+import {
+  catalogueCandidateRows,
+  formatCatalogueHint,
+  formatBomHint,
+  effectiveAssembly,
+  enrichLinesWithCatalogue,
+  type CatalogueHintRow,
+  type BomHintRow,
+  type TenantMaterial,
+  type SharedMaterial,
+  type BomLine,
+  type CatalogueProductRef,
+} from './catalogue'
+import { applyMinLabourFloor } from './min-labour'
+import { buildDeterministicTiers, type DeterministicTierInput } from './deterministic-bom'
 import { fetchSimilarPastQuotesContext } from './rag'
 import { pipelineLog } from '@/lib/log/pipeline'
 
@@ -136,6 +150,73 @@ export async function runEstimation(intake: any, pricingBook: any, modelId = 'cl
     return { draft }
   }
 
+  // ── Phase 2 — DETERMINISTIC BOM (flag-gated, default OFF) ──────────
+  // When DETERMINISTIC_BOM=1 AND this tenant has a curated recipe +
+  // catalogue for the job, REBUILD good/better/best from their own data
+  // so the same job quotes the same parts at the same prices every
+  // time. Opus's scope_of_works / assumptions / framing are kept; only
+  // the priced line items are replaced. Any safe-failure (no recipe,
+  // service off, unpriceable required part, no rate) → leave Opus's
+  // draft exactly as-is (zero regression). The min-labour floor + the
+  // grounding validator below STILL run on the result, so a drifted
+  // deterministic price self-corrects to inspection — same safety
+  // envelope as the Opus path. This block is fully dormant until the
+  // env flag is explicitly set.
+  if (process.env.DETERMINISTIC_BOM === '1') {
+    try {
+      const loaded = await loadDeterministicInputs(intake, pricingBook)
+      if (loaded.input) {
+        const built = buildDeterministicTiers(loaded.input)
+        if (built.tiers) {
+          for (const tier of ['good', 'better', 'best'] as const) {
+            const prev =
+              draft[tier] && typeof draft[tier] === 'object' ? draft[tier] : {}
+            draft[tier] = {
+              ...prev,
+              line_items: built.tiers[tier].line_items,
+              subtotal_ex_gst: built.tiers[tier].subtotal_ex_gst,
+            }
+          }
+          draft.needs_inspection = false
+          cacheLog.ok('deterministic BOM applied (recipe × catalogue — same job, same price)', {
+            assembly: loaded.assemblyName,
+            good_subtotal: built.tiers.good.subtotal_ex_gst,
+            better_subtotal: built.tiers.better.subtotal_ex_gst,
+            best_subtotal: built.tiers.best.subtotal_ex_gst,
+          })
+        } else {
+          cacheLog.ok('deterministic BOM skipped — falling back to Opus draft', {
+            reason: built.reason,
+          })
+        }
+      } else {
+        cacheLog.ok('deterministic BOM skipped — falling back to Opus draft', {
+          reason: loaded.reason,
+        })
+      }
+    } catch (e: any) {
+      // Never let the deterministic path break estimation — fall back.
+      cacheLog.err(
+        'deterministic BOM errored — falling back to Opus draft',
+        e?.message ?? String(e),
+      )
+    }
+  }
+
+  // Apply the configured minimum-charge floor BEFORE grounding so a
+  // small but correctly-priced job (e.g. one GPO) is quoted at the
+  // tradie's own minimum instead of being bounced to a $199 inspection.
+  // Deterministic + grounded (tops labour up at pricing_book.hourly_rate);
+  // never undercharges, never fabricates; no-ops when already compliant.
+  // This mutates `draft` in place, so validation below sees the floor.
+  const floored = applyMinLabourFloor(draft, pricingBook)
+  if (floored.adjustedTiers.length > 0) {
+    cacheLog.ok('min-labour floor applied (small-job minimum charge — not bounced to inspection)', {
+      tiers: floored.adjustedTiers,
+      min_labour_hours: (pricingBook as any)?.min_labour_hours ?? 2.0,
+    })
+  }
+
   // Auto-quote path: every line_item.unit_price_ex_gst MUST be derivable
   // from pricing_book + shared_materials + shared_assemblies + the
   // tenant's tenant_custom_assemblies (migration 023). If even one
@@ -150,6 +231,32 @@ export async function runEstimation(intake: any, pricingBook: any, modelId = 'cl
   const check = validateQuoteGrounding(draft, pricingBook as PricingBookForValidation, candidates)
 
   if (check.valid) {
+    // WP4 — link each grounded material line back to the operator
+    // catalogue product that priced it (catalogue_id + image_path) so
+    // the render can show THE EXACT product. STRICTLY render-only: this
+    // runs AFTER grounding, mutates only render metadata, never a
+    // price/total/route, and is best-effort (any failure → today's
+    // text-only behaviour, no regression). The deterministic path has
+    // already stamped exact links; enrichment is idempotent there.
+    try {
+      const refs = await loadCatalogueProductRefs(
+        (intake?.tenant_id as string | null) ?? null,
+        (intake?.trade as string | null) ?? null,
+      )
+      if (refs.length > 0) {
+        const e = enrichLinesWithCatalogue(draft, refs)
+        if (e.linked > 0) {
+          cacheLog.ok('WP4 — linked quote lines to operator catalogue products', {
+            linked: e.linked,
+          })
+        }
+      }
+    } catch (err: any) {
+      cacheLog.err(
+        'WP4 catalogue-link enrichment failed (non-fatal — quote unaffected)',
+        err?.message ?? String(err),
+      )
+    }
     return { draft }
   }
 
@@ -157,6 +264,7 @@ export async function runEstimation(intake: any, pricingBook: any, modelId = 'cl
   // Without this the only signal we have is the count, which masks
   // whether the failures are price-band, semantic-category, or labour-rate.
   cacheLog.err('grounding validation failed — per-line failures follow', null, {
+    inspection_cause: 'grounding_failed',
     failure_count: check.failures.length,
     failures: check.failures.map((f) => ({
       tier: f.tier,
@@ -471,6 +579,137 @@ async function buildBomHint(
   } catch (e: any) {
     log.err('BOM hint build failed', e?.message ?? String(e))
     return null
+  }
+}
+
+/**
+ * Phase 2 — load the DB inputs the deterministic BOM builder needs.
+ * Returns { input:null, reason } whenever the job cannot be honoured
+ * deterministically (no recipe / service switched off / no rate) so
+ * the caller falls straight back to the Opus draft (zero regression).
+ * Only ever invoked behind the DETERMINISTIC_BOM flag in runEstimation,
+ * so it is completely dormant until explicitly enabled.
+ */
+async function loadDeterministicInputs(
+  intake: any,
+  pricingBook: any,
+): Promise<
+  | { input: DeterministicTierInput; assemblyName: string }
+  | { input: null; reason: string }
+> {
+  const jobType = (intake?.job_type as string | null) ?? null
+  const tenantId = (intake?.tenant_id as string | null) ?? null
+  const trade = (intake?.trade as string | null) ?? null
+  if (!jobType) return { input: null, reason: 'no job_type' }
+  if (!tenantId) return { input: null, reason: 'no tenant_id' }
+
+  // Match the job the same way buildBomHint does (name ilike job term,
+  // trade-scoped). default_labour_hours grounds the labour line.
+  const term = jobType.replace(/_/g, ' ')
+  let aq = supabase
+    .from('shared_assemblies')
+    .select('id, name, trade, default_labour_hours')
+    .ilike('name', `%${term}%`)
+  if (trade) aq = aq.eq('trade', trade)
+  const { data: asm, error: aerr } = await aq.limit(5)
+  if (aerr || !asm || asm.length === 0) {
+    return { input: null, reason: 'no matching assembly' }
+  }
+  const ids = asm.map((a: any) => a.id)
+  const primary = asm[0] as {
+    id: string
+    name: string
+    default_labour_hours: number | string
+  }
+
+  // The tradie's OWN recipe for this job. No recipe → not deterministic
+  // (the soft BOM hint still applies to the Opus path as before).
+  const { data: recipe } = await supabase
+    .from('tenant_assembly_bom')
+    .select('material_category, quantity, required, description, sort')
+    .eq('tenant_id', tenantId)
+    .in('assembly_id', ids)
+    .order('sort', { ascending: true })
+  if (!recipe || recipe.length === 0) {
+    return { input: null, reason: 'no tenant recipe for this job' }
+  }
+
+  // Per-tenant override (enabled / labour / markup). A service the
+  // tradie switched OFF in the Services tab must NOT be auto-quoted.
+  const { data: offerings } = await supabase
+    .from('tenant_service_offerings')
+    .select('assembly_id, enabled, labour_hours_override, markup_pct_override')
+    .eq('tenant_id', tenantId)
+    .in('assembly_id', ids)
+  const primaryOffering =
+    (offerings ?? []).find((o: any) => o.assembly_id === primary.id) ?? null
+  if (primaryOffering && primaryOffering.enabled === false) {
+    return { input: null, reason: 'service disabled in Services tab' }
+  }
+
+  const eff = effectiveAssembly(
+    primary.default_labour_hours,
+    (pricingBook as any)?.default_markup_pct,
+    primaryOffering
+      ? {
+          enabled: primaryOffering.enabled,
+          labour_hours_override: primaryOffering.labour_hours_override,
+          markup_pct_override: primaryOffering.markup_pct_override,
+        }
+      : null,
+  )
+
+  // Catalogue (active, trade) + shared materials (trade) — the price
+  // sources. Selects mirror loadCandidatePrices for deploy-safety.
+  let cq = supabase
+    .from('tenant_material_catalogue')
+    .select(
+      'id, category, name, brand, range_series, supplier, unit, unit_price_ex_gst, customer_supply_price_ex_gst, tier_hint, active',
+    )
+    .eq('tenant_id', tenantId)
+    .eq('active', true)
+  if (trade) cq = cq.eq('trade', trade)
+  let mq = supabase
+    .from('shared_materials')
+    .select('name, category, default_unit_price_ex_gst, unit')
+  if (trade) mq = mq.eq('trade', trade)
+  const [{ data: catRows }, { data: sharedRows }] = await Promise.all([cq, mq])
+
+  const input: DeterministicTierInput = {
+    bom: (recipe ?? []) as BomLine[],
+    tenantMaterials: (catRows ?? []) as TenantMaterial[],
+    sharedMaterials: (sharedRows ?? []) as SharedMaterial[],
+    labourHours: Number(eff.labourHours.value),
+    hourlyRate: Number((pricingBook as any)?.hourly_rate),
+    markupPct: Number(eff.markupPct.value),
+  }
+  return { input, assemblyName: primary.name }
+}
+
+/**
+ * WP4 — load the operator catalogue as {id, name, image_path} so a
+ * grounded line can be linked back to the exact product it was priced
+ * from (for the render). Best-effort + render-only: this runs AFTER
+ * grounding, never feeds the validator, and any failure just means
+ * "no product link" (today's behaviour). Absent table (pre-028 prod)
+ * → supabase returns {data:null} → [] → no-op.
+ */
+async function loadCatalogueProductRefs(
+  tenantId: string | null,
+  trade: string | null,
+): Promise<CatalogueProductRef[]> {
+  if (!tenantId) return []
+  try {
+    let q = supabase
+      .from('tenant_material_catalogue')
+      .select('id, name, image_path')
+      .eq('tenant_id', tenantId)
+      .eq('active', true)
+    if (trade) q = q.eq('trade', trade)
+    const { data } = await q
+    return (data ?? []) as CatalogueProductRef[]
+  } catch {
+    return []
   }
 }
 

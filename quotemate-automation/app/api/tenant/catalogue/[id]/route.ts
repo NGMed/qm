@@ -101,6 +101,18 @@ export async function PATCH(
   if (parsed.data.image_path !== undefined) {
     fields.image_path = emptyToNull(parsed.data.image_path)
   }
+  if (parsed.data.description !== undefined) {
+    fields.description = emptyToNull(parsed.data.description)
+  }
+  if (parsed.data.cost_price_ex_gst !== undefined) {
+    fields.cost_price_ex_gst =
+      parsed.data.cost_price_ex_gst == null
+        ? null
+        : parsed.data.cost_price_ex_gst
+  }
+  if (parsed.data.is_preferred !== undefined) {
+    fields.is_preferred = parsed.data.is_preferred
+  }
   if (parsed.data.active !== undefined) fields.active = parsed.data.active
 
   if (Object.keys(fields).length === 0) {
