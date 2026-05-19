@@ -292,10 +292,26 @@ export async function runEstimation(intake: any, pricingBook: any, modelId = 'cl
         if (chosen) {
           const r = applyChosenProduct(draft, chosen)
           if (r.applied.length > 0) {
-            cacheLog.ok('WP9 — chosen product forced into the quote', {
+            // The customer already PICKED one product — Good/Better/Best
+            // no longer makes sense (all three now hold the same chosen
+            // product at the same price, which reads as 3 confusing
+            // identical tiers). Collapse to ONE option: keep the chosen
+            // tier, drop the others. The SMS builder + /q page + Stripe
+            // pay-links already support <3 tiers (this is the same shape
+            // as "BEST dropped"), so this is safe.
+            const keep = (r.applied.includes('good')
+              ? 'good'
+              : r.applied[0]) as 'good' | 'better' | 'best'
+            if (draft[keep]) {
+              for (const t of ['good', 'better', 'best'] as const) {
+                if (t !== keep) draft[t] = null
+              }
+              draft.selected_tier = keep
+            }
+            cacheLog.ok('WP9 — chosen product forced into the quote (single option)', {
               product: chosen?.name,
               price: chosen?.price_ex_gst,
-              tiers: r.applied,
+              kept_tier: keep,
             })
           }
         }
