@@ -3670,6 +3670,7 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [formErr, setFormErr] = useState<string | null>(null)
   const blankForm = {
     trade: 'electrical',
@@ -3688,6 +3689,9 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
     unit: 'each',
   }
   const [form, setForm] = useState({ ...blankForm })
+  // null = not editing (form is in "add" mode). A row id = editing that
+  // row (form is prefilled, submit PATCHes instead of POSTs).
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!accessToken) {
@@ -3800,6 +3804,120 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
     }
   }
 
+  // Close the form and drop any edit-in-progress, resetting to a blank
+  // "add" form (keeping the last-used trade so adding several products
+  // in the same trade isn't tedious).
+  function closeForm() {
+    setShowForm(false)
+    setEditingId(null)
+    setFormErr(null)
+    setForm({ ...blankForm, trade: form.trade })
+  }
+
+  // Prefill the shared top form from an existing row and switch it into
+  // edit mode. Numbers are coerced to plain strings so the inputs are
+  // controlled; nulls become '' so clearing a field is possible.
+  function beginEdit(row: CatalogueRow) {
+    const str = (v: number | string | null | undefined) =>
+      v == null || v === '' ? '' : String(v)
+    setForm({
+      trade: row.trade || 'electrical',
+      category: row.category || '',
+      name: row.name || '',
+      brand: row.brand ?? '',
+      range_series: row.range_series ?? '',
+      supplier: row.supplier ?? '',
+      unit_price_ex_gst: str(row.unit_price_ex_gst),
+      customer_supply_price_ex_gst: str(row.customer_supply_price_ex_gst),
+      cost_price_ex_gst: str(row.cost_price_ex_gst),
+      description: row.description ?? '',
+      image_path: row.image_path ?? '',
+      tier_hint: row.tier_hint ?? '',
+      is_preferred: row.is_preferred ? 'yes' : '',
+      unit: row.unit || 'each',
+    })
+    setEditingId(row.id)
+    setShowForm(true)
+    setFormErr(null)
+  }
+
+  // PATCH an existing row. Unlike create(), empty text fields are sent
+  // as '' (the API maps '' → null) so a tradie can actually CLEAR a
+  // brand/photo/etc; the two optional money fields send null when blank
+  // so they don't silently coerce to $0.
+  async function update() {
+    if (!accessToken || !editingId) return
+    setSaving(true)
+    setFormErr(null)
+    try {
+      const optMoney = (v: string) => {
+        const t = v.trim()
+        return t === '' ? null : t
+      }
+      const res = await fetch(`/api/tenant/catalogue/${editingId}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trade: form.trade,
+          category: form.category.trim(),
+          name: form.name.trim(),
+          brand: form.brand.trim(),
+          range_series: form.range_series.trim(),
+          supplier: form.supplier.trim(),
+          unit: form.unit || 'each',
+          unit_price_ex_gst: form.unit_price_ex_gst,
+          customer_supply_price_ex_gst: optMoney(form.customer_supply_price_ex_gst),
+          cost_price_ex_gst: optMoney(form.cost_price_ex_gst),
+          description: form.description.trim(),
+          image_path: form.image_path.trim(),
+          tier_hint: form.tier_hint,
+          is_preferred: form.is_preferred === 'yes',
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+      if (!res.ok) throw new Error(json.message || json.error || `HTTP ${res.status}`)
+      closeForm()
+      await load()
+    } catch (e) {
+      setFormErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Upload a chosen file to the public catalogue-images bucket and put
+  // the returned permanent URL into the form's image_path (same field
+  // the "paste a URL" input writes to — the rest of the app only ever
+  // sees a URL, whether pasted or uploaded).
+  async function uploadImage(file: File) {
+    if (!accessToken) return
+    setUploading(true)
+    setFormErr(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/tenant/catalogue/upload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: fd,
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean
+        url?: string
+        error?: string
+        message?: string
+      }
+      if (!res.ok || !json.url) {
+        throw new Error(json.message || json.error || `HTTP ${res.status}`)
+      }
+      set('image_path', json.url)
+    } catch (e) {
+      setFormErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const money = (v: number | string | null) => {
     if (v == null || v === '') return null
     const n = typeof v === 'string' ? parseFloat(v) : v
@@ -3850,8 +3968,14 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
         <button
           type="button"
           onClick={() => {
-            setShowForm((s) => !s)
-            setFormErr(null)
+            if (showForm) {
+              closeForm()
+            } else {
+              setForm({ ...blankForm, trade: form.trade })
+              setEditingId(null)
+              setShowForm(true)
+              setFormErr(null)
+            }
           }}
           className="shrink-0 font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold px-3 py-2 border border-accent/50 text-accent hover:bg-accent/10 transition-colors cursor-pointer"
         >
@@ -3863,10 +3987,15 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            void create()
+            void (editingId ? update() : create())
           }}
           className="mt-5 border border-ink-line bg-ink-deep p-4 grid gap-3 sm:grid-cols-2"
         >
+          {editingId && (
+            <div className="sm:col-span-2 font-mono text-[0.65rem] uppercase tracking-[0.15em] text-accent">
+              Editing “{form.name || 'product'}” — change anything and save
+            </div>
+          )}
           <label className="flex flex-col gap-1">
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Trade</span>
             <select
@@ -4003,17 +4132,58 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
             />
             This is my go-to product for its category (preferred)
           </label>
-          <label className="flex flex-col gap-1 sm:col-span-2">
+          <div className="flex flex-col gap-1 sm:col-span-2">
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">
-              Product photo URL (optional)
+              Product photo (optional)
             </span>
-            <input
-              value={form.image_path}
-              onChange={(e) => set('image_path', e.target.value)}
-              placeholder="https://… link to a product image"
-              className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
-            />
-          </label>
+            <div className="flex flex-wrap items-start gap-3">
+              {form.image_path && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={form.image_path}
+                  alt="Product photo preview"
+                  className="h-16 w-16 object-cover border border-ink-line bg-ink-deep shrink-0"
+                />
+              )}
+              <div className="flex-1 min-w-[12rem] flex flex-col gap-2">
+                <input
+                  value={form.image_path}
+                  onChange={(e) => set('image_path', e.target.value)}
+                  placeholder="Paste an image URL (https://…)"
+                  className="bg-ink-card border border-ink-line px-3 py-2 text-sm text-text-pri"
+                />
+                <div className="flex items-center gap-3">
+                  <label className="font-mono text-[0.6rem] uppercase tracking-[0.14em] font-bold px-3 py-2 border border-ink-line text-text-sec hover:border-accent/50 hover:text-text-pri transition-colors cursor-pointer">
+                    {uploading ? 'Uploading…' : '⬆ Upload a photo'}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={uploading}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0]
+                        e.target.value = '' // allow re-selecting the same file
+                        if (f) void uploadImage(f)
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                  {form.image_path && (
+                    <button
+                      type="button"
+                      onClick={() => set('image_path', '')}
+                      className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim hover:text-warning transition-colors cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <span className="text-[0.65rem] text-text-dim leading-snug">
+                  Paste a link, or upload a JPG/PNG/WebP (max 8&nbsp;MB). Shown to the
+                  customer and used by the AI image preview.
+                </span>
+              </div>
+            </div>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Tier (optional)</span>
             <select
@@ -4036,7 +4206,11 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
               disabled={saving}
               className="font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold px-4 py-2.5 bg-accent text-white hover:bg-accent-press transition-colors cursor-pointer disabled:opacity-60"
             >
-              {saving ? 'Saving…' : 'Add to catalogue'}
+              {saving
+                ? 'Saving…'
+                : editingId
+                  ? 'Save changes'
+                  : 'Add to catalogue'}
             </button>
           </div>
         </form>
@@ -4142,6 +4316,14 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
                           />
                         </span>
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => beginEdit(r)}
+                        disabled={busyId === r.id}
+                        className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim hover:text-accent transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        Edit
+                      </button>
                       <button
                         type="button"
                         onClick={() => remove(r)}
