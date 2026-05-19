@@ -45,6 +45,18 @@ import {
   buildTradieIntentStillOpenSms,
 } from '@/lib/sms/templates'
 import { sendSms } from '@/lib/sms/twilio'
+import {
+  applyChoiceSelection,
+  selectProductOptions,
+  buildProductOptionsSms,
+  categoryForJobType,
+  type ProductChoiceState,
+} from '@/lib/sms/product-options'
+import type { TenantMaterial } from '@/lib/estimate/catalogue'
+
+// WP9 — mid-conversation product options. Every WP9 block in this route
+// is wrapped in this flag; OFF (default) ⇒ byte-identical behaviour.
+const WP9_ENABLED = process.env.WP9_PRODUCT_OPTIONS === '1'
 
 // Twilio webhook ack. We send the real customer reply via the REST API
 // inside after() — never as TwiML in the webhook response — so this
@@ -824,6 +836,52 @@ export async function POST(req: Request) {
       }))
       const inboundCount = turns.filter(t => t.direction === 'inbound').length
 
+      // ─────── WP9 CAPTURE — record a pending product pick ───────
+      // If we offered the customer 2 products last turn and this inbound
+      // is their pick ("1" / "2" / a product name), record it on the
+      // dedicated product_choice column (immune to the slot-merge
+      // wholesale overwrite — same reasoning as the followup_quote
+      // column, migration 030/035). We then REWRITE what the dialog
+      // sees for this turn into a natural sentence so it acknowledges
+      // and moves on — no extra SMS, no short-circuit. Best-effort and
+      // fully flag-gated: OFF ⇒ this block is skipped entirely.
+      if (WP9_ENABLED) {
+        try {
+          const { data: pcRow } = await supabase
+            .from('sms_conversations')
+            .select('product_choice')
+            .eq('id', conversationId)
+            .maybeSingle()
+          const pending = (pcRow?.product_choice ?? null) as ProductChoiceState | null
+          if (pending && pending.status === 'pending') {
+            const lastInbound = [...turns].reverse().find((t) => t.direction === 'inbound')
+            const reply = lastInbound?.body ?? ''
+            const next = applyChoiceSelection(pending, { reply })
+            if (next && next.status === 'chosen' && next.chosen_catalogue_id) {
+              await supabase
+                .from('sms_conversations')
+                .update({ product_choice: next, updated_at: new Date().toISOString() })
+                .eq('id', conversationId)
+              // Make the dialog acknowledge the pick naturally instead
+              // of being confused by a bare "1".
+              if (lastInbound) {
+                lastInbound.body = `I'd like the ${next.chosen_name}, thanks.`
+              }
+              console.log('[sms/inbound:after] WP9 CAPTURE — product choice recorded', {
+                conversationId,
+                chosen: next.chosen_name,
+                catalogueId: next.chosen_catalogue_id,
+              })
+            }
+          }
+        } catch (e: any) {
+          console.warn('[sms/inbound:after] WP9 CAPTURE skipped (non-fatal)', {
+            conversationId,
+            error: e?.message ?? String(e),
+          })
+        }
+      }
+
       // ─────── Slot extraction (PR-B step 4) ───────
       // Run a tiny Haiku NLU pass against the latest inbound and merge
       // structured updates into conversation_state. Catches customer
@@ -1273,6 +1331,7 @@ export async function POST(req: Request) {
           assumptions_made: [],
           ready_for_intake: false,
           request_photo_link: false,
+          offer_product_choice: false,
           reason_for_escalation: 'dialog agent error',
         }
       }
@@ -1540,6 +1599,111 @@ export async function POST(req: Request) {
         // 2s gap before the quote confirmation so AU long-code carrier
         // doesn't reorder the two messages.
         await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+
+      // ─────── WP9 OFFER — send 2 real product options mid-chat ───────
+      // Mirrors the photo-link gate (8b): Haiku decides the natural
+      // moment via decision.offer_product_choice; the route only acts
+      // when the tradie genuinely has 2+ operator-catalogue products
+      // for the job's category. One-shot (skips if a choice already
+      // exists). Sends a separate, tidy options SMS (with the choice
+      // page link) BEFORE the dialog reply, same ordering as the photo
+      // link. Fully flag-gated + best-effort: OFF ⇒ skipped entirely,
+      // any failure never blocks the customer's reply.
+      if (
+        WP9_ENABLED &&
+        decision.offer_product_choice === true &&
+        !hasExistingIntake &&
+        decision.action !== 'escalate_inspection' &&
+        decision.action !== 'end_conversation' &&
+        tenant?.id
+      ) {
+        try {
+          const { data: existing } = await supabase
+            .from('sms_conversations')
+            .select('product_choice')
+            .eq('id', conversationId)
+            .maybeSingle()
+          const already = (existing?.product_choice ?? null) as ProductChoiceState | null
+          const category = categoryForJobType(decision.job_type_guess)
+          if (already) {
+            console.log('[sms/inbound:after] WP9 OFFER — choice already exists, skipping', {
+              conversationId,
+              status: already.status,
+            })
+          } else if (!category) {
+            console.log('[sms/inbound:after] WP9 OFFER — no catalogue category for job type, skipping', {
+              jobType: decision.job_type_guess,
+            })
+          } else {
+            const { data: catRows } = await supabase
+              .from('tenant_material_catalogue')
+              .select(
+                'id, category, name, brand, range_series, unit_price_ex_gst, image_path, description, tier_hint, is_preferred, active',
+              )
+              .eq('tenant_id', tenant.id)
+              .eq('active', true)
+            const options = selectProductOptions(
+              (catRows ?? []) as TenantMaterial[],
+              category,
+            )
+            if (!options) {
+              console.log('[sms/inbound:after] WP9 OFFER — fewer than 2 options, skipping', {
+                conversationId,
+                category,
+              })
+            } else {
+              const token = randomBytes(16).toString('hex')
+              const choiceState: ProductChoiceState = {
+                category,
+                token,
+                status: 'pending',
+                options,
+                offered_at: new Date().toISOString(),
+              }
+              await supabase
+                .from('sms_conversations')
+                .update({ product_choice: choiceState, updated_at: new Date().toISOString() })
+                .eq('id', conversationId)
+              const appUrl = process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app'
+              const chooseUrl = `${appUrl}/q/choose/${token}`
+              const optionsBody = buildProductOptionsSms(options, chooseUrl, category)
+              const offerDispatch = await dispatchQuoteMessage({
+                to: fromNumber,
+                from: toNumber,
+                text: optionsBody,
+              })
+              if (offerDispatch.ok) {
+                await supabase.from('sms_messages').insert({
+                  conversation_id: conversationId,
+                  direction: 'outbound',
+                  body:
+                    offerDispatch.channel === 'whatsapp'
+                      ? `[WhatsApp fallback] ${optionsBody}`
+                      : optionsBody,
+                  twilio_message_sid: offerDispatch.sid,
+                })
+                console.log('[sms/inbound:after] WP9 OFFER — options SMS sent', {
+                  conversationId,
+                  category,
+                  channel: offerDispatch.channel,
+                })
+                // 2s gap so the options message lands before the dialog
+                // reply (same carrier-ordering fix as the photo link).
+                await new Promise((resolve) => setTimeout(resolve, 2000))
+              } else {
+                console.error('[sms/inbound:after] WP9 OFFER — options SMS failed', {
+                  conversationId,
+                })
+              }
+            }
+          }
+        } catch (e: any) {
+          console.warn('[sms/inbound:after] WP9 OFFER skipped (non-fatal)', {
+            conversationId,
+            error: e?.message ?? String(e),
+          })
+        }
       }
 
       // Step 7: quote confirmation (or any dialog reply). Fires after the

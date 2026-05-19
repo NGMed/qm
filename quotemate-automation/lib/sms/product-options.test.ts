@@ -8,6 +8,8 @@ import {
   buildProductOptionsSms,
   interpretChoiceReply,
   applyChoiceSelection,
+  categoryForJobType,
+  describeChosenProductDirective,
   type ProductOption,
   type ProductChoiceState,
 } from './product-options'
@@ -133,5 +135,43 @@ describe('applyChoiceSelection', () => {
     expect(applyChoiceSelection(base(), { reply: 'what colours?' }, 'NOW')).toBeNull()
     expect(applyChoiceSelection(base(), { catalogueId: 'P-nope' }, 'NOW')).toBeNull()
     expect(applyChoiceSelection(null, { reply: '1' }, 'NOW')).toBeNull()
+  })
+})
+
+describe('categoryForJobType', () => {
+  it('maps known job types to a catalogue category', () => {
+    expect(categoryForJobType('tap_replace')).toBe('tap')
+    expect(categoryForJobType('toilet_repair')).toBe('toilet')
+    expect(categoryForJobType('downlights')).toBe('downlight')
+    expect(categoryForJobType('power_points')).toBe('gpo')
+    expect(categoryForJobType('hot_water')).toBe('hot_water')
+  })
+  it('returns null for unknown / empty (→ no offer, safe default)', () => {
+    expect(categoryForJobType('unknown')).toBeNull()
+    expect(categoryForJobType('')).toBeNull()
+    expect(categoryForJobType(null)).toBeNull()
+  })
+})
+
+describe('describeChosenProductDirective', () => {
+  const chosen = (): ProductChoiceState => ({
+    category: 'tap',
+    token: 't',
+    status: 'chosen',
+    options: selectProductOptions(taps, 'tap')!,
+    chosen_catalogue_id: 'P-better',
+    chosen_name: 'Caroma Liano Tap',
+  })
+  it('produces a grounded directive naming the chosen product + brand/range', () => {
+    const d = describeChosenProductDirective(chosen())!
+    expect(d).toContain('Caroma Liano Tap')
+    expect(d).toContain('Caroma Liano') // brand + range label
+    expect(d).toMatch(/quote THIS exact product/i)
+  })
+  it('is null when nothing was chosen', () => {
+    expect(describeChosenProductDirective(null)).toBeNull()
+    expect(
+      describeChosenProductDirective({ ...chosen(), status: 'pending', chosen_catalogue_id: null }),
+    ).toBeNull()
   })
 })

@@ -9,6 +9,14 @@ import { withRetry } from '@/lib/util/retry'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
 import { buildIncompleteCallSms, buildIntakeRecoverySms, buildPhotoRequestSms, buildQuoteFailureSms } from '@/lib/sms/templates'
 import { findOrCreateCustomer, updateCustomerFromIntake } from '@/lib/customers/lookup'
+import {
+  describeChosenProductDirective,
+  type ProductChoiceState,
+} from '@/lib/sms/product-options'
+
+// WP9 — feed a mid-chat product pick into the estimate. Flag-gated;
+// OFF (default) ⇒ this never runs and the transcript is unchanged.
+const WP9_ENABLED = process.env.WP9_PRODUCT_OPTIONS === '1'
 
 export const maxDuration = 300
 
@@ -104,6 +112,30 @@ export async function POST(req: Request) {
         `Assumptions agent applied during dialog:\n` +
         (convo.assumptions_made as string[]).map(a => `  - ${a}`).join('\n') +
         `\n\nFull SMS conversation:\n` + transcript
+    }
+
+    // WP9 FLOW-THROUGH — if the customer picked a product mid-chat,
+    // prepend a grounded directive so structureIntake bakes THAT exact
+    // product into the scope. Downstream the catalogue hint +
+    // chooseMaterial prefer it, the grounding validator still governs
+    // the price (it's an operator-catalogue product, so it grounds),
+    // and WP4 links the quoted line back to it → the render shows the
+    // same product. Same prepend pattern as the assumptions block.
+    // Flag-gated + best-effort: OFF or no pick ⇒ transcript unchanged.
+    if (WP9_ENABLED) {
+      try {
+        const directive = describeChosenProductDirective(
+          (convo.product_choice ?? null) as ProductChoiceState | null,
+        )
+        if (directive) {
+          transcript = `Customer product selection (authoritative):\n  - ${directive}\n\n` + transcript
+          log.step('WP9 — chosen product injected into intake transcript', {
+            conversationId,
+          })
+        }
+      } catch (e) {
+        log.err('WP9 product-choice injection failed (non-fatal)', e as Error)
+      }
     }
 
     callerNumber = convo.from_number ?? null

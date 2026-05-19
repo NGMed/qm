@@ -244,3 +244,49 @@ export function applyChoiceSelection(
     chosen_at: nowIso,
   }
 }
+
+// Map an SMS dialog job_type → the operator-catalogue category WP9
+// should pull options from. Returns null for job types with no clean
+// single product category (→ no offer; safe default). Pure.
+const JOB_TYPE_CATEGORY: Record<string, string> = {
+  // electrical
+  downlights: 'downlight',
+  power_points: 'gpo',
+  ceiling_fans: 'fan',
+  smoke_alarms: 'smoke_alarm',
+  outdoor_lighting: 'outdoor_light',
+  // plumbing
+  blocked_drain: 'drain',
+  hot_water: 'hot_water',
+  tap_repair: 'tap',
+  tap_replace: 'tap',
+  toilet_repair: 'toilet',
+  toilet_replace: 'toilet',
+}
+export function categoryForJobType(jobType: string | null | undefined): string | null {
+  const k = (jobType ?? '').trim().toLowerCase()
+  return JOB_TYPE_CATEGORY[k] ?? null
+}
+
+/**
+ * One-line, grounded directive describing the customer's chosen product
+ * — appended to the intake scope so the estimator quotes THAT product
+ * (the catalogue hint + grounding validator still govern; WP4 links the
+ * line back by name → renders the right photo). null when nothing was
+ * chosen. Pure.
+ */
+export function describeChosenProductDirective(
+  choice: ProductChoiceState | null | undefined,
+): string | null {
+  if (!choice || choice.status !== 'chosen' || !choice.chosen_catalogue_id) return null
+  const picked =
+    (choice.options ?? []).find((o) => o.catalogue_id === choice.chosen_catalogue_id) ?? null
+  const name = (picked?.name ?? choice.chosen_name ?? '').trim()
+  if (!name) return null
+  const label = [picked?.brand, picked?.range_series].filter(Boolean).join(' ').trim()
+  return (
+    `Customer explicitly chose this product mid-conversation: ${name}` +
+    (label ? ` (${label})` : '') +
+    `. Quote THIS exact product for the ${choice.category} and price it from the operator catalogue.`
+  )
+}
