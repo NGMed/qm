@@ -40,6 +40,17 @@ describe('customServicesDirective — mandated clarifying questions (mig 032)', 
     expect(out).toMatch(/do NOT escalate to inspection/i)
   })
 
+  it('overrides Rule 7 while answering, but keeps the anti-loop guard', () => {
+    const out = customServicesDirective([withQs])
+    // The mandated questions must beat the 4-turn "too many turns" cap
+    // (the regression: long question sets were tripping Rule 7).
+    expect(out).toMatch(/OVERRIDE Rule 7/i)
+    expect(out).toMatch(/too many\s+turns/i)
+    // ...but the conversation must still not be able to loop forever.
+    expect(out).toMatch(/Rule 7\s+resume/i)
+    expect(out).toMatch(/STOPS giving usable answers/i)
+  })
+
   it('a service WITHOUT questions keeps the exact legacy behaviour', () => {
     const out = customServicesDirective([noQs])
     expect(out).toContain('Install widget')
