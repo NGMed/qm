@@ -1321,6 +1321,33 @@ function photoLinkDirective(hint: PhotoLinkHint): string {
   }
 }
 
+// QUOTE-IN-PROGRESS directive — injected when the customer texts again
+// while their quote is still being drafted in the background. The dialog
+// stays conversational (the customer is never blocked), but must not try
+// to hand off a second time.
+function quoteInProgressDirective(on: boolean): string {
+  if (!on) return ''
+  return [
+    'QUOTE IN PROGRESS — IMPORTANT:',
+    'A quote for this customer is ALREADY being drafted right now, in the',
+    'background. It will arrive on its own shortly. For THIS turn:',
+    "- Do NOT set action='finish' and do NOT run a verification handshake",
+    '  ("...Sound right?") — there is nothing new to hand off. Use',
+    "  action='ask'.",
+    '- Do NOT repeat "quote on its way" / "quote drafting now" — the',
+    '  customer has already been told once.',
+    "- Just answer the customer's actual message naturally: if they are",
+    '  answering a question, acknowledge it; if they declined photos,',
+    '  reassure them photos are optional; if it is small talk, reply',
+    '  briefly and warmly.',
+    '- If they are asking for ADDITIONAL or NEW work, respond warmly and',
+    '  tell them you will get their extra quote sorted as soon as the',
+    '  current one lands. Never imply they must wait in a queue, never',
+    '  ask them to re-send their message, and do not claim the new quote',
+    '  is being drafted simultaneously.',
+  ].join('\n')
+}
+
 export async function decideNextTurn(args: {
   history: ConversationTurn[]
   inboundCount: number      // number of customer messages so far (inclusive of latest)
@@ -1395,6 +1422,16 @@ export async function decideNextTurn(args: {
    * dropped by the .filter(Boolean) below (legacy behaviour).
    */
   followupContext?: string | null
+  /**
+   * True when a quote for THIS conversation is already being drafted in
+   * the background (the customer texted again mid-draft). Drives the
+   * QUOTE-IN-PROGRESS directive: the dialog may keep talking and answer
+   * the customer, but must NOT run a verification handshake or set
+   * action='finish' — there is nothing new to hand off, and the route
+   * skips the handoff for this turn anyway. Keeps the conversation
+   * flowing instead of the old canned "hit me back" hold-on.
+   */
+  quoteInProgress?: boolean
 }): Promise<TurnDecision> {
   // Build the memory block for the prompt. Prefer the state-based block
   // (PR-B) when state has slots; fall back to the legacy customerContext
@@ -1438,6 +1475,10 @@ export async function decideNextTurn(args: {
         declinedServicesDirective(args.declinedServices),
         `PHOTO LINK STATE: ${args.photoLink ?? 'not_applicable'}`,
         photoLinkDirective(args.photoLink ?? 'not_applicable'),
+        // Quote-in-progress — the customer texted again while their quote
+        // is still drafting. Keeps the dialog talking but blocks a second
+        // handoff. Empty string when not in-flight → dropped by .filter.
+        quoteInProgressDirective(args.quoteInProgress ?? false),
         // Memory injection — state-based when PR-B's conversation_state
         // is present, legacy customerContext block when not.
         memoryBlock,

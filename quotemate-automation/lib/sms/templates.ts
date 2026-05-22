@@ -530,13 +530,70 @@ export function buildQuoteFailureSms(opts: { firstName?: string; jobType?: strin
 // scrubVoiceWording regex for the same reason — see lib/sms/dialog.ts).
 // New wording acknowledges we're still working but makes no time
 // guarantee, and avoids the specific phrases dialog.ts strips elsewhere.
-export function buildQuoteInFlightSms(): string {
-  const variants = [
-    `Cheers, still pulling your quote together. Soon as it lands, hit me back with this one and I'll get onto it.`,
-    `Got you - still working on the quote. Once it's through, send this one again and I'll sort it.`,
-    `Bear with us - quote's still in the works. When it arrives, message me back about this and I'll handle it.`,
-  ]
-  return gsm7Safe(pickVariant(variants))
+//
+// 2026-05-22: the hold-on is now CONTEXT-AWARE. The old single variant set
+// always told the customer to "send this one again" — which reads as
+// out-of-sync when the in-flight message is NOT a new request. E.g. a
+// customer answering the optional photo prompt with "I don't have any
+// photos sorry" was told to re-send it, as if it were a new job. The
+// classifier below routes photo replies and bare acknowledgements to
+// reassurance wording; only a genuine-looking new request keeps the
+// "send it again" ask.
+
+/** What an in-flight inbound message is, for hold-on wording selection. */
+type InflightReplyKind = 'photo' | 'ack' | 'request'
+
+/** Classify an in-flight inbound so the hold-on SMS can be context-aware
+ *  instead of always telling the customer to re-send their message. */
+export function classifyInflightMessage(
+  text: string | null | undefined,
+): InflightReplyKind {
+  const t = (text ?? '').trim().toLowerCase()
+  if (!t) return 'ack'
+  // Mentions photos — "I don't have any photos sorry", "no pics", "can't
+  // get a photo". Decline or not, the right reply is the same: photos are
+  // optional and the quote is coming regardless.
+  if (/\b(photo|photos|pic|pics|picture|pictures|image|images)\b/.test(t)) {
+    return 'photo'
+  }
+  // A bare acknowledgement — short, no real content to action.
+  if (
+    t.length <= 28 &&
+    /\b(thanks|thank you|thankyou|ok|okay|kk|cheers|no worries|all good|sweet|great|got it|cool|yep|yes|yeah|ta|np)\b/.test(
+      t,
+    )
+  ) {
+    return 'ack'
+  }
+  return 'request'
+}
+
+export function buildQuoteInFlightSms(inboundText?: string | null): string {
+  const variantsByKind: Record<InflightReplyKind, string[]> = {
+    // A reply about photos — reassure they're optional; never ask the
+    // customer to re-send. Fixes the "I don't have photos" -> "hit me
+    // back with this one" out-of-sync reply.
+    photo: [
+      `No worries - photos are optional, they just help the tradie. Your quote is still being put together and will land shortly.`,
+      `All good, photos aren't required. Your quote is still in the works - it'll come through shortly.`,
+      `That's fine - no photos needed. Your quote is still on the way.`,
+    ],
+    // A bare acknowledgement — just reassure, nothing to action.
+    ack: [
+      `Cheers - your quote is still being put together, it'll land shortly.`,
+      `Got it - quote's still in the works, it'll come through soon.`,
+      `All good - your quote is still on the way.`,
+    ],
+    // Looks like a new request/question — keep the "send it again" ask so
+    // it gets actioned once the in-flight quote clears.
+    request: [
+      `Cheers, still pulling your quote together. Soon as it lands, hit me back with this one and I'll get onto it.`,
+      `Got you - still working on the quote. Once it's through, send this one again and I'll sort it.`,
+      `Bear with us - quote's still in the works. When it arrives, message me back about this and I'll handle it.`,
+    ],
+  }
+  const kind = classifyInflightMessage(inboundText)
+  return gsm7Safe(pickVariant(variantsByKind[kind]))
 }
 
 // SMS body builder for the customer-facing quote dispatch.

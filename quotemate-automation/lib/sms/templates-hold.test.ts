@@ -6,7 +6,11 @@
 // is byte-identical to before — the hold line is purely additive.
 
 import { describe, expect, it } from 'vitest'
-import { buildQuoteSms, buildQuoteInFlightSms } from './templates'
+import {
+  buildQuoteSms,
+  buildQuoteInFlightSms,
+  classifyInflightMessage,
+} from './templates'
 
 const intake = {
   job_type: 'downlights',
@@ -140,6 +144,60 @@ describe('buildQuoteInFlightSms — no false time claims', () => {
       expect(body.trim().length).toBeGreaterThan(20)
       // Must signal "we're still working" without claiming completion timing.
       expect(body).toMatch(/quote|working|pulling|works/i)
+    }
+  })
+})
+
+// 2026-05-22: the in-flight hold-on is context-aware. A customer answering
+// the optional photo prompt with "I don't have any photos sorry" used to be
+// told to "send this one again" — out-of-sync, as if it were a new job.
+describe('buildQuoteInFlightSms — context-aware hold-on', () => {
+  // The "re-send your message" ask — appropriate ONLY for a real new
+  // request, never for a photo reply or a bare acknowledgement.
+  const RESEND_ASK = /hit me back|send this|message me back/i
+
+  it('classifies a photo decline as a photo reply', () => {
+    expect(classifyInflightMessage("I don't have any photos sorry")).toBe('photo')
+    expect(classifyInflightMessage('no pics sorry')).toBe('photo')
+    expect(classifyInflightMessage("can't get a picture right now")).toBe('photo')
+  })
+
+  it('classifies a bare acknowledgement as ack', () => {
+    expect(classifyInflightMessage('thanks')).toBe('ack')
+    expect(classifyInflightMessage('ok cheers')).toBe('ack')
+    expect(classifyInflightMessage('')).toBe('ack')
+  })
+
+  it('classifies a substantive message as a request', () => {
+    expect(
+      classifyInflightMessage('actually can you also quote a new powerpoint'),
+    ).toBe('request')
+  })
+
+  it('a photo reply gets reassurance, never a "send it again" ask', () => {
+    for (let i = 0; i < 50; i++) {
+      const body = buildQuoteInFlightSms("I don't have any photos sorry")
+      expect(body).not.toMatch(RESEND_ASK)
+      expect(body).toMatch(/photo|optional|required|needed/i)
+      expect(body).toMatch(/quote/i)
+      expect(/[^\x20-\x7E\n]/.test(body)).toBe(false)
+      expect(body.length).toBeLessThanOrEqual(160)
+    }
+  })
+
+  it('a bare "thanks" gets reassurance, never a "send it again" ask', () => {
+    for (let i = 0; i < 50; i++) {
+      const body = buildQuoteInFlightSms('thanks')
+      expect(body).not.toMatch(RESEND_ASK)
+      expect(body).toMatch(/quote/i)
+      expect(body.length).toBeLessThanOrEqual(160)
+    }
+  })
+
+  it('a genuine new request keeps the "send it again" ask', () => {
+    for (let i = 0; i < 50; i++) {
+      const body = buildQuoteInFlightSms('can you also do the bathroom fan')
+      expect(body).toMatch(RESEND_ASK)
     }
   })
 })

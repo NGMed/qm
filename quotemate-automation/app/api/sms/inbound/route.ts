@@ -27,7 +27,7 @@ import {
 } from '@/lib/sms/service-scope'
 import { isQuoteInflight, DONE_INFLIGHT_WINDOW_MS } from '@/lib/sms/inflight'
 import { extractAndStoreMmsPhotos } from '@/lib/sms/mms'
-import { buildPhotoRequestSms, buildQuoteInFlightSms, buildQuoteFailureSms } from '@/lib/sms/templates'
+import { buildPhotoRequestSms, buildQuoteFailureSms } from '@/lib/sms/templates'
 import { withRetry } from '@/lib/util/retry'
 import {
   findOrCreateCustomer,
@@ -749,11 +749,17 @@ export async function POST(req: Request) {
   // Customer-history hint flows into the dialog agent so it picks the
   // right opener: full intro / welcome-back / no greeting.
   const customerHistory = customerHistoryHint
-  // Lookup mode controls the after() flow — when 'inflight', we skip
-  // Haiku/status-update/intake-handoff entirely and just send a canned
-  // hold-on message so the customer doesn't get a bungled "new job"
-  // reply while the previous quote is still being drafted.
+  // Lookup mode controls the after() flow.
   const lookupMode = mode
+  // 'inflight' means the customer texted again while their quote is still
+  // being drafted. The dialog STILL runs (so they can answer questions,
+  // decline photos, chat — never blocked), but as a CONTINUATION turn:
+  // the route skips the photo gate, the WP9 product-choice interlock, the
+  // status write, and the intake handoff, so this turn can never collide
+  // with — or duplicate — the quote already drafting in the background.
+  // The dialog also gets the quoteInProgress directive so it never tries
+  // a second verification handshake / handoff.
+  const inflightContinuation = lookupMode === 'inflight'
   // Photo-link hint flows into Haiku. Haiku owns the timing decision
   // via decision.request_photo_link (see lib/sms/dialog.ts Rule 10).
   //   - already_sent:   photo SMS fired in an earlier turn, don't repeat
@@ -769,59 +775,17 @@ export async function POST(req: Request) {
 
   after(async () => {
     try {
-      // ─────── In-flight short-circuit ───────
-      // The customer texted while their PREVIOUS quote is being drafted
-      // (status='structuring') or just finished and dispatched (status='done'
-      // < 60s old). Send a canned hold-on message — bypasses Haiku entirely
-      // so we don't accidentally treat new work as an add-on to a quote
-      // that's already locked-in. The customer's new message is preserved
-      // in sms_messages; when they re-engage post-quote, the dialog picks
-      // up normally via the 5-min done-grace REUSE rule.
-      if (lookupMode === 'inflight') {
-        console.log('[sms/inbound:after] INFLIGHT — sending canned hold-on, skipping Haiku', {
-          conversationId,
-        })
-        const holdOnText = buildQuoteInFlightSms()
-        const holdOnDispatch = await dispatchQuoteMessage({
-          to: fromNumber,
-          from: toNumber,
-          text: holdOnText,
-        })
-        if (holdOnDispatch.ok) {
-          console.log('[sms/inbound:after] INFLIGHT — hold-on SMS sent', {
-            channel: holdOnDispatch.channel,
-            sid: holdOnDispatch.sid,
-          })
-        } else {
-          console.error('[sms/inbound:after] INFLIGHT — hold-on SMS failed (both channels)', {
-            smsAttempt: holdOnDispatch.smsAttempt,
-            waAttempt: holdOnDispatch.waAttempt,
-          })
-        }
-        // Persist the canned outbound so it appears in conversation history.
-        // We tag it with the actual Twilio SID when dispatch succeeded.
-        await supabase.from('sms_messages').insert({
-          conversation_id: conversationId,
-          direction: 'outbound',
-          body: holdOnDispatch.ok && holdOnDispatch.channel === 'whatsapp'
-            ? `[WhatsApp fallback] ${holdOnText}`
-            : holdOnText,
-          twilio_message_sid: holdOnDispatch.ok ? holdOnDispatch.sid : null,
-        })
-        // Update only the activity timestamp — DO NOT change status, DO NOT
-        // bump turn_count semantically (this isn't a real dialog turn), and
-        // critically DO NOT fire the intake-handoff (the previous quote is
-        // already running — we don't want a second one).
-        await supabase
-          .from('sms_conversations')
-          .update({
-            last_message_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', conversationId)
-        // Done — finally block will release the lock.
-        return
-      }
+      // ─────── In-flight continuation ───────
+      // The customer texted while their PREVIOUS quote is still being
+      // drafted (status='structuring') or just dispatched (status='done'
+      // < 60s old). Previously this short-circuited to a canned hold-on
+      // and skipped the dialog — which blocked the customer from
+      // answering questions or chatting and made quoting feel synchronous.
+      // Now the dialog runs normally (see `inflightContinuation`): the
+      // customer is never blocked. The collision guards — skip the photo
+      // gate, WP9, the status write and the intake handoff — live at
+      // their respective sites below, so this turn can never spawn a
+      // second draft or clobber the in-flight quote's status.
 
       // ─────── Debounce window ───────
       // Wait briefly to let any rapid-fire follow-up messages land before we
@@ -1360,6 +1324,10 @@ export async function POST(req: Request) {
             firstName: customer.first_name,
             suburb: customer.suburb,
           } : undefined,
+          // In-flight continuation — a quote is already drafting in the
+          // background. The dialog stays conversational but must not run
+          // a second verification handshake / handoff.
+          quoteInProgress: inflightContinuation,
         })
         console.log('[sms/inbound:after] step 6 — decision', {
           action: decision.action,
@@ -1629,6 +1597,9 @@ export async function POST(req: Request) {
         photoRequestToken &&
         !photoRequestAlreadySent &&
         !hasExistingIntake &&
+        // In-flight continuation — the photo SMS already fired for the
+        // quote that's drafting; never fire a second one this turn.
+        !inflightContinuation &&
         decision.action !== 'escalate_inspection' &&
         decision.action !== 'end_conversation' &&
         jobTypeQualifiesForPhoto &&
@@ -1711,6 +1682,9 @@ export async function POST(req: Request) {
         WP9_ENABLED &&
         (decision.offer_product_choice === true || decision.action === 'finish') &&
         !hasExistingIntake &&
+        // In-flight continuation — never open a product-choice interlock
+        // against a quote that's already drafting.
+        !inflightContinuation &&
         decision.action !== 'escalate_inspection' &&
         decision.action !== 'end_conversation' &&
         tenant?.id
@@ -1883,19 +1857,29 @@ export async function POST(req: Request) {
         ...decision.assumptions_made,
       ]
 
+      // In-flight continuation: a quote is already drafting on this row,
+      // and the draft pipeline (intake/structure) owns `status` +
+      // `intake_id`. This turn must NOT write `status` — doing so could
+      // clobber the draft's structuring->done transition mid-flight.
+      // Everything else (turn_count, assumptions, timestamps) updates
+      // normally.
+      const conversationUpdate: Record<string, unknown> = {
+        turn_count: initialTurnCount + 1,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        assumptions_made: mergedAssumptions,
+      }
+      if (!inflightContinuation) conversationUpdate.status = newStatus
+
       console.log('[sms/inbound:after] step 9 — updating conversation', {
-        newStatus,
+        newStatus: inflightContinuation
+          ? '(unchanged — in-flight continuation)'
+          : newStatus,
         mergedAssumptionsCount: mergedAssumptions.length,
       })
       await supabase
         .from('sms_conversations')
-        .update({
-          turn_count: initialTurnCount + 1,
-          last_message_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          assumptions_made: mergedAssumptions,
-          status: newStatus,
-        })
+        .update(conversationUpdate)
         .eq('id', conversationId)
 
       // 10. If the dialog finished, hand off to the existing intake pipeline.
@@ -1908,7 +1892,16 @@ export async function POST(req: Request) {
       // conversation — Haiku occasionally re-reasons 'finish' on courtesy
       // replies ("Thanks!") which would otherwise produce duplicate
       // quotes. Skip the handoff entirely in that case.
-      if (decision.action === 'finish' && !hasExistingIntake && !wp9HoldingForChoice) {
+      // inflightContinuation guard: a quote is already drafting on this
+      // conversation. Even if the dialog (mis)reasons 'finish' on a
+      // continuation turn, NEVER fire a second handoff — that is the
+      // exact duplicate-quote collision the in-flight window prevents.
+      if (
+        decision.action === 'finish' &&
+        !hasExistingIntake &&
+        !wp9HoldingForChoice &&
+        !inflightContinuation
+      ) {
         console.log('[sms/inbound:after] step 10 — firing intake/structure handoff', { conversationId })
         try {
           await withRetry(

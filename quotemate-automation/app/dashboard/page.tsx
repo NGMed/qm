@@ -580,7 +580,7 @@ function Shell({
           }`}
         >
           <Link href="/dashboard" className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <span className="grid h-7 w-7 place-items-center bg-accent font-black text-white text-xs shrink-0">
+            <span className="grid h-8 w-8 place-items-center bg-accent font-black text-white text-sm shrink-0">
               Q
             </span>
             {/* Brand wordmark hidden on the smallest screens — the
@@ -610,7 +610,7 @@ function Shell({
               type="button"
               onClick={onSignOut}
               aria-label="Sign out"
-              className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-sec hover:text-text-pri transition-colors cursor-pointer px-2 py-2 -mx-2"
+              className="inline-flex items-center gap-2 border border-ink-line px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-sec transition-colors cursor-pointer hover:border-text-dim hover:bg-ink-card hover:text-text-pri"
             >
               <LogOut
                 size={16}
@@ -634,12 +634,13 @@ function Shell({
   )
 }
 
-/** Compact identity chip rendered in the top-nav right-side cluster.
- *  Avatar disc carries the owner's initial in accent orange; the name
- *  and status sit beside it. Status badge uses a tiny coloured dot so
- *  the chip doesn't visually outweigh the rest of the nav.
- *  On narrow screens the name + subtitle collapse — only the avatar
- *  remains, so the chip never wraps. */
+/** Identity unit in the top-nav right cluster — a single flush block:
+ *  a solid accent avatar square (echoes the nav Q-mark), the owner's
+ *  name + trade/state, and an ops-console account-status readout.
+ *  Status is shown as a labelled key/value with a vertical accent tick
+ *  — deliberately NOT a free-floating coloured status dot.
+ *  Responsive: avatar-only on phones, + identity from `sm`, + status
+ *  readout from `md`, so the chip never crowds a narrow nav. */
 function ProfileChip({
   firstName,
   subtitle,
@@ -651,48 +652,52 @@ function ProfileChip({
 }) {
   const initial = (firstName.trim()[0] ?? '?').toUpperCase()
   const active = status === 'active'
-  const dotColour = active ? 'bg-emerald-300' : 'bg-amber-300'
   return (
-    <div className="flex items-center gap-2.5 border border-ink-line bg-ink-card pl-1.5 pr-1.5 sm:pr-3 py-1">
-      <div className="relative shrink-0">
-        <span
-          aria-hidden="true"
-          className="grid h-7 w-7 place-items-center bg-accent/15 border border-accent/40 text-accent font-mono font-extrabold text-xs"
-        >
-          {initial}
-        </span>
-        {/* Mobile-only status dot — pinned to the avatar corner. The
-            full pill below carries the same info for >= sm, so this
-            badge is hidden then to avoid duplicate status indication. */}
-        {status && (
-          <span
-            aria-hidden="true"
-            className={`sm:hidden absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-ink-deep ${dotColour}`}
-          />
-        )}
-      </div>
-      <div className="hidden md:flex flex-col leading-none min-w-0">
-        <span className="font-extrabold text-text-pri text-xs uppercase tracking-[0.05em] truncate">
+    <div className="flex items-stretch border border-ink-line bg-ink-card/70">
+      {/* Avatar — solid accent square, the same mark language as the
+          QuoteMate logo so the identity reads as part of the system. */}
+      <span
+        aria-hidden="true"
+        className="grid h-8 w-8 shrink-0 place-items-center bg-accent font-mono text-sm font-extrabold text-white"
+      >
+        {initial}
+      </span>
+
+      {/* Name + trade/state — collapses on the smallest screens. */}
+      <div className="hidden sm:flex min-w-0 flex-col justify-center px-3 leading-tight">
+        <span className="truncate text-[0.8rem] font-extrabold uppercase tracking-[0.04em] text-text-pri">
           {firstName}
         </span>
         {subtitle && (
-          <span className="mt-0.5 font-mono text-[0.55rem] uppercase tracking-[0.14em] text-text-dim truncate">
+          <span className="mt-0.5 truncate font-mono text-[0.55rem] uppercase tracking-[0.13em] text-text-dim">
             {subtitle}
           </span>
         )}
       </div>
+
+      {/* Account status — a labelled readout, not a status pill. The
+          vertical tick mirrors the accent marker on every card header. */}
       {status && (
-        <span
-          className={`hidden sm:flex items-center gap-1.5 pl-2 ml-1 border-l border-ink-line font-mono text-[0.55rem] uppercase tracking-[0.16em] font-bold ${
-            active ? 'text-emerald-300' : 'text-amber-300'
-          }`}
-        >
+        <div className="hidden md:flex items-center gap-2 border-l border-ink-line pl-3 pr-3.5">
           <span
             aria-hidden="true"
-            className={`h-1.5 w-1.5 rounded-full ${dotColour}`}
+            className={`h-6 w-[3px] shrink-0 ${
+              active ? 'bg-emerald-400' : 'bg-amber-400'
+            }`}
           />
-          {active ? 'Active' : 'Onboarding'}
-        </span>
+          <div className="flex flex-col leading-tight">
+            <span className="font-mono text-[0.5rem] uppercase tracking-[0.18em] text-text-dim">
+              Account
+            </span>
+            <span
+              className={`font-mono text-[0.62rem] font-bold uppercase tracking-[0.13em] ${
+                active ? 'text-emerald-300' : 'text-amber-300'
+              }`}
+            >
+              {active ? 'Active' : 'Onboarding'}
+            </span>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -2656,6 +2661,14 @@ function ServicesTab({
   // so a row's row is either present (expanded) or absent (collapsed) — no
   // stale `false` entries to clean up.
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Free-text search across the (often long) service list so a tradie
+  // can jump to a job by name instead of scrolling every trade group.
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(0)
+  // Reset to the first page whenever a search narrows the list.
+  useEffect(() => {
+    setPage(0)
+  }, [query])
 
   function toggleExpand(assemblyId: string) {
     setExpanded((prev) => {
@@ -2771,12 +2784,32 @@ function ServicesTab({
         ? [data.tenant.trade]
         : []
   const showGrouped = tenantTrades.length > 1
+  const q = query.trim().toLowerCase()
+  const searchedServices = q
+    ? data.services.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.description ?? '').toLowerCase().includes(q),
+      )
+    : data.services
+  // Paginate at 10 — the grouping below runs on the page slice so a
+  // long catalogue never grows the page past one screen of rows.
+  const SVC_PAGE_SIZE = 10
+  const svcPageCount = Math.max(
+    1,
+    Math.ceil(searchedServices.length / SVC_PAGE_SIZE),
+  )
+  const svcPage = Math.min(page, svcPageCount - 1)
+  const pagedServices = searchedServices.slice(
+    svcPage * SVC_PAGE_SIZE,
+    svcPage * SVC_PAGE_SIZE + SVC_PAGE_SIZE,
+  )
   const groupedServices: Array<{ trade: string; rows: typeof data.services }> = showGrouped
     ? tenantTrades.map((t) => ({
         trade: t,
-        rows: data.services.filter((s) => s.trade === t),
+        rows: pagedServices.filter((s) => s.trade === t),
       }))
-    : [{ trade: tenantTrades[0] ?? '', rows: data.services }]
+    : [{ trade: tenantTrades[0] ?? '', rows: pagedServices }]
 
   return (
     <div className="space-y-6">
@@ -2841,6 +2874,35 @@ function ServicesTab({
           </div>
         )}
 
+        {/* Search — filters across every trade group so a long
+            catalogue is one keystroke from the row you want. */}
+        {data.services.length > 0 && (
+          <div className="relative mb-4">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-dim"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search services by name…"
+              aria-label="Search services"
+              className="w-full bg-ink-deep border border-ink-line pl-10 pr-3 py-2.5 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft transition-colors"
+            />
+          </div>
+        )}
+
         <div className="space-y-2">
           {data.services.length === 0 ? (
             <div className="bg-amber-950/30 border border-amber-700/50 px-4 py-3">
@@ -2851,8 +2913,14 @@ function ServicesTab({
                 Supabase <span className="font-mono">shared_assemblies</span> table.
               </p>
             </div>
+          ) : searchedServices.length === 0 ? (
+            <p className="py-2 text-sm text-text-dim">
+              No services match “{query.trim()}”.
+            </p>
           ) : (
-            groupedServices.map(({ trade: groupTrade, rows }) => (
+            groupedServices
+              .filter((g) => g.rows.length > 0)
+              .map(({ trade: groupTrade, rows }) => (
               <div key={groupTrade || 'all'} className="space-y-2">
                 {showGrouped && (
                   <div className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-accent font-bold pt-3 pb-1">
@@ -2896,14 +2964,22 @@ function ServicesTab({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span
-                          className={`font-mono text-text-dim transition-transform shrink-0 ${
-                            isOpen ? 'rotate-90 text-accent' : ''
-                          }`}
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
                           aria-hidden="true"
+                          className={`shrink-0 transition-transform duration-200 ${
+                            isOpen ? 'rotate-90 text-accent' : 'text-text-dim'
+                          }`}
                         >
-                          ›
-                        </span>
+                          <path d="M9 6l6 6-6 6" />
+                        </svg>
                         <span
                           className={`font-semibold text-sm ${
                             live ? 'text-text-pri' : 'text-text-sec'
@@ -3179,6 +3255,12 @@ function ServicesTab({
             ))
           )}
         </div>
+
+        <Pagination
+          page={svcPage}
+          pageCount={svcPageCount}
+          onPage={setPage}
+        />
 
         {error && (
           <div className="mt-4">
@@ -3713,13 +3795,13 @@ function FormField({
 }) {
   return (
     <label className="block">
-      <span className="block font-mono text-[0.6rem] uppercase tracking-[0.16em] text-text-dim mb-1.5">
+      <span className="mb-1.5 block font-mono text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-text-sec">
         {label}
-        {required && <span className="text-accent ml-1">*</span>}
+        {required && <span className="ml-1 text-accent">*</span>}
       </span>
       {children}
       {hint && (
-        <span className="block mt-1 text-[0.65rem] text-text-dim/80 leading-snug">
+        <span className="mt-1 block text-[0.7rem] leading-snug text-text-dim">
           {hint}
         </span>
       )}
@@ -3756,16 +3838,26 @@ function toNum(v: number | string | null | undefined): number | null {
 // collapsed rows. Increase if real-volume usage shows it's too small.
 const LIST_PAGE_SIZE = 10
 
+type QuoteFilter = 'all' | 'review' | 'sent' | 'paid' | 'inspect'
+
+function quoteMatchesFilter(q: Quote, f: QuoteFilter): boolean {
+  if (f === 'all') return true
+  if (f === 'paid') return !!q.deposit_paid
+  if (f === 'inspect') return !!(q.needs_inspection || q.inspection_required)
+  const s = (q.status ?? 'draft').toLowerCase()
+  if (f === 'sent') return s === 'sent'
+  return ['drafted', 'awaiting_review', 'review', 'draft'].includes(s)
+}
+
 function QuotesTab({ data }: { data: DashboardData }) {
   const isMultiTrade =
     Array.isArray(data.tenant.trades) && data.tenant.trades.length > 1
 
+  const [filter, setFilter] = useState<QuoteFilter>('all')
   const [visible, setVisible] = useState(LIST_PAGE_SIZE)
-  const total = data.quotes.length
-  const visibleQuotes = data.quotes.slice(0, visible)
-  const remaining = Math.max(0, total - visible)
+  const all = data.quotes
 
-  if (total === 0) {
+  if (all.length === 0) {
     return (
       <Card>
         <p className="text-sm text-text-dim">
@@ -3775,27 +3867,82 @@ function QuotesTab({ data }: { data: DashboardData }) {
       </Card>
     )
   }
+
+  const FILTERS: { key: QuoteFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'review', label: 'In review' },
+    { key: 'sent', label: 'Sent' },
+    { key: 'paid', label: 'Deposit paid' },
+    { key: 'inspect', label: 'Inspection' },
+  ]
+  const filtered = all.filter((q) => quoteMatchesFilter(q, filter))
+  const total = filtered.length
+  const visibleQuotes = filtered.slice(0, visible)
+  const remaining = Math.max(0, total - visible)
+
   return (
-    <Card
-      subtitle={`${Math.min(visible, total)} of ${total} shown · click a row to see the scope, tier breakdown, and customer page.`}
-    >
-      <div className="space-y-2">
-        {visibleQuotes.map((q) => (
-          <QuoteCard key={q.id} q={q} isMultiTrade={isMultiTrade} />
-        ))}
+    <div className="space-y-4">
+      {/* Status filter rail — lets a tradie with a long history jump
+          straight to what needs action (in-review) or what converted. */}
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => {
+          const count = all.filter((q) => quoteMatchesFilter(q, f.key)).length
+          const active = filter === f.key
+          return (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => {
+                setFilter(f.key)
+                setVisible(LIST_PAGE_SIZE)
+              }}
+              className={`inline-flex items-center gap-2 border px-3.5 py-2 font-mono text-[0.65rem] font-bold uppercase tracking-[0.14em] transition-colors cursor-pointer ${
+                active
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-ink-line bg-ink-card text-text-dim hover:border-text-dim hover:text-text-pri'
+              }`}
+              aria-pressed={active}
+            >
+              {f.label}
+              <span className={active ? 'text-accent' : 'text-text-sec'}>
+                {count}
+              </span>
+            </button>
+          )
+        })}
       </div>
-      {remaining > 0 && (
-        <div className="mt-6 flex justify-center">
-          <button
-            type="button"
-            onClick={() => setVisible((v) => v + LIST_PAGE_SIZE)}
-            className="inline-flex items-center gap-2 border border-ink-line bg-ink-card hover:bg-ink-deep text-text-pri font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-5 py-3 min-h-[44px] transition-colors cursor-pointer w-full sm:w-auto justify-center"
-          >
-            Load {Math.min(LIST_PAGE_SIZE, remaining)} more · {remaining} left
-          </button>
-        </div>
-      )}
-    </Card>
+
+      <Card
+        subtitle={`${Math.min(visible, total)} of ${total} shown${
+          filter !== 'all' ? ' · filtered' : ''
+        } · click a row to see the scope, tier breakdown, and customer page.`}
+      >
+        {total === 0 ? (
+          <p className="text-sm text-text-dim">
+            No quotes match this filter.
+          </p>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {visibleQuotes.map((q) => (
+                <QuoteCard key={q.id} q={q} isMultiTrade={isMultiTrade} />
+              ))}
+            </div>
+            {remaining > 0 && (
+              <div className="mt-6 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setVisible((v) => v + LIST_PAGE_SIZE)}
+                  className="inline-flex items-center gap-2 border border-ink-line bg-ink-card hover:bg-ink-deep text-text-pri font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold px-5 py-3 min-h-[44px] transition-colors cursor-pointer w-full sm:w-auto justify-center"
+                >
+                  Load {Math.min(LIST_PAGE_SIZE, remaining)} more · {remaining} left
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+    </div>
   )
 }
 
@@ -3919,14 +4066,22 @@ function QuoteCard({ q, isMultiTrade }: { q: Quote; isMultiTrade: boolean }) {
               </div>
             )}
           </div>
-          <span
-            className={`font-mono text-[0.7rem] text-text-dim transition-transform duration-200 ${
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className={`shrink-0 text-text-dim transition-transform duration-200 ${
               expanded ? 'rotate-90' : ''
             }`}
-            aria-hidden="true"
           >
-            ›
-          </span>
+            <path d="M9 6l6 6-6 6" />
+          </svg>
         </div>
       </button>
 
@@ -5125,6 +5280,14 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
   // 'all' or a Category value — narrows the visible list to one category.
   // Filter chips below the header drive this; persisted only in memory.
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  // Free-text search across name / brand / range / supplier so a big
+  // catalogue is one keystroke from the product you want.
+  const [search, setSearch] = useState('')
+  // Pagination — 10 products per page; resets when the filters change.
+  const [catPage, setCatPage] = useState(0)
+  useEffect(() => {
+    setCatPage(0)
+  }, [search, categoryFilter])
 
   const load = useCallback(async () => {
     if (!accessToken) {
@@ -5398,19 +5561,21 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
 
   if (loading) {
     return (
-      <div className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim py-10">
-        Loading catalogue…
-      </div>
+      <Card>
+        <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim">
+          Loading catalogue…
+        </p>
+      </Card>
     )
   }
   if (error) {
     return (
-      <div className="bg-ink-card border-l-2 border-l-warning border-y border-r border-ink-line p-6">
+      <Card>
         <div className="font-mono text-[0.65rem] uppercase tracking-[0.15em] text-warning mb-2">
           Couldn&apos;t load catalogue
         </div>
         <p className="text-sm text-text-sec">{error}</p>
-      </div>
+      </Card>
     )
   }
 
@@ -5422,8 +5587,26 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
   const counts = new Map<string, number>()
   for (const r of list) counts.set(r.category, (counts.get(r.category) ?? 0) + 1)
 
-  const filtered =
-    categoryFilter === 'all' ? list : list.filter((r) => r.category === categoryFilter)
+  const catSearch = search.trim().toLowerCase()
+  const filtered = list.filter((r) => {
+    if (categoryFilter !== 'all' && r.category !== categoryFilter) return false
+    if (catSearch) {
+      const hay = `${r.name} ${r.brand ?? ''} ${r.range_series ?? ''} ${
+        r.supplier ?? ''
+      }`.toLowerCase()
+      if (!hay.includes(catSearch)) return false
+    }
+    return true
+  })
+  // Paginate at 10 — the (trade, category) grouping below runs on the
+  // page slice, so the visible page is always at most 10 products.
+  const CAT_PAGE_SIZE = 10
+  const catPageCount = Math.max(1, Math.ceil(filtered.length / CAT_PAGE_SIZE))
+  const catSafePage = Math.min(catPage, catPageCount - 1)
+  const pagedFiltered = filtered.slice(
+    catSafePage * CAT_PAGE_SIZE,
+    catSafePage * CAT_PAGE_SIZE + CAT_PAGE_SIZE,
+  )
 
   // Group by (trade, category) — same key as before so the visual sections
   // are unchanged, just sorted deterministically by the canonical category
@@ -5444,7 +5627,7 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
     string,
     { trade: string; category: string; items: CatalogueRow[] }
   >()
-  for (const r of filtered) {
+  for (const r of pagedFiltered) {
     const key = `${r.trade}·${r.category}`
     const g = groupMap.get(key) ?? { trade: r.trade, category: r.category, items: [] }
     g.items.push(r)
@@ -5458,18 +5641,13 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
     })
 
   return (
-    <div className="bg-ink-card border border-ink-line p-6 sm:p-7">
+    <Card title="Product catalogue">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="min-w-0">
-          <h2 className="text-text-pri font-extrabold uppercase tracking-tight text-base sm:text-lg">
-            Product catalogue
-          </h2>
-          <p className="mt-1 text-xs text-text-dim leading-snug max-w-xl">
-            Your real branded products and prices. The AI quotes these ahead of generic items and
-            maps brand + range to a tier (e.g. Clipsal Iconic → Better, Clipsal 2000 → Good).
-            Off rows are never offered. {list.length} product{list.length === 1 ? '' : 's'}.
-          </p>
-        </div>
+        <p className="text-xs text-text-dim leading-snug max-w-2xl">
+          Your real branded products and prices. The AI quotes these ahead of generic items and
+          maps brand + range to a tier (e.g. Clipsal Iconic → Better, Clipsal 2000 → Good).
+          Off rows are never offered. {list.length} product{list.length === 1 ? '' : 's'}.
+        </p>
         {viewMode === 'mine' && (
           <button
             type="button"
@@ -5817,7 +5995,34 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
       )}
 
       {list.length > 0 && (
-        <div className="mt-5 flex flex-wrap items-center gap-2">
+        <div className="relative mt-5">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-dim"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by product, brand, range or supplier…"
+            aria-label="Search catalogue"
+            className="w-full bg-ink-deep border border-ink-line pl-10 pr-3 py-2.5 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft transition-colors"
+          />
+        </div>
+      )}
+
+      {list.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim mr-1">
             Filter
           </span>
@@ -5855,13 +6060,32 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
         </p>
       ) : filtered.length === 0 ? (
         <p className="mt-6 text-sm text-text-sec">
-          No products in <span className="text-text-pri">{categoryLabel(categoryFilter)}</span>.{' '}
+          {catSearch ? (
+            <>
+              No products match “{search.trim()}”
+              {categoryFilter !== 'all' && (
+                <> in {categoryLabel(categoryFilter)}</>
+              )}
+              .{' '}
+            </>
+          ) : (
+            <>
+              No products in{' '}
+              <span className="text-text-pri">
+                {categoryLabel(categoryFilter)}
+              </span>
+              .{' '}
+            </>
+          )}
           <button
             type="button"
-            onClick={() => setCategoryFilter('all')}
+            onClick={() => {
+              setCategoryFilter('all')
+              setSearch('')
+            }}
             className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-accent hover:underline cursor-pointer"
           >
-            Show all
+            {catSearch ? 'Clear search' : 'Show all'}
           </button>
         </p>
       ) : (
@@ -5989,9 +6213,14 @@ function CatalogueTab({ accessToken }: { accessToken: string | null }) {
           ))}
         </div>
       )}
+      <Pagination
+        page={catSafePage}
+        pageCount={catPageCount}
+        onPage={setCatPage}
+      />
         </>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -6031,6 +6260,9 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string>('')
+  // Narrows the job picker — typing filters the dropdown options so a
+  // long job list isn't a scroll-hunt.
+  const [jobQuery, setJobQuery] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [forking, setForking] = useState(false)
@@ -6084,6 +6316,11 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
   }, [load])
 
   const selectedAsm = assemblies.find((a) => a.id === selectedId) ?? null
+  const jobPickerList = jobQuery.trim()
+    ? assemblies.filter((a) =>
+        a.name.toLowerCase().includes(jobQuery.trim().toLowerCase()),
+      )
+    : assemblies
   const jobLines = (lines ?? [])
     .filter((l) => l.assembly_id === selectedId)
     .sort((a, b) => a.sort - b.sort)
@@ -6197,47 +6434,83 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
 
   if (loading) {
     return (
-      <div className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim py-10">
-        Loading recipes…
-      </div>
+      <Card>
+        <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim">
+          Loading recipes…
+        </p>
+      </Card>
     )
   }
   if (error) {
     return (
-      <div className="bg-ink-card border-l-2 border-l-warning border-y border-r border-ink-line p-6">
+      <Card>
         <div className="font-mono text-[0.65rem] uppercase tracking-[0.15em] text-warning mb-2">
           Couldn&apos;t load recipes
         </div>
         <p className="text-sm text-text-sec">{error}</p>
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className="bg-ink-card border border-ink-line p-6 sm:p-7">
-      <h2 className="text-text-pri font-extrabold uppercase tracking-tight text-base sm:text-lg">
-        Recipes — your parts list per job
-      </h2>
-      <p className="mt-1 text-xs text-text-dim leading-snug max-w-xl">
+    <Card title="Recipes — your parts list per job">
+      <p className="text-xs text-text-dim leading-snug max-w-2xl">
         Define the parts a job always needs so the same job is quoted the same way every time.
-        These are <strong>yours</strong> — editing them never affects other tradies. A job with
-        no recipe here, you can start from our baseline and edit it.
+        These are{' '}
+        <strong className="font-semibold text-text-sec">yours</strong> — editing them never
+        affects other tradies. For a job with no recipe here, you can start from our baseline and
+        edit it.
       </p>
 
-      <div className="mt-5 flex flex-col gap-1 max-w-md">
-        <span className="font-mono text-[0.6rem] uppercase tracking-[0.15em] text-text-dim">Job</span>
+      <div className="mt-5 flex max-w-md flex-col gap-1.5">
+        <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-text-sec">
+          Job
+        </span>
+        <div className="relative">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-dim"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.3-4.3" />
+          </svg>
+          <input
+            type="search"
+            value={jobQuery}
+            onChange={(e) => setJobQuery(e.target.value)}
+            placeholder="Search jobs…"
+            aria-label="Search jobs"
+            className="w-full bg-ink-deep border border-ink-line pl-10 pr-3 py-2 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft transition-colors"
+          />
+        </div>
         <select
           value={selectedId}
           onChange={(e) => setSelectedId(e.target.value)}
-          className="bg-ink-deep border border-ink-line px-3 py-2 text-sm text-text-pri"
+          aria-label="Select a job to edit its recipe"
+          className="bg-ink-deep border border-ink-line px-3.5 py-2.5 text-sm text-text-pri focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft transition-colors"
         >
           {assemblies.length === 0 && <option value="">No jobs available</option>}
-          {assemblies.map((a) => (
+          {jobPickerList.length === 0 && (
+            <option value="">No jobs match “{jobQuery.trim()}”</option>
+          )}
+          {jobPickerList.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name} ({a.trade})
             </option>
           ))}
         </select>
+        {jobQuery.trim() && assemblies.length > 0 && (
+          <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-text-dim">
+            {jobPickerList.length} of {assemblies.length} jobs
+          </span>
+        )}
       </div>
 
       {selectedAsm && (
@@ -6450,7 +6723,7 @@ function RecipesTab({ accessToken }: { accessToken: string | null }) {
           </form>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -6634,31 +6907,31 @@ function EstimatingTab({ accessToken }: { accessToken: string | null }) {
 
   if (loading) {
     return (
-      <div className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim py-10">
-        Loading estimation breakdown…
-      </div>
+      <Card>
+        <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-text-dim">
+          Loading estimation breakdown…
+        </p>
+      </Card>
     )
   }
   if (error) {
     return (
-      <div className="bg-ink-card border-l-2 border-l-warning border-y border-r border-ink-line p-6">
+      <Card>
         <div className="font-mono text-[0.65rem] uppercase tracking-[0.15em] text-warning mb-2">
           Couldn&apos;t load estimation breakdown
         </div>
         <p className="text-sm text-text-sec">{error}</p>
-      </div>
+      </Card>
     )
   }
 
   const list = jobs ?? []
 
   return (
-    <div className="bg-ink-card border border-ink-line p-6 sm:p-7">
-      <h2 className="text-text-pri font-extrabold uppercase tracking-tight text-base sm:text-lg">
-        How each job is estimated
-      </h2>
-      <p className="mt-1 text-xs text-text-dim leading-snug max-w-xl">
-        For every job, this shows the exact parts the AI quotes — <strong>your own recipe</strong>{' '}
+    <Card title="How each job is estimated">
+      <p className="text-xs text-text-dim leading-snug max-w-2xl">
+        For every job, this shows the exact parts the AI quotes —{' '}
+        <strong className="font-semibold text-text-sec">your own recipe</strong>{' '}
         when you&apos;ve set one, otherwise the standard baseline — plus the labour &amp; markup it
         uses and whether each value is the global default or your override. Each part shows whether
         your catalogue prices it or it falls back to a generic price. Read‑only.
@@ -6857,7 +7130,7 @@ function EstimatingTab({ accessToken }: { accessToken: string | null }) {
           ))}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -8132,13 +8405,31 @@ function ChatCard({ chat, isMultiTrade }: { chat: ChatRow; isMultiTrade: boolean
             )}
           </div>
         </div>
-        <div className="shrink-0 text-right">
-          <div className="font-mono text-xs text-text-dim">
-            {inboundCount} in · {chat.messages.length - inboundCount} out
+        <div className="shrink-0 flex items-center gap-2.5">
+          <div className="text-right">
+            <div className="font-mono text-xs text-text-dim tabular-nums">
+              {inboundCount} in · {chat.messages.length - inboundCount} out
+            </div>
+            <div className="mt-0.5 font-mono text-[0.55rem] uppercase tracking-[0.14em] text-text-dim">
+              {chat.turn_count} turn{chat.turn_count === 1 ? '' : 's'}
+            </div>
           </div>
-          <div className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-text-dim mt-0.5">
-            {expanded ? '− Hide' : '+ Open'}
-          </div>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className={`shrink-0 text-text-dim transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          >
+            <path d="M9 6l6 6-6 6" />
+          </svg>
         </div>
       </button>
 
@@ -8246,6 +8537,46 @@ function formatJobType(j: string | null): string {
 
 // ─── Shared UI primitives ─────────────────────────────────────────
 
+// ── Numbered pagination — 10 per page, used by the long list tabs ──
+function Pagination({
+  page,
+  pageCount,
+  onPage,
+}: {
+  page: number
+  pageCount: number
+  onPage: (p: number) => void
+}) {
+  if (pageCount <= 1) return null
+  const btn =
+    'inline-flex items-center gap-1.5 border border-ink-line bg-ink-card px-3.5 py-2 font-mono text-[0.65rem] font-bold uppercase tracking-[0.14em] text-text-sec transition-colors hover:border-accent/50 hover:text-text-pri disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer'
+  return (
+    <div className="mt-5 flex items-center justify-center gap-3 border-t border-ink-line pt-5">
+      <button
+        type="button"
+        onClick={() => onPage(page - 1)}
+        disabled={page <= 0}
+        className={btn}
+        aria-label="Previous page"
+      >
+        ← Prev
+      </button>
+      <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim tabular-nums">
+        Page {page + 1} of {pageCount}
+      </span>
+      <button
+        type="button"
+        onClick={() => onPage(page + 1)}
+        disabled={page >= pageCount - 1}
+        className={btn}
+        aria-label="Next page"
+      >
+        Next →
+      </button>
+    </div>
+  )
+}
+
 function Card({
   title,
   subtitle,
@@ -8261,14 +8592,26 @@ function Card({
   return (
     <div className="bg-ink-card border border-ink-line">
       {hasHeader && (
-        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-ink-line">
+        <div className="border-b border-ink-line bg-ink-deep/35 px-4 sm:px-6 py-4 sm:py-5">
           {title && (
-            <h2 className="font-extrabold uppercase text-base tracking-[-0.01em] text-text-pri">
-              {title}
-            </h2>
+            <div className="flex items-center gap-2.5">
+              {/* Accent tick — a small, functional brand marker that
+                  gives every card header a finished, deliberate edge. */}
+              <span
+                aria-hidden="true"
+                className="h-4 w-1 shrink-0 bg-accent"
+              />
+              <h2 className="font-extrabold uppercase text-base tracking-[-0.01em] text-text-pri">
+                {title}
+              </h2>
+            </div>
           )}
           {subtitle && (
-            <p className={`text-text-sec text-sm${title ? ' mt-1.5' : ''}`}>
+            <p
+              className={`text-text-sec text-sm${
+                title ? ' mt-2 pl-3.5' : ''
+              }`}
+            >
               {subtitle}
             </p>
           )}
