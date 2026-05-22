@@ -36,6 +36,7 @@ import {
   PhoneCall,
   Copy,
   Check,
+  Banknote,
   type LucideProps,
 } from 'lucide-react'
 import { getBrowserSupabase } from '@/lib/supabase/client'
@@ -66,6 +67,13 @@ type Tenant = {
   status: 'onboarding' | 'active'
   created_at: string
   activated_at: string | null
+  // Stripe Connect (Express) payout-account state — migration 056.
+  // Synced from Stripe's account.updated event by the connect-webhook.
+  stripe_connect_account_id: string | null
+  stripe_connect_charges_enabled: boolean | null
+  stripe_connect_payouts_enabled: boolean | null
+  stripe_connect_details_submitted: boolean | null
+  stripe_connect_onboarded_at: string | null
 }
 
 type Pricing = {
@@ -195,6 +203,7 @@ type DashboardData = {
 type Tab =
   | 'overview'
   | 'account'
+  | 'payouts'
   | 'pricing'
   | 'services'
   | 'catalogue'
@@ -513,6 +522,9 @@ export default function DashboardPage() {
                 onActivateTrade={activateTrade}
               />
             )}
+            {tab === 'payouts' && (
+              <PayoutsTab data={data} accessToken={accessToken} />
+            )}
             {tab === 'pricing' && <PricingTab data={data} onSave={patch} />}
             {tab === 'services' && (
               <ServicesTab
@@ -572,15 +584,15 @@ function Shell({
 }) {
   const showProfile = !!ownerFirstName
   return (
-    <main className="min-h-screen bg-ink-deep text-text-pri flex flex-col">
+    <main className="min-h-screen app-canvas text-text-pri flex flex-col">
       <nav className="border-b border-ink-line bg-ink-deep/90 backdrop-blur-md sticky top-0 z-20">
         <div
-          className={`mx-auto flex items-center justify-between gap-2 sm:gap-4 px-4 sm:px-6 py-3 ${
-            wide ? 'max-w-[88rem]' : 'max-w-7xl'
+          className={`mx-auto flex items-center justify-between gap-2 sm:gap-4 px-4 sm:px-6 py-4 ${
+            wide ? 'max-w-[96rem]' : 'max-w-7xl'
           }`}
         >
           <Link href="/dashboard" className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <span className="grid h-8 w-8 place-items-center bg-accent font-black text-white text-sm shrink-0">
+            <span className="grid h-9 w-9 place-items-center bg-accent font-black text-white text-base shrink-0">
               Q
             </span>
             {/* Brand wordmark hidden on the smallest screens — the
@@ -610,7 +622,7 @@ function Shell({
               type="button"
               onClick={onSignOut}
               aria-label="Sign out"
-              className="inline-flex items-center gap-2 border border-ink-line px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-sec transition-colors cursor-pointer hover:border-text-dim hover:bg-ink-card hover:text-text-pri"
+              className="inline-flex items-center gap-2 self-stretch border border-ink-line px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wider text-text-sec transition-colors cursor-pointer hover:border-text-dim hover:bg-ink-card hover:text-text-pri"
             >
               <LogOut
                 size={16}
@@ -625,7 +637,7 @@ function Shell({
       </nav>
       <div
         className={`flex-1 mx-auto w-full px-4 sm:px-6 py-5 sm:py-6 ${
-          wide ? 'max-w-[88rem]' : 'max-w-5xl py-10'
+          wide ? 'max-w-[96rem]' : 'max-w-5xl py-10'
         }`}
       >
         {children}
@@ -658,7 +670,7 @@ function ProfileChip({
           QuoteMate logo so the identity reads as part of the system. */}
       <span
         aria-hidden="true"
-        className="grid h-8 w-8 shrink-0 place-items-center bg-accent font-mono text-sm font-extrabold text-white"
+        className="grid h-9 w-9 shrink-0 place-items-center bg-accent font-mono text-[0.95rem] font-extrabold text-white"
       >
         {initial}
       </span>
@@ -681,8 +693,10 @@ function ProfileChip({
         <div className="hidden md:flex items-center gap-2 border-l border-ink-line pl-3 pr-3.5">
           <span
             aria-hidden="true"
-            className={`h-6 w-[3px] shrink-0 ${
-              active ? 'bg-emerald-400' : 'bg-amber-400'
+            className={`h-7 w-[3px] shrink-0 ${
+              active
+                ? 'bg-emerald-400 shadow-[0_0_8px_1px_rgba(52,211,153,0.55)] motion-safe:animate-[pulse-soft_2.6s_ease-in-out_infinite]'
+                : 'bg-amber-400'
             }`}
           />
           <div className="flex flex-col leading-tight">
@@ -728,6 +742,7 @@ function buildNav(quoteCount: number): NavItem[] {
     { tab: 'followups', label: 'Follow-ups', icon: PhoneCall },
     { tab: 'chats', label: 'Chats', icon: MessageSquare },
     { tab: 'account', label: 'Account', icon: User },
+    { tab: 'payouts', label: 'Payouts', icon: Banknote },
     { tab: 'pricing', label: 'Pricing', icon: DollarSign },
     { tab: 'services', label: 'Services', icon: Wrench },
     { tab: 'catalogue', label: 'Catalogue', icon: Package },
@@ -743,7 +758,7 @@ const SIDEBAR_GROUPS: { label: string; tabs: Tab[] }[] = [
   { label: 'Daily work', tabs: ['overview', 'quotes', 'followups', 'chats'] },
   {
     label: 'Setup',
-    tabs: ['account', 'pricing', 'services', 'catalogue', 'estimating', 'recipes'],
+    tabs: ['account', 'payouts', 'pricing', 'services', 'catalogue', 'estimating', 'recipes'],
   },
 ]
 
@@ -898,6 +913,10 @@ const TAB_META: Record<
   account: {
     title: 'Account',
     desc: 'Your business identity, trades, and licences — exactly as customers and the regulator see them.',
+  },
+  payouts: {
+    title: 'Payouts',
+    desc: 'Set up the secure account QuoteMate pays your completed-job money into.',
   },
   pricing: {
     title: 'Pricing book',
@@ -1762,6 +1781,186 @@ function AccountTab({
           </button>
         </div>
       </form>
+      </Card>
+    </div>
+  )
+}
+
+// ─── Payouts tab — Stripe Connect (Express) onboarding ───────────
+//
+// Lets a tradie set up (or resume) the Stripe Connect account that
+// QuoteMate pays completed-job money into. Live status comes straight
+// from the tenant row's stripe_connect_* columns (migration 056),
+// kept current by /api/stripe/connect-webhook. The action button
+// POSTs /api/stripe/connect/start and redirects to Stripe-hosted
+// onboarding.
+
+function PayoutsTab({
+  data,
+  accessToken,
+}: {
+  data: DashboardData
+  accessToken: string | null
+}) {
+  const t = data.tenant
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const hasAccount = !!t.stripe_connect_account_id
+  const payoutsReady = !!t.stripe_connect_payouts_enabled
+  const detailsSubmitted = !!t.stripe_connect_details_submitted
+
+  // One headline status, derived from the synced flags:
+  //   not_started — no connected account yet
+  //   incomplete  — account exists, tradie hasn't finished the form
+  //   verifying   — form submitted, Stripe still checking identity/bank
+  //   ready       — payouts_enabled: QuoteMate can pay this tradie
+  const status: 'ready' | 'verifying' | 'incomplete' | 'not_started' =
+    payoutsReady
+      ? 'ready'
+      : hasAccount && detailsSubmitted
+        ? 'verifying'
+        : hasAccount
+          ? 'incomplete'
+          : 'not_started'
+
+  async function startOnboarding() {
+    setErr(null)
+    if (!accessToken) {
+      setErr('Your session expired — refresh the page and sign in again.')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/stripe/connect/start', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      const json = await res.json().catch(() => null)
+      if (res.ok && json?.ok && json.url) {
+        // Hand off to Stripe's hosted onboarding.
+        window.location.href = json.url as string
+        return
+      }
+      if (json?.error === 'provisioning_disabled') {
+        setErr(
+          'Payout setup isn’t switched on yet — QuoteMate is finishing the rollout. Check back shortly.',
+        )
+      } else {
+        setErr(
+          json?.detail ||
+            json?.error ||
+            `Couldn’t start payout setup (HTTP ${res.status}).`,
+        )
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const statusUi = {
+    ready: { dot: 'bg-emerald-400', label: 'Payouts active', tone: 'text-emerald-400' },
+    verifying: { dot: 'bg-amber-400', label: 'Verifying with Stripe', tone: 'text-amber-400' },
+    incomplete: { dot: 'bg-amber-400', label: 'Setup incomplete', tone: 'text-amber-400' },
+    not_started: { dot: 'bg-text-dim', label: 'Not set up', tone: 'text-text-dim' },
+  }[status]
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <div className="space-y-5">
+          {/* Live status line */}
+          <div className="flex items-center gap-2.5">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${statusUi.dot}`}
+              aria-hidden="true"
+            />
+            <span
+              className={`font-mono text-[0.7rem] uppercase tracking-[0.16em] font-bold ${statusUi.tone}`}
+            >
+              {statusUi.label}
+            </span>
+          </div>
+
+          {status === 'ready' && (
+            <p className="text-sm leading-relaxed text-text-sec">
+              You’re all set. When a customer pays for a job, QuoteMate releases
+              your share to your bank account once the job is marked complete.
+            </p>
+          )}
+          {status === 'verifying' && (
+            <p className="text-sm leading-relaxed text-text-sec">
+              Stripe is verifying your identity and bank details. This usually
+              clears within a few minutes — you don’t need to do anything. This
+              page updates once it’s confirmed.
+            </p>
+          )}
+          {status === 'incomplete' && (
+            <p className="text-sm leading-relaxed text-text-sec">
+              You’ve started payout setup but Stripe still needs a few more
+              details before it can pay you. Pick up where you left off below.
+            </p>
+          )}
+          {status === 'not_started' && (
+            <p className="text-sm leading-relaxed text-text-sec">
+              Set up your secure payout account so QuoteMate can pay you for
+              completed jobs. Stripe handles your bank details and identity
+              checks — it takes about 5 minutes.
+            </p>
+          )}
+
+          {err && <ErrorBanner>{err}</ErrorBanner>}
+
+          {status === 'ready' ? (
+            <button
+              type="button"
+              onClick={startOnboarding}
+              disabled={busy}
+              className="inline-flex items-center gap-2 border border-ink-line text-text-sec hover:text-text-pri font-semibold px-5 py-2.5 text-xs uppercase tracking-wider transition-colors disabled:opacity-50"
+            >
+              {busy ? 'Opening Stripe…' : 'Update payout details'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={startOnboarding}
+              disabled={busy}
+              className="inline-flex items-center gap-2 bg-accent hover:bg-accent-press text-white font-semibold px-6 py-3 text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
+            >
+              <Banknote size={16} strokeWidth={2} aria-hidden="true" />
+              {busy
+                ? 'Opening Stripe…'
+                : status === 'not_started'
+                  ? 'Set up payouts'
+                  : 'Continue setup'}
+            </button>
+          )}
+        </div>
+      </Card>
+
+      <Card title="How you get paid">
+        <ul className="space-y-3.5 text-sm leading-relaxed text-text-sec">
+          <li className="flex gap-3">
+            <span className="font-mono text-accent shrink-0">1</span>
+            <span>
+              The customer pays their deposit and final balance through
+              QuoteMate.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="font-mono text-accent shrink-0">2</span>
+            <span>The money is held securely until you mark the job complete.</span>
+          </li>
+          <li className="flex gap-3">
+            <span className="font-mono text-accent shrink-0">3</span>
+            <span>
+              QuoteMate releases your share straight to your bank — a 2%
+              platform fee is kept, the rest is yours.
+            </span>
+          </li>
+        </ul>
       </Card>
     </div>
   )
@@ -8672,6 +8871,8 @@ function tabLabel(t: Tab): string {
       return 'Overview'
     case 'account':
       return 'Account'
+    case 'payouts':
+      return 'Payouts'
     case 'pricing':
       return 'Pricing'
     case 'services':

@@ -18,7 +18,10 @@ import { createClient } from '@supabase/supabase-js'
 import {
   buildPreviewPrompt,
   buildPreviewPromptV2,
+  buildRemovalPrompt,
+  isReplacementJob,
   pickAnchorImagePath,
+  pickAnchorProduct,
   type PromptContext,
   type PromptIntake,
   type PromptQuote,
@@ -28,6 +31,21 @@ import {
 } from './prompts'
 import { resolveProductImage, type ProductImage } from './product-image'
 import { renderVerifyEnabled, verifyRenderMatchesProduct } from './verify'
+import { aspectRatioFromImage } from './image-config'
+import {
+  defectFeedback,
+  judgePreview,
+  verifyLoopEnabled,
+  verifyMaxRetries,
+} from './judge'
+
+// Item 3 — two-pass editing for replacement jobs. Default OFF: when on,
+// a replacement job first gets a removal-only edit (strip the old
+// fitting → clean surface), and the install render uses that cleaned
+// image as its reference. Off → single-pass, identical to before.
+function twoPassEnabled(): boolean {
+  return process.env.PREVIEW_TWO_PASS === '1'
+}
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -129,10 +147,12 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     // to "v2" on a staging or rolling-release deployment, eyeball N
     // generated images against v1 outputs, promote when satisfied.
     const ctx = await loadPromptContext(quoteId, intake as PromptIntake)
-    const promptVersion = (process.env.PREVIEW_PROMPT_VERSION ?? 'v1').toLowerCase()
-    const prompt = promptVersion === 'v2'
-      ? buildPreviewPromptV2(ctx)
-      : buildPreviewPrompt(ctx)
+    // V2 (pruned, XML-structured) is now the default — see prompts.ts.
+    // Set PREVIEW_PROMPT_VERSION=v1 to fall back to the legacy builder.
+    const promptVersion = (process.env.PREVIEW_PROMPT_VERSION ?? 'v2').toLowerCase()
+    const prompt = promptVersion === 'v1'
+      ? buildPreviewPrompt(ctx)
+      : buildPreviewPromptV2(ctx)
     const t0 = Date.now()
     const promptText = `[system v=${promptVersion}]\n${prompt.system}\n\n[user]\n${prompt.user}`
 
@@ -146,16 +166,19 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     }
 
     // Generate ONE preview per uploaded customer photo, in parallel.
-    // Each gets its own Gemini call with that specific photo as the
-    // reference. Result: N customer photos → N edited previews, all
-    // visually consistent (same room from N angles).
+    // Each photo runs the full per-photo pipeline: optional two-pass
+    // removal (Item 3) → render → optional judge→retry loop (Item 2).
+    // Result: N customer photos → N edited previews, all visually
+    // consistent (same room from N angles).
     const results = await Promise.allSettled(
-      photoPaths.map((path, i) => generateOnePreview({
+      photoPaths.map((path, i) => generateOnePreviewPipeline({
         intakeId: intake.id as string,
         sourcePath: path,
         index: i,
         prompt,
         productRef,
+        ctx,
+        quoteId,
       }))
     )
 
@@ -194,7 +217,10 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     // ("here's the exact product you'll get"). Default OFF → not one
     // extra Gemini call, behaviour identical to today. Best-effort:
     // any error never blocks or discards a good render.
-    if (renderVerifyEnabled() && productRef && succeededPaths.length > 0) {
+    // The new judge→retry loop (Item 2) supersedes this WP4 block — when
+    // PREVIEW_VERIFY_LOOP is on, verification already ran per-photo, so
+    // skip the legacy product-only check to avoid double verification.
+    if (renderVerifyEnabled() && !verifyLoopEnabled() && productRef && succeededPaths.length > 0) {
       try {
         const { data: rblob } = await supabase.storage
           .from(BUCKET)
@@ -316,18 +342,36 @@ async function generateOnePreview(opts: {
   index: number
   prompt: SystemUserPrompt
   productRef?: ProductImage | null
-  /** WP4 — extra hard wording appended to the user message on a
-   *  stricter re-render attempt (set only by the verify retry path). */
+  /** WP4 / verify loop — extra hard wording appended to the user
+   *  message on a stricter re-render attempt. */
   extraStrict?: string
+  /** Item 3 — pre-loaded reference bytes (e.g. the cleaned image from
+   *  the two-pass removal step). When set, the storage download is
+   *  skipped and these bytes are used as the reference photo. */
+  sourceBytes?: { base64: string; mime: string }
 }): Promise<string> {
-  // Download the source photo from storage.
-  const { data: blob, error: dlErr } = await supabase.storage
-    .from(BUCKET)
-    .download(opts.sourcePath)
-  if (dlErr || !blob) throw new Error(`could not download reference photo (${opts.sourcePath}): ${dlErr?.message ?? 'no blob'}`)
-  const refBuf = Buffer.from(await blob.arrayBuffer())
-  const refBase64 = refBuf.toString('base64')
-  const refMime = blob.type || 'image/jpeg'
+  // Reference photo bytes — either pre-supplied (two-pass) or fetched.
+  let refBuf: Buffer
+  let refBase64: string
+  let refMime: string
+  if (opts.sourceBytes) {
+    refBase64 = opts.sourceBytes.base64
+    refMime = opts.sourceBytes.mime
+    refBuf = Buffer.from(refBase64, 'base64')
+  } else {
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from(BUCKET)
+      .download(opts.sourcePath)
+    if (dlErr || !blob) throw new Error(`could not download reference photo (${opts.sourcePath}): ${dlErr?.message ?? 'no blob'}`)
+    refBuf = Buffer.from(await blob.arrayBuffer())
+    refBase64 = refBuf.toString('base64')
+    refMime = blob.type || 'image/jpeg'
+  }
+
+  // Item 4 — keep the rendered preview framed like the customer's photo
+  // instead of letting Gemini reframe/crop into its default ratio.
+  // null (unrecognised format) → omit imageConfig, no regression.
+  const aspectRatio = aspectRatioFromImage(refBuf)
 
   // Call Gemini.
   const apiUrl = `${GEMINI_ENDPOINT(GEMINI_MODEL)}?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`
@@ -386,6 +430,9 @@ async function generateOnePreview(opts: {
         // Low temperature — follow the JOB BRIEF tightly, no improv.
         temperature: 0.1,
         response_modalities: ['IMAGE'],
+        // Item 4 — match the customer photo's framing. Omitted when the
+        // source format is unrecognised (→ Gemini's default ratio).
+        ...(aspectRatio ? { image_config: { aspect_ratio: aspectRatio } } : {}),
       },
     }),
   })
@@ -416,6 +463,164 @@ async function generateOnePreview(opts: {
   if (upErr) throw new Error(`storage upload failed: ${upErr.message}`)
 
   return previewPath
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Per-photo pipeline — two-pass removal (Item 3) → render → judge→retry
+// loop (Item 2). Each step is flag-gated and best-effort: with both
+// flags off this is exactly one generateOnePreview call — identical
+// behaviour and cost to before.
+// ════════════════════════════════════════════════════════════════════
+async function generateOnePreviewPipeline(opts: {
+  intakeId: string
+  sourcePath: string
+  index: number
+  prompt: SystemUserPrompt
+  productRef?: ProductImage | null
+  ctx: PromptContext
+  quoteId: string
+}): Promise<string> {
+  // ── Item 3 — two-pass removal for replacement jobs ──────────────────
+  // Strip the existing fitting FIRST so the install render starts from a
+  // clean surface and cannot leave the old fitting in place. Best-effort:
+  // any failure falls back to single-pass on the original photo.
+  let sourceBytes: { base64: string; mime: string } | undefined
+  if (twoPassEnabled() && isReplacementJob(opts.ctx)) {
+    try {
+      const cleaned = await runRemovalPass(opts.sourcePath, opts.ctx)
+      if (cleaned) {
+        sourceBytes = cleaned
+        console.log('[preview] two-pass removal applied', {
+          quoteId: opts.quoteId, index: opts.index,
+        })
+      }
+    } catch (e: any) {
+      console.warn('[preview] two-pass removal failed (non-fatal, single-pass fallback)', {
+        quoteId: opts.quoteId, index: opts.index, error: e?.message ?? String(e),
+      })
+    }
+  }
+
+  // ── Render (pass 2 / only pass) ─────────────────────────────────────
+  let path = await generateOnePreview({
+    intakeId: opts.intakeId,
+    sourcePath: opts.sourcePath,
+    index: opts.index,
+    prompt: opts.prompt,
+    productRef: opts.productRef,
+    sourceBytes,
+  })
+
+  // ── Item 2 — judge→retry loop ───────────────────────────────────────
+  if (!verifyLoopEnabled()) return path
+
+  const expectedCount =
+    (opts.ctx.intake.scope?.item_count && opts.ctx.intake.scope.item_count > 0)
+      ? opts.ctx.intake.scope.item_count
+      : null
+  const productName = pickAnchorProduct(opts.ctx)
+  const isReplacement = isReplacementJob(opts.ctx)
+  const maxRetries = verifyMaxRetries()
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Fetch the rendered bytes to judge. Can't read → keep what we have.
+    let renderedBytes: { base64: string; mime: string }
+    try {
+      const { data: rblob } = await supabase.storage.from(BUCKET).download(path)
+      if (!rblob) break
+      const rbuf = Buffer.from(await rblob.arrayBuffer())
+      renderedBytes = { base64: rbuf.toString('base64'), mime: rblob.type || 'image/png' }
+    } catch {
+      break
+    }
+
+    const judgement = await judgePreview({
+      rendered: renderedBytes,
+      productRef: opts.productRef ?? null,
+      expectedCount,
+      productName,
+      isReplacement,
+    })
+    console.log('[preview] judge verdict', {
+      quoteId: opts.quoteId, index: opts.index, attempt,
+      pass: judgement.pass, countSeen: judgement.countSeen,
+      defects: judgement.defects.slice(0, 4),
+    })
+    if (judgement.pass) break
+    if (attempt === maxRetries) break // retries exhausted — keep best effort
+
+    const feedback = defectFeedback(judgement)
+    if (!feedback) break
+    try {
+      path = await generateOnePreview({
+        intakeId: opts.intakeId,
+        sourcePath: opts.sourcePath,
+        index: opts.index,
+        prompt: opts.prompt,
+        productRef: opts.productRef,
+        sourceBytes,
+        extraStrict: feedback,
+      })
+    } catch (e: any) {
+      console.warn('[preview] judge-retry render failed (non-fatal, keeping prior render)', {
+        quoteId: opts.quoteId, index: opts.index, error: e?.message ?? String(e),
+      })
+      break
+    }
+  }
+
+  return path
+}
+
+// Item 3 — pass 1: remove the existing fitting, returning the cleaned
+// image bytes. Best-effort — returns null on ANY failure so the caller
+// falls back to single-pass. Never throws.
+async function runRemovalPass(
+  sourcePath: string,
+  ctx: PromptContext,
+): Promise<{ base64: string; mime: string } | null> {
+  try {
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from(BUCKET)
+      .download(sourcePath)
+    if (dlErr || !blob) return null
+    const srcBuf = Buffer.from(await blob.arrayBuffer())
+    const aspectRatio = aspectRatioFromImage(srcBuf)
+
+    const removal = buildRemovalPrompt(ctx)
+    const apiUrl = `${GEMINI_ENDPOINT(GEMINI_MODEL)}?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: removal.system }] },
+        contents: [{
+          role: 'user',
+          parts: [
+            { text: removal.user },
+            { inline_data: { mime_type: blob.type || 'image/jpeg', data: srcBuf.toString('base64') } },
+          ],
+        }],
+        generation_config: {
+          temperature: 0.1,
+          response_modalities: ['IMAGE'],
+          ...(aspectRatio ? { image_config: { aspect_ratio: aspectRatio } } : {}),
+        },
+      }),
+    })
+    if (!res.ok) return null
+    const data = await res.json() as GeminiResponse
+    const parts = data.candidates?.[0]?.content?.parts ?? []
+    const imagePart = parts.find(p => p.inline_data?.data || p.inlineData?.data)
+    const inline = imagePart?.inline_data ?? imagePart?.inlineData
+    if (!inline?.data) return null
+    return {
+      base64: inline.data,
+      mime: inline.mime_type ?? inline.mimeType ?? 'image/png',
+    }
+  } catch {
+    return null
+  }
 }
 
 type GeminiInline = {

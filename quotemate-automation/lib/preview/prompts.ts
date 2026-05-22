@@ -259,7 +259,7 @@ function pickAnchorLine(ctx: PromptContext): PromptLineItem | null {
 }
 
 // The headline product NAME (text anchor — unchanged behaviour).
-function pickAnchorProduct(ctx: PromptContext): string | null {
+export function pickAnchorProduct(ctx: PromptContext): string | null {
   return pickAnchorLine(ctx)?.description ?? null
 }
 
@@ -903,6 +903,7 @@ function buildSystemInstructionV2(ctx: PromptContext, args: {
   shot: RenderShot
   subject: string
   scene: string
+  /** Optional extra style line, folded into <must>. */
   style?: string
   extraMust?: string[]
   extraMustNot?: string[]
@@ -912,73 +913,59 @@ function buildSystemInstructionV2(ctx: PromptContext, args: {
     : null
   const anchor = pickAnchorProduct(ctx)
   const anchorDesc = pickAnchorDescription(ctx)
-  const callerName = ctx.intake.caller?.name?.trim() || 'the customer'
   const { plural: jobLabelPlural } = humaniseJobType(ctx.intake.job_type)
+  const isEdit = args.shot.mode === 'edit_customer_photo'
 
+  // ── <must> — only high-signal, concrete instructions. No "count out
+  //    loud", no "self-verify", no "redraft": an image model renders in
+  //    one pass and does not iterate, so reasoning-loop wording from
+  //    text-LLM prompting only dilutes attention. The real verification
+  //    is the judge→retry loop in generate.ts (lib/preview/judge.ts).
   const mustLines = [
-    count !== null ? `- Exactly ${count} ${jobLabelPlural}. Not ${count - 1}, not ${count + 1}.` : null,
-    anchor ? `- Depict the anchor product: ${anchor}. Match brand + style + finish. Do not substitute.` : null,
-    anchorDesc ? `- The anchor product is specifically: "${anchorDesc.slice(0, 300)}". Render the product to match this description.` : null,
-    `- Match every value in <spec> exactly. Use neutral defaults for anything not specified.`,
-    `- Render the install as FULLY COMPLETED — day-of-handover state, no tools / packaging / ladders / mid-install pixels.`,
-    args.shot.mode === 'edit_customer_photo'
-      ? `- EDIT the attached photo, do not generate a lookalike room. Preserve walls, flooring, furniture, perspective, camera angle, ambient lighting exactly. Only the fittings change.`
-      : `- Generate photoreal Australian residential imagery. Neutral walls, blonde-oak flooring, minimal furniture.`,
-    `- Photoreal magazine-quality interior photography.`,
-    `- If a PRODUCT REFERENCE photo is attached (the final, labelled image), replicate THAT exact product — same brand, model, shape, colour, finish. It is the literal product quoted, not a style hint. Never substitute a generic fitting.`,
+    count !== null ? `Render exactly ${count} ${jobLabelPlural} — no more, no fewer.` : null,
+    anchor ? `Install the anchor product: ${anchor}. Match its brand, style, shape and finish exactly — never substitute a generic fitting.` : null,
+    anchorDesc ? `The anchor product is specifically: "${anchorDesc.slice(0, 240)}".` : null,
+    isEdit
+      ? `Edit the attached customer photo. Keep its walls, floor, cabinetry, furniture, decor, perspective, camera angle and lighting pixel-identical — only the fittings change.`
+      : `Generate a photoreal contemporary Australian residential scene: neutral walls, blonde-oak flooring, minimal furniture.`,
+    `Render the install fully completed — day-of-handover state, tidied up.`,
+    `Photoreal, magazine-quality interior photography.`,
+    `If a labelled PRODUCT REFERENCE photo is attached (the final image), replicate that exact product — it is the literal product quoted, not a style hint, and it overrides the generic job-type label.`,
+    args.style ?? null,
     ...(args.extraMust ?? []),
   ].filter((l): l is string => l !== null)
 
   const mustNotLines = [
-    count !== null ? `- ${count - 1} or ${count + 1} fittings. Count must be exact.` : null,
-    `- People, hands, pets, body parts, tradies in frame.`,
-    `- Tools, ladders, packaging, exposed wiring or pipes mid-fit.`,
-    `- Text overlays, captions, brand logos. (The only allowed text is the small "AI PREVIEW" / "AI SAMPLE" watermark named in <scene>.)`,
-    `- Features the customer did not ask for (smart features, IP-rated, premium finishes, dimmable, tri-colour) unless they appear in <spec>.`,
-    `- Cartoon, illustration, 3D-render, or staged-stock-photo aesthetic.`,
-    args.shot.mode === 'edit_customer_photo'
-      ? `- Returning the input photo unchanged. The fitting area MUST visibly differ.`
-      : null,
-    args.shot.mode === 'edit_customer_photo'
-      ? `- Changing wall colour, flooring, furniture, decor, or camera angle from the source photo.`
-      : null,
+    count !== null ? `More or fewer than ${count} fittings.` : `The wrong number of fittings.`,
+    `People, hands, pets, tradies, tools, ladders, packaging, or any mid-install state.`,
+    `Text, captions, annotations or brand logos — except the small watermark named in <scene>.`,
+    `Features not listed in <spec> — no smart/Wi-Fi, dimmable, IP-rated or premium finishes unless specified.`,
+    `Cartoon, illustration, 3D-render or staged-stock-photo aesthetic.`,
+    isEdit ? `Changing the room itself — walls, floor, furniture, decor or camera angle.` : null,
+    isEdit ? `Returning the photo unchanged — the fitting area MUST visibly differ.` : null,
     ...(args.extraMustNot ?? []),
   ].filter((l): l is string => l !== null)
 
   const placement = buildPlacementBlock(ctx)
-  const verifyLines = [
-    count !== null ? `- Count the ${jobLabelPlural} you drew. The total must equal ${count}.` : null,
-    anchor ? `- Confirm the anchor product (${anchor}) is what's depicted, not a generic substitute.` : null,
-    args.shot.mode === 'edit_customer_photo'
-      ? `- Confirm the non-fitting pixels (walls, floor, furniture, angle) match the source photo.`
-      : null,
-    `- Confirm no people, no text, no logos.`,
-    `- Confirm the install reads as COMPLETED (no mid-install pixels).`,
-  ].filter((l): l is string => l !== null)
 
   return [
     `<task>${args.task}</task>`,
     ``,
     buildSpecBlock(ctx, args.shot),
     ``,
-    `<subject>\n${args.subject}\n</subject>`,
+    `<subject>${args.subject}</subject>`,
     ``,
-    `<scene>\n${args.scene}\n</scene>`,
+    `<scene>${args.scene}</scene>`,
     ``,
-    args.style ? `<style>\n${args.style}\n</style>\n` : `<style>\nPhotoreal, magazine-quality interior photography. Contemporary Australian residential aesthetic.\n</style>\n`,
-    `<must>\n${mustLines.join('\n')}\n</must>`,
+    `<must>`,
+    ...mustLines.map(l => `- ${l}`),
+    `</must>`,
     ``,
-    `<must_not>\n${mustNotLines.join('\n')}\n</must_not>`,
-    ``,
-    placement ? placement + '\n' : '',
-    `<context_for_${callerName.toLowerCase().replace(/\s+/g, '_')}>`,
-    ctx.intake.scope?.description
-      ? `Customer's own words (verbatim from SMS): "${ctx.intake.scope.description.slice(0, 400)}"`
-      : `Customer did not provide a free-text description — see <spec> for confirmed preferences.`,
-    `</context_for_${callerName.toLowerCase().replace(/\s+/g, '_')}>`,
-    ``,
-    `<verify_before_emit>\nBefore committing the image, confirm each:\n${verifyLines.join('\n')}\nIf any check fails, redraft. Do not emit a flawed image.\n</verify_before_emit>`,
-  ].filter(l => l !== '').join('\n')
+    `<must_not>`,
+    ...mustNotLines.map(l => `- ${l}`),
+    `</must_not>`,
+    ...(placement ? ['', placement] : []),
+  ].join('\n')
 }
 
 export function buildPreviewPromptV2(ctx: PromptContext): SystemUserPrompt {
@@ -990,15 +977,15 @@ export function buildPreviewPromptV2(ctx: PromptContext): SystemUserPrompt {
   const count = ctx.intake.scope?.item_count ?? null
 
   const subject = anchor
-    ? `${count ?? ''} ${anchor}${count && count > 1 ? '' : ''} installed in ${callerName}'s ${room}. Match the anchor product's exact brand, style, and finish.`.trim()
+    ? `${count ?? ''} ${anchor} installed in ${callerName}'s ${room}. Match the anchor product's exact brand, style and finish.`.trim()
     : `${count ?? ''} ${jobLabelPlural} installed in ${callerName}'s ${room}.`.trim()
 
   const scene = isReplacement
-    ? `${callerName}'s actual ${room}, edited from their attached reference photo. The existing fittings (visible in the source photo) are REMOVED and the new anchor product is installed in their place. Every other pixel — walls, paint colour, flooring, cabinets, furniture, decor, perspective, camera angle, lighting — preserved exactly. Watermark: small "AI PREVIEW" in bottom-right corner.`
-    : `${callerName}'s actual ${room}, edited from their attached reference photo. The new anchor product is added to the appropriate position. Every other pixel preserved exactly from the source photo. Watermark: small "AI PREVIEW" in bottom-right corner.`
+    ? `${callerName}'s actual ${room}, edited from the attached photo. The existing fittings are removed and the new anchor product installed in their place; every other pixel preserved exactly. Watermark: small "AI PREVIEW" bottom-right.`
+    : `${callerName}'s actual ${room}, edited from the attached photo. The new anchor product is added in the appropriate position; every other pixel preserved exactly. Watermark: small "AI PREVIEW" bottom-right.`
 
   const extraMust = isReplacement
-    ? [`- This is a REPLACEMENT job. The output MUST look visibly different from the input photo AT THE FITTING LOCATION. If your output is identical to the input, you have failed.`]
+    ? [`This is a replacement job — remove the existing fitting shown in the photo; the output must look visibly different from the input at the fitting location.`]
     : []
 
   const system = buildSystemInstructionV2(ctx, {
@@ -1010,10 +997,68 @@ export function buildPreviewPromptV2(ctx: PromptContext): SystemUserPrompt {
   })
 
   const user = [
-    `Generate the AI Preview image now using the attached reference photo.`,
+    `Generate the AI Preview now by editing the attached photo.`,
+    `Do not return the photo unchanged, and do not generate a generic room — it must be ${callerName}'s actual space with only the fittings changed.`,
+  ].join('\n')
+
+  return { system, user }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Item 3 — TWO-PASS replacement editing.
+//
+// Single-pass editing fails badly on "replace the existing fitting":
+// the model sees the old fixture in the source photo and treats it as
+// scene to PRESERVE, so it leaves the old one and adds the new one on
+// top (over-count) or quietly keeps the old one. Asking for
+// remove + install + correct-count + correct-product all in one edit
+// is too much for one forward pass.
+//
+// The fix: split into two edits, each with ONE job.
+//   · Pass 1 — buildRemovalPrompt: remove the old fitting, leave a
+//     clean bare surface. The output of pass 1 becomes the reference
+//     photo for pass 2.
+//   · Pass 2 — the normal buildPreviewPromptV2: install the new
+//     product into the now-empty surface. No old fixture to fight.
+//
+// Only used when intake.scope.is_new_install === false (a replacement).
+// New installs skip pass 1 entirely — there is nothing to remove.
+// ════════════════════════════════════════════════════════════════════
+
+/** True when this job replaces an existing fitting (→ needs pass 1). */
+export function isReplacementJob(ctx: PromptContext): boolean {
+  return ctx.intake.scope?.is_new_install === false
+}
+
+/**
+ * Pass-1 prompt: strip the existing fittings out of the customer's
+ * photo, leaving a clean bare surface. Deliberately tiny and
+ * single-purpose — one instruction, no count, no product, no install.
+ */
+export function buildRemovalPrompt(ctx: PromptContext): SystemUserPrompt {
+  const room = detectRoom(ctx.intake.scope?.description) ?? 'space'
+  const { plural: jobLabelPlural } = humaniseJobType(ctx.intake.job_type)
+
+  const system = [
+    `<task>Edit the attached photo of a ${room}: remove the existing ${jobLabelPlural} so the mounting surface is clean and bare, ready for a new fitting to be installed later.</task>`,
     ``,
-    `Run <verify_before_emit> from the system instruction before committing.`,
-    `Do not return the input photo unchanged. Do not return a generic-looking room that isn't ${callerName}'s actual space.`,
+    `<must>`,
+    `- Remove every existing ${jobLabelPlural} visible in the photo.`,
+    `- Leave the mounting surface clean, bare and undamaged — no holes, no scorch marks, no leftover brackets or hardware.`,
+    `- Keep everything else pixel-identical: walls, floor, cabinetry, furniture, decor, perspective, camera angle and lighting.`,
+    `- Photoreal result — it must look like a real photograph of the room with nothing installed in that spot.`,
+    `</must>`,
+    ``,
+    `<must_not>`,
+    `- Installing, adding or drawing any new fitting — this step ONLY removes.`,
+    `- People, text, captions, logos, tools or packaging.`,
+    `- Changing the room itself in any other way.`,
+    `</must_not>`,
+  ].join('\n')
+
+  const user = [
+    `Remove the existing ${jobLabelPlural} from the attached photo and leave a clean, bare surface.`,
+    `Do not install anything new — removal only.`,
   ].join('\n')
 
   return { system, user }

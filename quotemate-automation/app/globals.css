@@ -7,11 +7,13 @@
    ════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ─── INK / SURFACE (dark canvas) ───────────────────────── */
-  --ink-deep:     #0A1628;
-  --ink:          #131C2D;
-  --ink-card:     #1A2332;
-  --ink-line:     #2A3548;
+  /* ─── INK / SURFACE (dark canvas — 2026 deep slate-navy) ────
+     A deep, slate-tinted navy scale. Kept dark so the canvas reads
+     rich; cards and borders still lift clearly above the base. */
+  --ink-deep:     #0E1622;   /* page background — primary canvas */
+  --ink:          #141C29;   /* secondary surface */
+  --ink-card:     #1B2433;   /* card / panel */
+  --ink-line:     #2D3A4F;   /* subtle border on dark */
 
   /* ─── ACCENT (the Maintain orange) ──────────────────────── */
   --accent:       #FF5A1F;
@@ -58,6 +60,22 @@ body {
 }
 
 /* ════════════════════════════════════════════════════════════════════
+   App canvas — a subtle slate-navy gradient: a soft lift across the top
+   of the viewport fading into the flat --ink-deep base by ~520px down.
+   Gives full-page wrappers the depth of the brand reference instead of
+   a flat fill. Applied to the dashboard shell (and any full-page wrap).
+   ════════════════════════════════════════════════════════════════════ */
+.app-canvas {
+  background-color: var(--ink-deep);
+  background-image: radial-gradient(
+    1100px 520px at 50% 0,
+    #233048 0%,
+    rgba(35, 48, 72, 0) 72%
+  );
+  background-repeat: no-repeat;
+}
+
+/* ════════════════════════════════════════════════════════════════════
    Motion. CSS-only entrance animations used by the dashboard. Two
    primitives — fade-up for primary content, fade-in for subordinate
    panels — that we apply via Tailwind arbitrary-value class names
@@ -81,6 +99,13 @@ body {
 @keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* Soft breathe — used on the live account-status indicator in the
+   dashboard nav so an "active" account reads as a live signal. */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
 }
 
 @media (prefers-reduced-motion: reduce) {

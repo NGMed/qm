@@ -21,7 +21,7 @@ export default function Home() {
       {/* ═══════════════ HERO ═══════════════ */}
       <section className="relative overflow-hidden border-b border-ink-line">
         <Topography />
-        <div className="relative z-10 mx-auto grid max-w-7xl gap-12 px-6 py-20 md:py-28 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
+        <div className="relative z-10 mx-auto grid max-w-[88rem] gap-12 px-6 py-20 md:py-28 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
           <div className="motion-safe:animate-[fade-up_260ms_ease-out_both]">
             <Eyebrow>AI receptionist · AU tradies · v5 live</Eyebrow>
             <h1 className="mt-6 font-extrabold uppercase leading-[0.95] tracking-[-0.04em] text-[clamp(2.6rem,6.5vw,5.5rem)] [overflow-wrap:anywhere]">
@@ -54,7 +54,7 @@ export default function Home() {
 
       {/* ═══════════════ HOW IT WORKS (numbered cards) ═══════════════ */}
       <section id="how" className="border-b border-ink-line">
-        <div className="mx-auto max-w-7xl px-6 py-24 md:py-32">
+        <div className="mx-auto max-w-[88rem] px-6 py-24 md:py-32">
           <div className="max-w-3xl">
             <Eyebrow>How it works</Eyebrow>
             <h2 className="mt-3 font-extrabold uppercase leading-[1] tracking-[-0.035em] text-[clamp(2rem,4vw,3.25rem)]">
@@ -87,7 +87,7 @@ export default function Home() {
 
       {/* ═══════════════ TRADES + SCOPE ═══════════════ */}
       <section id="scope" className="border-b border-ink-line">
-        <div className="mx-auto max-w-7xl px-6 py-24 md:py-32">
+        <div className="mx-auto max-w-[88rem] px-6 py-24 md:py-32">
           <div className="max-w-3xl">
             <Eyebrow>What it quotes</Eyebrow>
             <h2 className="mt-3 font-extrabold uppercase leading-[1] tracking-[-0.035em] text-[clamp(2rem,4vw,3.25rem)]">
@@ -138,7 +138,7 @@ export default function Home() {
 
       {/* ═══════════════ NUMBERS ═══════════════ */}
       <section className="border-b border-ink-line">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-6 gap-y-12 px-6 py-20 md:grid-cols-4">
+        <div className="mx-auto grid max-w-[88rem] grid-cols-2 gap-x-6 gap-y-12 px-6 py-20 md:grid-cols-4">
           <Stat value="< 1 min" label="Per quote drafted" />
           <Stat value="2" label="Trades live" />
           <Stat value="3" label="Tiers per quote" />
@@ -187,7 +187,7 @@ export default function Home() {
 function Nav() {
   return (
     <nav className="sticky top-0 z-50 border-b border-ink-line bg-ink-deep/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+      <div className="mx-auto flex max-w-[88rem] items-center justify-between px-6 py-4">
         <Link href="/" className="flex items-center gap-2.5">
           <span className="grid h-7 w-7 place-items-center bg-accent text-xs font-black text-white">
             Q
@@ -328,7 +328,7 @@ function TierMini({
 function Footer() {
   return (
     <footer>
-      <div className="mx-auto grid max-w-7xl gap-10 px-6 py-16 md:grid-cols-[1.6fr_1fr_1fr]">
+      <div className="mx-auto grid max-w-[88rem] gap-10 px-6 py-16 md:grid-cols-[1.6fr_1fr_1fr]">
         <div>
           <Link href="/" className="flex items-center gap-2.5">
             <span className="grid h-7 w-7 place-items-center bg-accent text-xs font-black text-white">
@@ -360,7 +360,7 @@ function Footer() {
         />
       </div>
       <div className="border-t border-ink-line">
-        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mx-auto flex max-w-[88rem] flex-col gap-2 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
           <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-text-dim">
             © 2026 QuoteMate
           </span>
