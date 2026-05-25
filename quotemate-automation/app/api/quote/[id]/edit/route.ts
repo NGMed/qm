@@ -130,10 +130,14 @@ export async function POST(
   }
 
   // ─── Load + authorise ──────────────────────────────────────
+  // C-1 (2026-05-25) — pull `applied_discount_pct` so the Stripe Session
+  // re-issue below can preserve the early-bird discount the customer
+  // already locked in at booking time. Previously the discount was
+  // silently dropped — customer saw discounted SMS but paid full price.
   const { data: quote } = await supabase
     .from('quotes')
     .select(
-      'id, tenant_id, intake_id, share_token, status, paid_at, selected_tier, good, better, best, stripe_links, total_inc_gst, needs_inspection, inspection_reason, estimated_timeframe, risk_flags',
+      'id, tenant_id, intake_id, share_token, status, paid_at, selected_tier, good, better, best, stripe_links, total_inc_gst, needs_inspection, inspection_reason, estimated_timeframe, risk_flags, applied_discount_pct',
     )
     .eq('id', quoteId)
     .maybeSingle()
@@ -144,6 +148,19 @@ export async function POST(
   if (quote.paid_at) {
     return Response.json(
       { ok: false, error: 'quote_already_paid' },
+      { status: 409 },
+    )
+  }
+  // M-4 (2026-05-25) — inspection quotes are flat $99 with no tier
+  // structure. Editing one was silently producing `total_inc_gst: 0`
+  // because the headline-tier fallback chain falls through to a null tier.
+  if (quote.needs_inspection) {
+    return Response.json(
+      {
+        ok: false,
+        error: 'cannot_edit_inspection_quote',
+        hint: 'Inspection-required quotes are flat $99 — there are no tiers to edit. Re-quote from a new intake instead.',
+      },
       { status: 409 },
     )
   }
@@ -165,7 +182,7 @@ export async function POST(
   const { data: pricingBook } = await supabase
     .from('pricing_book')
     .select(
-      'gst_registered, trade, hourly_rate, apprentice_rate, senior_rate, call_out_minimum, default_markup_pct, min_labour_hours',
+      'gst_registered, trade, hourly_rate, apprentice_rate, senior_rate, call_out_minimum, default_markup_pct, min_labour_hours, after_hours_multiplier',
     )
     .eq('tenant_id', quote.tenant_id)
     .limit(1)
@@ -258,62 +275,72 @@ export async function POST(
   // same gate on ONLY the tiers the tradie actually edited — untouched
   // tiers stay as-is (they were already grounded at draft time).
   //
-  // A pricingBook with hourly_rate set is required — without it the
-  // validator can't grade labour lines. If pricingBook is missing or
-  // malformed (which shouldn't happen on an active tenant — WP1 blocks
-  // draft creation), we skip the gate rather than reject the edit. This
-  // matches the "fail open on missing infra, fail closed on bad data"
-  // pattern used elsewhere.
-  let groundingFailures: ReturnType<typeof validateQuoteGrounding> = { valid: true }
-  const pricingBookForValidation =
-    pricingBook && pricingBook.hourly_rate != null
-      ? ({
-          hourly_rate: pricingBook.hourly_rate as number | string,
-          apprentice_rate: (pricingBook.apprentice_rate ?? pricingBook.hourly_rate) as number | string,
-          senior_rate: pricingBook.senior_rate as number | string | null | undefined,
-          call_out_minimum: (pricingBook.call_out_minimum ?? 0) as number | string,
-          default_markup_pct: (pricingBook.default_markup_pct ?? 28) as number | string,
-          min_labour_hours: pricingBook.min_labour_hours as number | string | undefined,
-        } satisfies PricingBookForValidation)
-      : null
+  // M-1 + M-2 (2026-05-25) — fail CLOSED on misconfigured pricing book.
+  // Pre-fix: if hourly_rate was null we'd silently skip the gate with a
+  // warn log, letting arbitrary prices through. We also defaulted
+  // default_markup_pct to 28% if missing, which validated edits against
+  // a wrong markup band. Both are CONFIG errors masquerading as infra
+  // failures — WP1 (the draft path) blocks them on create, so by the
+  // time an edit lands the row must already be complete. If it isn't,
+  // the right move is a 409 the operator can see, not a silent bypass.
+  if (!pricingBook || pricingBook.hourly_rate == null || pricingBook.default_markup_pct == null) {
+    return Response.json(
+      {
+        ok: false,
+        error: 'pricing_book_misconfigured',
+        hint:
+          'This tenant\'s pricing_book is missing required fields ' +
+          '(hourly_rate, default_markup_pct). Cannot validate edits. ' +
+          'Re-check the Pricing tab in the dashboard.',
+      },
+      { status: 409 },
+    )
+  }
+  const pricingBookForValidation: PricingBookForValidation = {
+    hourly_rate: pricingBook.hourly_rate as number | string,
+    apprentice_rate: (pricingBook.apprentice_rate ?? pricingBook.hourly_rate) as number | string,
+    senior_rate: pricingBook.senior_rate as number | string | null | undefined,
+    call_out_minimum: (pricingBook.call_out_minimum ?? 0) as number | string,
+    default_markup_pct: pricingBook.default_markup_pct as number | string,
+    min_labour_hours: pricingBook.min_labour_hours as number | string | undefined,
+    after_hours_multiplier: pricingBook.after_hours_multiplier as number | string | null | undefined,
+  }
 
-  if (pricingBookForValidation) {
-    try {
-      const trade =
-        (intake?.trade as string | null | undefined) ??
-        (pricingBook?.trade as string | null | undefined) ??
-        null
-      const candidates = await loadCandidatePrices(
-        pricingBookForValidation,
-        trade,
-        quote.tenant_id as string,
-      )
-      // Build a draft-shaped object containing ONLY the tiers the tradie
-      // edited; untouched tiers are nulled out so the validator skips
-      // them. This keeps the gate surgical — an edit to "better" can't
-      // be rejected because "good" stopped grounding after a catalogue
-      // change.
-      const editedDraft = {
-        good: edits.good ? nextTiers.good : null,
-        better: edits.better ? nextTiers.better : null,
-        best: edits.best ? nextTiers.best : null,
-      }
-      groundingFailures = validateQuoteGrounding(
-        editedDraft,
-        pricingBookForValidation,
-        candidates,
-      )
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      console.warn('[quote/edit] grounding revalidation threw — skipping gate', {
-        quoteId,
-        error: msg,
-      })
+  let groundingFailures: ReturnType<typeof validateQuoteGrounding> = { valid: true }
+  try {
+    const trade =
+      (intake?.trade as string | null | undefined) ??
+      (pricingBook?.trade as string | null | undefined) ??
+      null
+    const candidates = await loadCandidatePrices(
+      pricingBookForValidation,
+      trade,
+      quote.tenant_id as string,
+    )
+    // Build a draft-shaped object containing ONLY the tiers the tradie
+    // edited; untouched tiers are nulled out so the validator skips
+    // them. This keeps the gate surgical — an edit to "better" can't
+    // be rejected because "good" stopped grounding after a catalogue
+    // change.
+    const editedDraft = {
+      good: edits.good ? nextTiers.good : null,
+      better: edits.better ? nextTiers.better : null,
+      best: edits.best ? nextTiers.best : null,
     }
-  } else {
-    console.warn('[quote/edit] pricing_book unresolvable — grounding gate skipped', {
+    groundingFailures = validateQuoteGrounding(
+      editedDraft,
+      pricingBookForValidation,
+      candidates,
+    )
+  } catch (e: unknown) {
+    // Genuine INFRA failure (DB unreachable mid-edit). Preserve the
+    // pre-M-1 "fail open on infra" intent — edit proceeds, validator
+    // result stays { valid: true }, warn logged. A misconfigured book
+    // is caught above as 409; this is the strictly-infra path.
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[quote/edit] grounding revalidation threw — skipping gate', {
       quoteId,
-      tenantId: quote.tenant_id,
+      error: msg,
     })
   }
 
@@ -352,6 +379,16 @@ export async function POST(
     process.env.NEXT_PUBLIC_APP_URL ??
     'https://quote-mate-rho.vercel.app'
 
+  // C-1 (2026-05-25) — preserve any early-booking discount the customer
+  // already locked in. `applied_discount_pct` is stamped at booking time
+  // by /api/q/[token]/book; if the tradie edits a tier AFTER the
+  // customer has booked but BEFORE they've paid, the re-issued Session
+  // MUST carry the same discount or the customer gets charged full price.
+  // `clampDiscountPct` inside createCheckoutSessionForTier caps it at the
+  // 15% platform limit and treats 0/null as no-discount (pre-C-1 behaviour
+  // for any quote that wasn't booked yet).
+  const appliedDiscountPct = ((quote.applied_discount_pct as number | null | undefined) ?? 0)
+
   for (const key of changedTiers) {
     const oldUrl = stripeLinks[key]
     if (oldUrl) {
@@ -384,6 +421,7 @@ export async function POST(
       },
       shareToken: quote.share_token as string,
       appUrl,
+      discountPct: appliedDiscountPct,
     })
     if (newUrl) stripeLinks[key] = newUrl
   }
@@ -395,9 +433,16 @@ export async function POST(
     best: nextTiers.best,
     total_inc_gst: newTotalIncGst,
     stripe_links: stripeLinks,
-    // Bump status to 'sent' if the tradie edits a draft — implies they
-    // are taking ownership of the price. Keep other statuses untouched.
-    status: quote.status === 'draft' ? 'sent' : quote.status,
+    // M-3 (2026-05-25) — only bump status when an actual price changed.
+    // A label-only or description-only edit shouldn't transition the
+    // quote from 'draft' to 'sent' (that signals tradie price-ownership
+    // downstream — e.g. follow-up automation treats 'sent' as formally
+    // quoted, vs 'draft' as still-being-fixed). Tradies routinely use
+    // the editor for typo fixes; those should stay 'draft'.
+    status:
+      quote.status === 'draft' && changedTiers.length > 0
+        ? 'sent'
+        : quote.status,
   }
 
   // H-2 — if the tradie forced a save through a failed grounding check,

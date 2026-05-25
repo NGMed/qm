@@ -40,6 +40,13 @@ export type PricingBookForValidation = {
   /** Minimum labour hours per priced tier — enforces "small job allowance".
    *  Optional for back-compat; defaults to 2.0 if not provided. */
   min_labour_hours?: number | string
+  /** P-1 (2026-05-25) — after-hours multiplier. When set, the validator
+   *  ALSO accepts `hourly_rate × after_hours_multiplier` as a valid labour
+   *  rate AND `call_out_minimum × after_hours_multiplier` as a valid call-out
+   *  rate — but ONLY when the line's source or description marks it as
+   *  after-hours, so a standard-hours quote at the inflated rate still
+   *  fails grounding. */
+  after_hours_multiplier?: number | string | null
 }
 
 export type GroundingFailure = {
@@ -199,6 +206,43 @@ export function validateQuoteGrounding(
   const minLabourHours = pricingBook.min_labour_hours != null
     ? n(pricingBook.min_labour_hours)
     : 2.0
+  // P-1 — derived after-hours rates. Both default to null when the multiplier
+  // is unset/invalid (≤0), so the additional accept branches are dormant
+  // unless the tradie has explicitly configured a multiplier.
+  const afterHoursMx =
+    pricingBook.after_hours_multiplier != null && pricingBook.after_hours_multiplier !== ''
+      ? n(pricingBook.after_hours_multiplier)
+      : null
+  const afterHoursHourly =
+    afterHoursMx != null && Number.isFinite(afterHoursMx) && afterHoursMx > 0
+      ? hourly * afterHoursMx
+      : null
+  const afterHoursCallout =
+    afterHoursMx != null && Number.isFinite(afterHoursMx) && afterHoursMx > 0
+      ? callOut * afterHoursMx
+      : null
+
+  // A line item is "tagged after-hours" iff its `source` field explicitly
+  // says so. Standard-hours lines at the inflated rate still fail grounding.
+  //
+  // C-2 (2026-05-25) — dropped the description-side regex. Pre-C-2 the
+  // detector also matched any description containing "after-hours" or
+  // "emergency", which let Opus pass an inflated rate by writing the
+  // word into ANY line description (e.g. "Emergency-capable wiring",
+  // "After-hours capable LED install"). Source-only detection is
+  // unambiguous and the prompts now reliably set `source: "after_hours"`
+  // on the lines that should qualify; the description-side check was
+  // belt-and-braces that turned into a leak.
+  const isAfterHours = (li: any): boolean => {
+    const source = String(li?.source ?? '').toLowerCase().trim()
+    return (
+      source === 'after_hours' ||
+      source === 'after-hours' ||
+      source === 'emergency' ||
+      source === 'emergency_callout' ||
+      source === 'after_hours_callout'
+    )
+  }
 
   const within = (a: number, b: number) => Math.abs(a - b) <= PRICE_TOLERANCE
 
@@ -216,15 +260,22 @@ export function validateQuoteGrounding(
     // Per-tier labour-hours minimum check. Sum every unit='hr' line.
     // If the tier has any line items at all but labour totals below
     // pricing_book.min_labour_hours, fail the tier — Opus has skipped
-    // the small-job-allowance rule.
+    // the small-job-allowance rule. (Unit normalised so 'HR'/'Hr' also count.)
     const labourHours = tier.line_items
-      .filter((li: any) => li?.unit === 'hr')
+      .filter((li: any) => String(li?.unit ?? '').toLowerCase().trim() === 'hr')
       .reduce((sum: number, li: any) => sum + (Number(li?.quantity) || 0), 0)
     if (tier.line_items.length > 0 && labourHours < minLabourHours - 0.05) {
       failures.push({
         tier: tierKey,
         lineIndex: -1,
-        description: '(tier-level labour total)',
+        // L-1.2 (2026-05-25) — distinguish "tier has zero labour at all"
+        // from "tier has labour but below the floor" so operators reading
+        // risk_flags can act on the right cause. Opus generating a tier
+        // with no `hr` lines is a different kind of mistake to forgetting
+        // the floor on a small job.
+        description: labourHours === 0
+          ? '(tier has no labour lines)'
+          : '(tier-level labour total)',
         unit: 'hr',
         unit_price_ex_gst: labourHours,
         expected: `at least ${minLabourHours} hr of labour per tier (got ${labourHours.toFixed(2)})`,
@@ -236,6 +287,11 @@ export function validateQuoteGrounding(
       const price = Number(li?.unit_price_ex_gst)
       const description = String(li?.description ?? '(no description)')
       const unit = String(li?.unit ?? '?')
+      // L-1.1 (2026-05-25) — normalise unit for comparison so 'M', 'METRE',
+      // 'metres', '  lm  ' etc. all behave like 'lm'. `unit` is preserved
+      // verbatim for the failure message so the original spelling is visible
+      // to operators reading risk_flags.
+      const unitNorm = unit.toLowerCase().trim()
 
       if (!Number.isFinite(price)) {
         failures.push({
@@ -249,24 +305,52 @@ export function validateQuoteGrounding(
       let valid = false
       let expected = ''
 
-      if (unit === 'hr') {
+      if (unitNorm === 'hr') {
         // Labour rates: hourly_rate, apprentice_rate, OR senior_rate when
         // configured. No semantic category check — labour lines are
         // intrinsically generic. Adding senior_rate fixes the case where
         // Opus picks the senior tier for the "Best" option and the
         // entire quote was being downgraded for what is the right call.
+        //
+        // P-1 — when the line is explicitly tagged as after-hours AND the
+        // tradie has configured a multiplier, ALSO accept hourly × multiplier.
+        // Standard-hours lines at the inflated rate still fail.
         valid =
           within(price, hourly) ||
           within(price, apprentice) ||
-          (senior !== null && within(price, senior))
+          (senior !== null && within(price, senior)) ||
+          (afterHoursHourly !== null && isAfterHours(li) && within(price, afterHoursHourly))
+        const afterHoursNote =
+          afterHoursHourly !== null
+            ? `, or after-hours hourly ($${afterHoursHourly.toFixed(2)}) when line tagged after-hours`
+            : ''
         expected = senior !== null
-          ? `pricing_book.hourly_rate ($${hourly}), apprentice_rate ($${apprentice}), or senior_rate ($${senior})`
-          : `pricing_book.hourly_rate ($${hourly}) or apprentice_rate ($${apprentice})`
-      } else if (li?.source === 'callout' || (unit === 'each' && within(price, callOut))) {
-        // Call-out — unit is 'each' but price matches call_out_minimum.
-        valid = within(price, callOut)
-        expected = `pricing_book.call_out_minimum ($${callOut})`
-      } else if (unit === 'each' || unit === 'lm' || unit === 'm' || unit === 'metre') {
+          ? `pricing_book.hourly_rate ($${hourly}), apprentice_rate ($${apprentice}), or senior_rate ($${senior})${afterHoursNote}`
+          : `pricing_book.hourly_rate ($${hourly}) or apprentice_rate ($${apprentice})${afterHoursNote}`
+      } else if (
+        li?.source === 'callout' ||
+        (unitNorm === 'each' && within(price, callOut)) ||
+        // P-1 — after-hours callout: accept the inflated price ONLY when the
+        // line is explicitly marked as after-hours/emergency.
+        (afterHoursCallout !== null && unitNorm === 'each' && isAfterHours(li) && within(price, afterHoursCallout))
+      ) {
+        // Call-out — unit is 'each' but price matches call_out_minimum
+        // (or the after-hours variant when tagged).
+        valid =
+          within(price, callOut) ||
+          (afterHoursCallout !== null && isAfterHours(li) && within(price, afterHoursCallout))
+        const afterHoursNote =
+          afterHoursCallout !== null
+            ? `, or after-hours call-out ($${afterHoursCallout.toFixed(2)}) when line tagged after-hours`
+            : ''
+        expected = `pricing_book.call_out_minimum ($${callOut})${afterHoursNote}`
+      } else if (
+        unitNorm === 'each' ||
+        unitNorm === 'lm' ||
+        unitNorm === 'm' ||
+        unitNorm === 'metre' ||
+        unitNorm === 'metres'
+      ) {
         // L-1 (2026-05-25) — 'm' and 'metre' are accepted as aliases for
         // 'lm' so per-metre-priced lines (LED strip, drain rod, copper
         // pipe) don't dump to inspection on the unit check. The price
@@ -300,7 +384,7 @@ export function validateQuoteGrounding(
         }
       } else {
         valid = false
-        expected = `recognised unit (hr / each / lm / m / metre)`
+        expected = `recognised unit (hr / each / lm / m / metre / metres — case-insensitive)`
       }
 
       if (!valid) {

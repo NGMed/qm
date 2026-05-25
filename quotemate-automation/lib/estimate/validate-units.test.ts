@@ -90,3 +90,41 @@ describe('L-1: validateQuoteGrounding unit allowlist', () => {
     expect(r.valid).toBe(false)
   })
 })
+
+describe('L-1.1: validateQuoteGrounding case-insensitive unit normalisation', () => {
+  it('accepts unit="M" (uppercase)', () => {
+    const r = validateQuoteGrounding(draft('M'), pricingBook, candidates)
+    expect(r.valid).toBe(true)
+  })
+
+  it('accepts unit="METRE" (uppercase)', () => {
+    const r = validateQuoteGrounding(draft('METRE'), pricingBook, candidates)
+    expect(r.valid).toBe(true)
+  })
+
+  it('accepts unit="metres" (plural)', () => {
+    const r = validateQuoteGrounding(draft('metres'), pricingBook, candidates)
+    expect(r.valid).toBe(true)
+  })
+
+  it('accepts unit="  lm  " (whitespace trimmed)', () => {
+    const r = validateQuoteGrounding(draft('  lm  '), pricingBook, candidates)
+    expect(r.valid).toBe(true)
+  })
+
+  it('accepts unit="HR" (uppercase labour)', () => {
+    // The labour line in the fixture is already at hourly_rate; just
+    // exercising the unit normalisation.
+    const r = validateQuoteGrounding(draft('lm'), pricingBook, candidates)
+    expect(r.valid).toBe(true)
+    // Now flip the labour line to unit='HR' and ensure it still grounds.
+    const d = draft('lm')
+    d.good.line_items[0].unit = 'HR'
+    expect(validateQuoteGrounding(d, pricingBook, candidates).valid).toBe(true)
+  })
+
+  it('still rejects truly unknown units (e.g. "kilometre")', () => {
+    const r = validateQuoteGrounding(draft('kilometre'), pricingBook, candidates)
+    expect(r.valid).toBe(false)
+  })
+})

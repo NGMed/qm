@@ -9,14 +9,22 @@ export function plumbingSystemPrompt(pricingBook: {
   hourly_rate: number;
   call_out_minimum: number;
   apprentice_rate: number;
+  /** P-2 (2026-05-25) — see electrical-prompt.ts. Optional. */
+  senior_rate?: number | string | null;
   default_markup_pct: number;
   risk_buffer_pct: number;
+  /** P-1 (2026-05-25) — see electrical-prompt.ts. Defaults to 1.5 when null. */
+  after_hours_multiplier?: number | null;
   min_labour_hours?: number | null;
   gst_registered: boolean;
   licence_type: string | null;
   licence_state: string | null;
 }) {
   const minLabourHours = pricingBook.min_labour_hours ?? 1.5;
+  const afterHoursMx = pricingBook.after_hours_multiplier ?? 1.5;
+  const afterHoursHourly = Math.round(pricingBook.hourly_rate * afterHoursMx);
+  const afterHoursCallout = Math.round(pricingBook.call_out_minimum * afterHoursMx);
+  const seniorRateDisplay = pricingBook.senior_rate ?? '(not configured)';
   // Compute every catalogue price at the TRADIE'S configured markup, not
   // a hardcoded 20%. Without this, Peppers (15%) sees $1320 in the prompt
   // when its book actually produces $1265, Opus copies the prompt value
@@ -108,14 +116,22 @@ export function plumbingSystemPrompt(pricingBook: {
     (intake.trade === 'plumbing') and the database carries both
     electrical and plumbing rows. Without the filter you may get
     electrical assemblies and emit a non-sensical quote.
-15. NO EMERGENCY / AFTER-HOURS SURCHARGES — if intake.timing or
-    intake.scope mentions urgency ("emergency", "same-day", "no hot
-    water", "ASAP", "tonight"), DO NOT add an "emergency call-out",
-    "after-hours premium", "urgency surcharge", or any line priced
-    above pricing_book.call_out_minimum ($${pricingBook.call_out_minimum}).
-    Urgency is a scheduling concern, not a pricing concern in v1 —
-    quote at standard rates. The validator will reject any line that
-    looks like a surcharge (the price won't match the catalogue).
+15. AFTER-HOURS POLICY — conditional surcharge.
+    USE after-hours rates ONLY when BOTH of these are true:
+      (a) intake.timing.urgency === 'emergency', AND
+      (b) pricing_book.after_hours_multiplier > 1.0 (configured by tradie).
+    When both conditions hold, follow the CALL-OUT POLICY block below
+    (emergency call-out + after-hours hourly rate, both tagged with
+    source: "callout" / "after_hours"). The validator will accept
+    those inflated rates ONLY because the source tag marks them.
+    OTHERWISE (standard urgency, multiplier ≤ 1.0, or multiplier unset
+    — which is "(not configured)" in the PRICING BOOK section above),
+    quote at the standard hourly_rate ($${pricingBook.hourly_rate}/hr) and
+    call_out_minimum ($${pricingBook.call_out_minimum}). NEVER invent an
+    "emergency call-out", "after-hours premium", or "urgency surcharge"
+    that isn't backed by an explicit after_hours_multiplier in the
+    tradie's pricing book — the validator will reject any unbacked
+    surcharge.
 16. INSTALL-KIT NAMING — when you add a "sundries" / "install kit" /
     "fittings and seals" line, the description MUST reference the
     assembly it derives from by name, in parentheses. Example:
@@ -185,15 +201,17 @@ YOUR INPUT (intake — see lib/intake/schema.ts)
   confidence_reason
 
 PRICING BOOK (passed in)
-  hourly_rate         = ${pricingBook.hourly_rate}        // AU plumber standard $110–$140
-  call_out_minimum    = ${pricingBook.call_out_minimum}   // $100–$180 (absorbed into jobs >$800)
-  apprentice_rate     = ${pricingBook.apprentice_rate}    // $55–$75 if needed
-  default_markup_pct  = ${pricingBook.default_markup_pct} // ONLY this rate is permitted (validator enforces)
-  risk_buffer_pct     = ${pricingBook.risk_buffer_pct}    // 10–20% — apply when risks/unknown access flagged
-  min_labour_hours    = ${minLabourHours}                  // every tier must bill ≥ this many hours of labour
-  gst_registered      = ${pricingBook.gst_registered}
-  licence_type        = ${pricingBook.licence_type ?? '(unset)'}    // QBCC for QLD
-  licence_state       = ${pricingBook.licence_state ?? '(unset)'}
+  hourly_rate              = ${pricingBook.hourly_rate}        // AU plumber standard $110–$140
+  call_out_minimum         = ${pricingBook.call_out_minimum}   // $100–$180 (absorbed into jobs >$800)
+  apprentice_rate          = ${pricingBook.apprentice_rate}    // $55–$75; USE for high-volume repetitive labour (≥3 taps, multi-fitting fit-off) on GOOD tier — split labour 50/50 plumber/apprentice
+  senior_rate              = ${seniorRateDisplay}    // when set, USE for BEST-tier complex installs (in-wall cistern, heat-pump HWS with rebate paperwork, multi-fixture replacement). When "(not configured)", fall back to hourly_rate.
+  default_markup_pct       = ${pricingBook.default_markup_pct} // ONLY this rate is permitted (validator enforces)
+  risk_buffer_pct          = ${pricingBook.risk_buffer_pct}    // 10–20% — apply when risks/unknown access flagged
+  after_hours_multiplier   = ${afterHoursMx}    // applied to hourly_rate + call_out_minimum on emergency / after-hours jobs (see CALL-OUT POLICY)
+  min_labour_hours         = ${minLabourHours}                  // every tier must bill ≥ this many hours of labour
+  gst_registered           = ${pricingBook.gst_registered}
+  licence_type             = ${pricingBook.licence_type ?? '(unset)'}    // QBCC for QLD
+  licence_state            = ${pricingBook.licence_state ?? '(unset)'}
 
 YOUR TOOLS — exact signatures
   lookup_assembly({ query, trade: 'plumbing', supplied_by? })
@@ -479,9 +497,14 @@ CALL-OUT POLICY (plumbing-specific)
   line at ${pricingBook.call_out_minimum} ex-GST, source: "callout"
 - Jobs ≥ $800 → call-out is absorbed into labour, no separate line
 - Emergency / after-hours flagged in intake.timing.urgency === 'emergency' →
-  use an emergency call-out line at 1.5× standard rate
-  (= ${Math.round(pricingBook.call_out_minimum * 1.5)} ex-GST). Reflect this
-  in scope_of_works ("after-hours emergency response").
+  use an emergency call-out line at after_hours_multiplier × standard rate
+  (= ${afterHoursCallout} ex-GST = ${pricingBook.call_out_minimum} × ${afterHoursMx}),
+  source: "after_hours_callout", description: "After-hours emergency call-out". Also
+  bill the diagnostic labour at the after-hours hourly rate of
+  ${afterHoursHourly}/hr (= hourly_rate × ${afterHoursMx}), source: "after_hours",
+  description prefixed "After-hours — …". The validator accepts these
+  inflated rates ONLY when the source/description marks them as after-hours.
+  Reflect this in scope_of_works ("after-hours emergency response").
 
 RISK-BUFFER TRIGGERS (multiply subtotal by 1 + risk_buffer_pct/100 if ANY)
   intake.access.wall_type ∈ {'brick', 'concrete', 'tile'}

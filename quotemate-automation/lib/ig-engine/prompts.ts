@@ -104,6 +104,45 @@ function humaniseJobType(jobType: string): { plural: string; singular: string } 
   return { plural, singular }
 }
 
+// ── Fix #2 — sensible single-item defaults ──────────────────────────
+// Inherently single-item job types: customers rarely state "1" out loud
+// ("fix my hot water" not "1 hot water unit"). For these, fall back to
+// count=1 so the IG prompt still emits a "Render exactly N" line. The
+// count VALUE here is a per-job-type CONFIG default — never a per-customer
+// hard-code. Customer-stated counts always win over these defaults.
+//
+// Excludes variable-count jobs (gas_fitting, bathroom_renovation) and
+// jobs that always go to inspection (switchboard, oven_cooktop,
+// fault_finding) — those don't typically reach the IG path.
+const SINGLE_ITEM_DEFAULT_COUNT: Record<string, number> = {
+  hot_water: 1,
+  blocked_drain: 1,
+  tap_repair: 1,
+  tap_replace: 1,
+  toilet_repair: 1,
+  toilet_replace: 1,
+  burst_pipe: 1,
+  prv_install: 1,
+  ev_charger: 1,
+}
+
+/**
+ * PURE — the count the IG prompt should enforce for a given intake.
+ * Order of preference:
+ *   1. Customer-stated count from the intake JSON (always wins).
+ *   2. Sensible single-item default for this job_type.
+ *   3. null → no count enforcement line in the prompt.
+ */
+export function effectiveItemCount(ctx: PromptContext): number | null {
+  const stated = ctx.intake.scope?.item_count
+  if (typeof stated === 'number' && stated > 0) return stated
+  const jt = ctx.intake.job_type
+  if (jt && SINGLE_ITEM_DEFAULT_COUNT[jt] != null) {
+    return SINGLE_ITEM_DEFAULT_COUNT[jt]
+  }
+  return null
+}
+
 function colorTempHuman(temp?: string | null): string | null {
   if (!temp || temp === 'unknown') return null
   if (/warm/i.test(temp)) return 'warm white (≈2700K–3000K)'
@@ -137,53 +176,64 @@ function humaniseSlot(slot: string): string {
 //
 // Returns null when the count is too small to need positioning (1-2)
 // or the job_type doesn't have a sensible enumerated layout.
-function ordinalPositions(jobType: string, count: number | null): string[] | null {
-  if (count === null || count < 3) return null
+export function ordinalPositions(jobType: string, count: number | null): string[] | null {
+  if (count === null || count < 1) return null
   const n = Math.min(count, 12) // cap at 12 — beyond that, listing positions starts to harm rather than help
 
   const ord = (i: number) =>
     ['FIRST','SECOND','THIRD','FOURTH','FIFTH','SIXTH','SEVENTH','EIGHTH','NINTH','TENTH','ELEVENTH','TWELFTH'][i] ?? `#${i + 1}`
 
-  // Job-type specific layouts. Each returns an array of placement
-  // descriptions, one per item, in plain English Gemini can render.
-  switch (jobType) {
-    case 'downlights':
-    case 'smoke_alarms': {
-      // Even ceiling grid. For 6 downlights = 2 rows × 3, for 8 = 2×4, for 4 = 2×2, etc.
-      const rows = n <= 4 ? 1 : 2
-      const cols = Math.ceil(n / rows)
-      const positions: string[] = []
-      const rowLabels = ['front', 'middle', 'back']
-      const colLabels = ['left', 'centre-left', 'centre', 'centre-right', 'right']
-      for (let i = 0; i < n; i++) {
-        const r = Math.floor(i / cols)
-        const c = i % cols
-        const rowName = rows === 1 ? '' : `${rowLabels[r]}-`
-        const colName = cols >= 4 ? colLabels[c] : (cols === 3 ? ['left','centre','right'][c] : ['left','right'][c])
-        positions.push(`${ord(i)} ${jobType === 'downlights' ? 'downlight' : 'smoke alarm'}: ceiling, ${rowName}${colName}`)
+  // Specialised geometric layouts — only for count ≥ 3 on the proven job
+  // types. For small counts or unlisted job types, fall through to the
+  // generic placement helper below (Fix #3 — adds spatial guidance for
+  // ALL job types instead of just 5).
+  if (n >= 3) {
+    switch (jobType) {
+      case 'downlights':
+      case 'smoke_alarms': {
+        // Even ceiling grid. For 6 downlights = 2 rows × 3, for 8 = 2×4, etc.
+        const rows = n <= 4 ? 1 : 2
+        const cols = Math.ceil(n / rows)
+        const positions: string[] = []
+        const rowLabels = ['front', 'middle', 'back']
+        const colLabels = ['left', 'centre-left', 'centre', 'centre-right', 'right']
+        for (let i = 0; i < n; i++) {
+          const r = Math.floor(i / cols)
+          const c = i % cols
+          const rowName = rows === 1 ? '' : `${rowLabels[r]}-`
+          const colName = cols >= 4 ? colLabels[c] : (cols === 3 ? ['left','centre','right'][c] : ['left','right'][c])
+          positions.push(`${ord(i)} ${jobType === 'downlights' ? 'downlight' : 'smoke alarm'}: ceiling, ${rowName}${colName}`)
+        }
+        return positions
       }
-      return positions
+      case 'power_points':
+        // Along walls, even spacing, ~30cm above skirting.
+        return Array.from({ length: n }, (_, i) =>
+          `${ord(i)} double GPO: position ${i + 1} of ${n} along the wall, ~30cm above skirting, evenly spaced`,
+        )
+      case 'ceiling_fans':
+        return Array.from({ length: n }, (_, i) =>
+          `${ord(i)} ceiling fan: position ${i + 1} of ${n}, one per room area, all visible in frame`,
+        )
+      case 'outdoor_lighting':
+        return Array.from({ length: n }, (_, i) =>
+          `${ord(i)} outdoor light: position ${i + 1} of ${n} along the deck/eaves/outdoor wall, evenly spaced`,
+        )
     }
-    case 'power_points': {
-      // Along walls, even spacing, ~30cm above skirting.
-      return Array.from({ length: n }, (_, i) =>
-        `${ord(i)} double GPO: position ${i + 1} of ${n} along the wall, ~30cm above skirting, evenly spaced`,
-      )
-    }
-    case 'ceiling_fans': {
-      if (n === 1) return [`${ord(0)} ceiling fan: centred on the ceiling`]
-      return Array.from({ length: n }, (_, i) =>
-        `${ord(i)} ceiling fan: position ${i + 1} of ${n}, one per room area, all visible in frame`,
-      )
-    }
-    case 'outdoor_lighting': {
-      return Array.from({ length: n }, (_, i) =>
-        `${ord(i)} outdoor light: position ${i + 1} of ${n} along the deck/eaves/outdoor wall, evenly spaced`,
-      )
-    }
-    default:
-      return null
   }
+
+  // ── Generic fallback — covers small counts AND every unlisted job type.
+  // Replaces the previous "return null" which left the prompt with no
+  // spatial guidance for 11 of 16 job types.
+  const label = humaniseJobType(jobType).singular || 'fitting'
+  if (n === 1) {
+    return [
+      `The ${label}: installed at the existing connection / mounting point shown in the source photo if replacing, or the obvious mounting location if a new install. The fitting must be clearly visible and centred in frame.`,
+    ]
+  }
+  return Array.from({ length: n }, (_, i) =>
+    `${ord(i)} ${label}: position ${i + 1} of ${n}, evenly spaced and clearly visible in frame.`,
+  )
 }
 
 // Anti-drift count block. Wraps the count with multiple reinforcements
@@ -839,9 +889,9 @@ function buildSpecBlock(ctx: PromptContext, shot: RenderShot): string {
   const desc = (intake.scope?.description ?? '').trim()
   const callerName = intake.caller?.name?.trim() || null
   const room = detectRoom(desc)
-  const count = (intake.scope?.item_count && intake.scope.item_count > 0)
-    ? intake.scope.item_count
-    : null
+  // Fix #2 — sensible single-item defaults so plumbing-style intakes
+  // (hot_water etc.) still emit a count enforcement line.
+  const count = effectiveItemCount(ctx)
   const specs = intake.scope?.specs ?? {}
   const access = intake.access ?? {}
   const trade = (intake as { trade?: string }).trade ?? null
@@ -888,9 +938,7 @@ function buildSpecBlock(ctx: PromptContext, shot: RenderShot): string {
 }
 
 function buildPlacementBlock(ctx: PromptContext): string {
-  const count = (ctx.intake.scope?.item_count && ctx.intake.scope.item_count > 0)
-    ? ctx.intake.scope.item_count
-    : null
+  const count = effectiveItemCount(ctx)
   if (count === null) return ''
   const positions = ordinalPositions(ctx.intake.job_type, count)
   if (!positions) return ''
@@ -908,9 +956,7 @@ function buildSystemInstructionV2(ctx: PromptContext, args: {
   extraMust?: string[]
   extraMustNot?: string[]
 }): string {
-  const count = (ctx.intake.scope?.item_count && ctx.intake.scope.item_count > 0)
-    ? ctx.intake.scope.item_count
-    : null
+  const count = effectiveItemCount(ctx)
   const anchor = pickAnchorProduct(ctx)
   const anchorDesc = pickAnchorDescription(ctx)
   const { plural: jobLabelPlural } = humaniseJobType(ctx.intake.job_type)
@@ -974,7 +1020,7 @@ export function buildPreviewPromptV2(ctx: PromptContext): SystemUserPrompt {
   const callerName = ctx.intake.caller?.name?.trim() || 'the customer'
   const isReplacement = ctx.intake.scope?.is_new_install === false
   const anchor = pickAnchorProduct(ctx)
-  const count = ctx.intake.scope?.item_count ?? null
+  const count = effectiveItemCount(ctx)
 
   const subject = anchor
     ? `${count ?? ''} ${anchor} installed in ${callerName}'s ${room}. Match the anchor product's exact brand, style and finish.`.trim()
@@ -1080,84 +1126,81 @@ export type SamplePromptOpts = {
 
 export function buildSamplePrompts(ctx: PromptContext, opts: SamplePromptOpts = {}): SamplePromptSet | null {
   const room = detectRoom(ctx.intake.scope?.description) ?? 'room'
-  const { plural: jobLabelPlural, singular: jobLabelSingular } = humaniseJobType(ctx.intake.job_type)
+  const { plural: jobLabelPlural } = humaniseJobType(ctx.intake.job_type)
   const callerName = ctx.intake.caller?.name?.trim() || null
   const callerLabel = callerName ?? 'the customer'
   const callerPossessive = callerName ? `${callerName}'s` : `the customer's`
   const usingPhoto = opts.usePhotoReference === true
-
-  // Cross-shot consistency directive — included verbatim in all 3
-  // sample contexts so each Gemini call understands it's part of a
-  // coordinated series and must depict the same product.
-  const crossShotConsistency = `  CROSS-IMAGE CONSISTENCY — this is ONE of THREE coordinated sample images for the same quote (WIDE, CLOSE-UP, IN-USE). All three sample images MUST depict the SAME anchor product (named in the ANCHOR PRODUCT block above). Customers view the three side by side; they MUST see ONE consistent product from three different angles, NOT three different products. If the anchor is a wall-faced toilet suite, render a wall-faced toilet suite in all three shots — not close-coupled in one and wall-faced in another. Same product, same style, same finish across the series.`
-
-  // ─── WIDE ───
-  // All three sample shots depict the AFTER state — the job COMPLETED,
-  // fully installed and tidied. See MASTER RULE 8 (FINAL OUTCOME).
-  const wideShot = [
-    `  Series role: WIDE-ANGLE OVERVIEW (image 1 of 3 in this sample series).`,
-    `  A wide-angle view of ${usingPhoto ? `${callerPossessive} ${room} (reference photo attached)` : `a contemporary Australian ${room}`} AFTER the install is FULLY COMPLETED. The entire space is visible and EVERY one of the requested ${jobLabelPlural} is mounted, finished, and ready for use — day-of-handover state. All depicted fittings must be the ANCHOR PRODUCT.`,
-    `  Camera ~3-4 metres back, eye-level, daylight ambient lighting.`,
-    `  No tools, no ladders, no packaging, no exposed wiring or pipes, no tradies in frame — the room looks tidied up after the job is done.`,
-    usingPhoto
-      ? `  Match ${callerPossessive} actual walls, flooring, decor, and palette from the attached photo. Pull back wider than the photo if needed so every fitting fits.`
-      : `  Generic Aussie home aesthetic: neutral walls, blonde-oak flooring, minimal furniture.`,
-    crossShotConsistency,
-    `  Watermark: a small "AI SAMPLE" mark in the bottom-right corner.`,
-  ].join('\n')
-
-  // ─── CLOSE-UP ───
-  const detailShot = [
-    `  Series role: MACRO CLOSE-UP (image 2 of 3 in this sample series).`,
-    `  A macro product-photography close-up of ONE single instance of the ANCHOR PRODUCT — FULLY INSTALLED and finished, exactly as it would look the day after handover. The fitting fills 60-80% of the frame. Camera ~30-50 cm from the fitting. Show face plate, trim, finish, surface texture in detail — exactly matching the anchor product's brand and style.`,
-    `  No tools, no tradie hands, no exposed connections still being made — show the clean, completed install.`,
-    usingPhoto
-      ? `  Background: heavily-blurred bokeh sampled from ${callerPossessive} attached photo (their actual ${room}'s palette and materials). Background must NOT be in focus, and must NOT contain other ${jobLabelPlural}.`
-      : `  Background: blurred ${room} surface, soft bokeh, no other ${jobLabelPlural} visible.`,
-    `  This is NOT a room shot. NOT a wide. ONE ${jobLabelSingular} only — and it MUST be the same product depicted in the WIDE and IN-USE shots.`,
-    crossShotConsistency,
-    `  Watermark: a small "AI SAMPLE" mark in the bottom-right corner.`,
-  ].join('\n')
-
-  // ─── IN-USE / DUSK ───
-  const litShot = [
-    `  Series role: IN-USE / EVENING (image 3 of 3 in this sample series).`,
-    `  ${usingPhoto ? `${callerPossessive.toUpperCase()} ${room.toUpperCase()} AT DUSK (reference photo attached)` : `A CONTEMPORARY AUSTRALIAN ${room.toUpperCase()} AT DUSK`} — the requested ${jobLabelPlural} (matching the ANCHOR PRODUCT) are FULLY INSTALLED and visibly DOING THEIR JOB (illuminated if light fittings; clearly mounted, operational, and being used as intended otherwise). The install is COMPLETED — no tools, no packaging, no tradies. Windows show deep blue/purple twilight outside. Soft cosy interior atmosphere — the room feels lived-in after the install.`,
-    `  Camera ~3-4 metres back, similar framing to a wide shot. Every requested fitting visible in the frame, and it MUST be the same anchor product depicted in the WIDE and CLOSE-UP shots.`,
-    usingPhoto
-      ? `  KEY: this is ${callerPossessive} actual ${room} at evening. Match the photo's walls, floor, furniture, layout, perspective — only the time of day and the new fittings change. ${callerLabel} should recognise their own space.`
-      : `  Generic Aussie home aesthetic at dusk.`,
-    crossShotConsistency,
-    `  Watermark: a small "AI SAMPLE" mark in the bottom-right corner.`,
-  ].join('\n')
-
-  // Tight user message — reinforces the MASTER RULES + CHECKLIST one
-  // last time. Gemini reads system + user in sequence; closing the
-  // user message with explicit verification commands is empirically
-  // the highest-leverage way to keep the model on-spec.
-  const baseUser = [
-    `Generate the AI Sample image now${usingPhoto ? ' using the attached reference photo' : ''}.`,
-    ``,
-    `Before emitting, run the FINAL CHECKLIST from the system instruction:`,
-    `  · count matches exactly`,
-    `  · ANCHOR PRODUCT matches (brand + style)`,
-    `  · view type matches the Series role for this shot`,
-    `  · no extra features the customer did not request`,
-    `  · no people, no text, no logos`,
-    `  · photorealistic Australian residential aesthetic`,
-    `  · final outcome — install FULLY COMPLETED, no tools / packaging / mid-install`,
-    `  · same product as the other two shots in this series`,
-    ``,
-    `If any check fails, redraft. Do not emit a flawed image.`,
-  ].join('\n')
-
-  // Mode is driven by whether a reference photo was loaded by the
-  // caller (samples.ts decides this from intake.photo_paths[0]).
   const mode: RenderShot['mode'] = usingPhoto ? 'edit_customer_photo' : 'text_to_image'
 
+  // Subject is shared across all 3 shots — that's the cross-shot
+  // consistency guarantee, expressed as data rather than prose.
+  const anchor = pickAnchorProduct(ctx)
+  const subject = anchor
+    ? `${anchor} installed in ${callerLabel}'s ${room}.`
+    : `${jobLabelPlural} installed in ${callerLabel}'s ${room}.`
+
+  const consistencyMust =
+    'This is ONE of THREE coordinated sample images (WIDE / CLOSE-UP / IN-USE). All three MUST depict the SAME anchor product — same brand, style, finish — customers view them side by side.'
+
+  // ─── Scenes — short, declarative, V2-ready ──────────────────────────
+  const wideScene = usingPhoto
+    ? `${callerPossessive} ${room} (reference photo attached), edited to show the install fully completed — day-of-handover. Camera ~3–4 m back, eye-level, daylight ambient. Watermark: small "AI SAMPLE" bottom-right.`
+    : `A contemporary Australian ${room}, install fully completed — day-of-handover. Camera ~3–4 m back, eye-level, daylight ambient. Watermark: small "AI SAMPLE" bottom-right.`
+
+  const detailScene = usingPhoto
+    ? `Macro close-up of ONE instance of the anchor product, fully installed; fills 60–80% of the frame. Background: heavily-blurred bokeh sampled from ${callerPossessive} attached photo, no other ${jobLabelPlural} visible. Watermark: small "AI SAMPLE" bottom-right.`
+    : `Macro close-up of ONE instance of the anchor product, fully installed; fills 60–80% of the frame. Background: blurred ${room} bokeh, no other ${jobLabelPlural} visible. Watermark: small "AI SAMPLE" bottom-right.`
+
+  const litScene = usingPhoto
+    ? `${callerPossessive} ${room} at dusk (reference photo attached) — install fully completed, the product visibly doing its job (lit / running). Twilight outside. Watermark: small "AI SAMPLE" bottom-right.`
+    : `A contemporary Australian ${room} at dusk — install fully completed, the product visibly doing its job (lit / running). Twilight outside. Watermark: small "AI SAMPLE" bottom-right.`
+
+  // ─── Tight V2 user message ──────────────────────────────────────────
+  const baseUser = [
+    `Generate the AI Sample image now${usingPhoto ? ' using the attached reference photo' : ''}.`,
+    `Render the install fully completed and depict the SAME anchor product as the other two shots in this series.`,
+  ].join('\n')
+
   return {
-    wide:   { system: buildSystemInstruction(ctx, wideShot,   { role: 'WIDE-ANGLE OVERVIEW', mode }), user: baseUser },
-    detail: { system: buildSystemInstruction(ctx, detailShot, { role: 'MACRO CLOSE-UP',       mode }), user: baseUser },
-    lit:    { system: buildSystemInstruction(ctx, litShot,    { role: 'IN-USE / DUSK',        mode }), user: baseUser },
+    wide: {
+      system: buildSystemInstructionV2(ctx, {
+        task: usingPhoto
+          ? 'Edit the attached photo to show the install fully completed — WIDE-ANGLE OVERVIEW.'
+          : 'Generate a wide-angle photo of the install fully completed.',
+        shot: { role: 'WIDE-ANGLE OVERVIEW', mode },
+        subject,
+        scene: wideScene,
+        extraMust: [consistencyMust],
+      }),
+      user: baseUser,
+    },
+    detail: {
+      system: buildSystemInstructionV2(ctx, {
+        task: usingPhoto
+          ? 'Edit the attached photo to show a MACRO CLOSE-UP of the installed anchor product.'
+          : 'Generate a MACRO CLOSE-UP of the installed anchor product.',
+        shot: { role: 'MACRO CLOSE-UP', mode },
+        subject,
+        scene: detailScene,
+        extraMust: [
+          'ONLY one single instance of the anchor product is visible in this frame — no other fittings.',
+          consistencyMust,
+        ],
+      }),
+      user: baseUser,
+    },
+    lit: {
+      system: buildSystemInstructionV2(ctx, {
+        task: usingPhoto
+          ? 'Edit the attached photo to show the install fully completed and IN USE at dusk.'
+          : 'Generate a photo of the install fully completed and IN USE at dusk.',
+        shot: { role: 'IN-USE / DUSK', mode },
+        subject,
+        scene: litScene,
+        extraMust: [consistencyMust],
+      }),
+      user: baseUser,
+    },
   }
 }

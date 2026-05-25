@@ -20,13 +20,20 @@ import { plumbingSystemPrompt } from './plumbing-prompt'
 // GST-unregistered book with NULL licences + NULL min_labour_hours, and a
 // high-rate book — so every {{placeholder}} and the {{markup}} helper are
 // exercised against real value variety.
+//
+// P-1/P-2 (2026-05-25): books #0 and #3 set the optional senior_rate +
+// after_hours_multiplier so the new prompt sections render against real
+// values; books #1 and #2 leave them null so the "(not configured)" /
+// fallback-to-1.5 paths are also covered.
 const BOOKS: EstimatorPricingBook[] = [
   {
     hourly_rate: 110,
     call_out_minimum: 150,
     apprentice_rate: 65,
+    senior_rate: 165,
     default_markup_pct: 28,
     risk_buffer_pct: 15,
+    after_hours_multiplier: 2,
     min_labour_hours: 2,
     gst_registered: true,
     licence_type: 'NSW electrical contractor licence',
@@ -58,8 +65,10 @@ const BOOKS: EstimatorPricingBook[] = [
     hourly_rate: 135,
     call_out_minimum: 180,
     apprentice_rate: 75,
+    senior_rate: 210,
     default_markup_pct: 35,
     risk_buffer_pct: 20,
+    after_hours_multiplier: 1.75,
     min_labour_hours: 3,
     gst_registered: true,
     licence_type: 'VIC REC',

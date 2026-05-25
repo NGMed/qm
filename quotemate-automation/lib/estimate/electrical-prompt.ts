@@ -11,14 +11,25 @@ export function electricalSystemPrompt(pricingBook: {
   hourly_rate: number;
   call_out_minimum: number;
   apprentice_rate: number;
+  /** P-2 (2026-05-25) — premium-tier labour rate. Optional. When set, Opus
+   *  is allowed to price BEST-tier complex labour at this rate; when null we
+   *  render "(not configured)" so the prompt is honest about its absence. */
+  senior_rate?: number | string | null;
   default_markup_pct: number;
   risk_buffer_pct: number;
+  /** P-1 (2026-05-25) — after-hours / emergency multiplier applied to
+   *  hourly_rate and call_out_minimum. Defaults to 1.5 when null/unset. */
+  after_hours_multiplier?: number | null;
   min_labour_hours?: number | null;
   gst_registered: boolean;
   licence_type: string | null;
   licence_state: string | null;
 }) {
   const minLabourHours = pricingBook.min_labour_hours ?? 2;
+  const afterHoursMx = pricingBook.after_hours_multiplier ?? 1.5;
+  const afterHoursHourly = Math.round(pricingBook.hourly_rate * afterHoursMx);
+  const afterHoursCallout = Math.round(pricingBook.call_out_minimum * afterHoursMx);
+  const seniorRateDisplay = pricingBook.senior_rate ?? '(not configured)';
   return `STRICT GROUNDING — non-negotiable, supersedes every rule below
 1. EVERY line_item.unit_price_ex_gst MUST come from a tool result —
    lookup_assembly, lookup_material, apply_markup, pricing_book.hourly_rate,
@@ -169,15 +180,31 @@ YOUR INPUT (intake — see lib/intake/schema.ts)
   confidence_reason
 
 PRICING BOOK (passed in)
-  hourly_rate         = ${pricingBook.hourly_rate}        // typical AU sparky $90–$130
-  call_out_minimum    = ${pricingBook.call_out_minimum}   // $120–$180
-  apprentice_rate     = ${pricingBook.apprentice_rate}    // $45–$75 if needed
-  default_markup_pct  = ${pricingBook.default_markup_pct} // ONLY this rate is permitted (validator enforces)
-  risk_buffer_pct     = ${pricingBook.risk_buffer_pct}    // 10–20% — apply when risks/unknown access flagged
-  min_labour_hours    = ${minLabourHours}                  // every tier must bill ≥ this many hours of labour
-  gst_registered      = ${pricingBook.gst_registered}
-  licence_type        = ${pricingBook.licence_type ?? '(unset)'}
-  licence_state       = ${pricingBook.licence_state ?? '(unset)'}
+  hourly_rate              = ${pricingBook.hourly_rate}        // typical AU sparky $90–$130
+  call_out_minimum         = ${pricingBook.call_out_minimum}   // $120–$180
+  apprentice_rate          = ${pricingBook.apprentice_rate}    // $45–$75; USE for high-volume repetitive labour (≥5 GPOs, ≥5 downlights, ≥3 fans) on GOOD tier — split labour 50/50 tradie/apprentice
+  senior_rate              = ${seniorRateDisplay}    // when set, USE for BEST-tier complex installs (switchboard-adjacent, multi-circuit, three-phase). When "(not configured)", fall back to hourly_rate.
+  default_markup_pct       = ${pricingBook.default_markup_pct} // ONLY this rate is permitted (validator enforces)
+  risk_buffer_pct          = ${pricingBook.risk_buffer_pct}    // 10–20% — apply when risks/unknown access flagged
+  after_hours_multiplier   = ${afterHoursMx}    // applied to hourly_rate + call_out_minimum on emergency / after-hours jobs (see AFTER-HOURS POLICY)
+  min_labour_hours         = ${minLabourHours}                  // every tier must bill ≥ this many hours of labour
+  gst_registered           = ${pricingBook.gst_registered}
+  licence_type             = ${pricingBook.licence_type ?? '(unset)'}
+  licence_state            = ${pricingBook.licence_state ?? '(unset)'}
+
+AFTER-HOURS POLICY (electrical)
+- If intake.timing.urgency === 'emergency' OR scope/description mentions
+  "tonight", "after-hours", "weekend", "out-of-hours", "ASAP same-day"
+  emergency:
+    Call-out  → use ${afterHoursCallout} ex-GST (= call_out_minimum × ${afterHoursMx}),
+                source: "after_hours_callout", description: "After-hours emergency call-out"
+    Labour    → use ${afterHoursHourly}/hr ex-GST (= hourly_rate × ${afterHoursMx}),
+                source: "after_hours", description prefixed "After-hours — …"
+  Reflect "after-hours emergency response" in scope_of_works. The validator
+  accepts these inflated rates ONLY when the source/description marks them
+  as after-hours; standard-hours lines at these rates would be rejected.
+- For standard-hours jobs, after_hours_multiplier is NOT applied — quote
+  at standard hourly_rate and call_out_minimum.
 
 YOUR TOOLS — exact signatures
   lookup_assembly({ query, trade: 'electrical', color_temp?, dimmable?, smart?, weatherproof?, supplied_by? })

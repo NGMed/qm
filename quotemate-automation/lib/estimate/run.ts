@@ -428,13 +428,28 @@ export async function loadCandidatePrices(
     .from('shared_assemblies')
     .select('*')
 
+  // M-6 (2026-05-25) — DELIBERATE difference from the lookup tools.
+  // The tools filter `enabled=true` / `active=true` so DISABLED rows are
+  // never offered to a NEW quote. But the VALIDATOR's job is different
+  // — it accepts prices that Opus already chose. If a tradie disables a
+  // product seconds after Opus grounded a draft on it, the row vanishes
+  // from the validator's candidate set and the otherwise-valid quote
+  // dumps to a $99 inspection. That race is purely time-based and
+  // operator-visible to no-one.
+  //
+  // The fix: load ALL tenant rows for this trade as candidates, not
+  // just currently-active ones. `always_inspection=true` rows are STILL
+  // excluded because they're a different semantic (services the tradie
+  // explicitly wants to inspect, not "I deactivated this product").
+  // shared_assemblies + shared_materials have no enabled/active flag,
+  // so they remain unchanged.
   const customAssembliesPromise = tenantId
     ? (() => {
         let q = supabase
           .from('tenant_custom_assemblies')
           .select('*') // see assembliesQuery note — deploy-order-safe
           .eq('tenant_id', tenantId)
-          .eq('enabled', true)
+          // .eq('enabled', true) ← REMOVED (M-6). See block comment above.
           .eq('always_inspection', false)
         if (trade) q = q.eq('trade', trade)
         return q
@@ -446,14 +461,20 @@ export async function loadCandidatePrices(
   // 028), so the validator MUST accept prices grounded on them or every
   // branded quote is downgraded to inspection. Absent table (prod pre-028)
   // → supabase-js returns {data:null} (no throw) → [] → behaviour identical
-  // to pre-WP2. always-active filter mirrors the lookup tool's filter.
+  // to pre-WP2.
+  //
+  // M-6 (2026-05-25) — like customAssembliesPromise above, the `active=true`
+  // filter is DELIBERATELY OMITTED here. Deactivating a product is a
+  // tradie-facing UX action; it shouldn't retroactively invalidate a
+  // draft Opus has already grounded on. The lookup tool still filters
+  // active=true so no NEW draft will reach for the deactivated row.
   const tenantCataloguePromise = tenantId
     ? (() => {
         let q = supabase
           .from('tenant_material_catalogue')
           .select('name, category, unit_price_ex_gst, customer_supply_price_ex_gst, active, trade')
           .eq('tenant_id', tenantId)
-          .eq('active', true)
+          // .eq('active', true) ← REMOVED (M-6). See block comment above.
         if (trade) q = q.eq('trade', trade)
         return q
       })()
