@@ -113,6 +113,12 @@ export type StagedRowRecord = {
   validation_status: string
   smoke_status: string
   smoke_reason: string | null
+  /** Citation back to the source PDF for trade-book-extracted rows
+   *  (mig 070). NULL for CSV-uploaded rows. */
+  source_ref: string | null
+  /** mt-filestore-kb document identifier the row was extracted from
+   *  (mig 070). NULL for CSV-uploaded rows. */
+  source_document: string | null
 }
 
 export type BatchRecord = {
@@ -140,7 +146,7 @@ export async function loadBatch(
   const rows = await client
     .from('import_staged_rows')
     .select(
-      'id, target_table, row_class, payload, validation_status, smoke_status, smoke_reason',
+      'id, target_table, row_class, payload, validation_status, smoke_status, smoke_reason, source_ref, source_document',
     )
     .eq('batch_id', batchId)
     .order('created_at', { ascending: true })

@@ -16,6 +16,10 @@ type StagedRow = {
   payload: Record<string, unknown>
   smoke_status?: 'passed' | 'failed' | 'skipped'
   smoke_reason?: string | null
+  // Citation back to the source PDF for trade-book-extracted rows
+  // (migration 070). NULL for CSV-uploaded rows.
+  source_ref?: string | null
+  source_document?: string | null
 }
 type RejectedRow = { line: number; errors: string[] }
 type PreviewCsv = {
@@ -28,6 +32,28 @@ type PreviewCsv = {
 }
 
 type BatchStatus = 'staged' | 'committed' | 'rolled_back'
+
+// ── Trade-book extraction (mt-filestore-kb) ─────────────────────────
+type KbStore = {
+  id: string
+  name: string
+  displayName: string | null
+  state: string | null
+}
+type KbDocument = {
+  name: string
+  displayName: string | null
+  mimeType: string | null
+  state: string | null
+}
+type ExtractResult = {
+  batchId: string
+  stagedServices: number
+  stagedMaterials: number
+  parseErrors: Array<{ index: number; issues: string[] }>
+  modelUsed: string | null
+  sourceDocument: string
+}
 
 // New-trade form shapes — kept as strings so the inputs stay controlled and
 // blank-friendly; parsed + validated in handleUpload.
@@ -288,10 +314,196 @@ export default function AdminLoaderPage() {
   // §8 step 7 — count of NEW services the smoke-test held back.
   const [smokeFailed, setSmokeFailed] = useState(0)
 
+  // ── Trade-book extraction state (mt-filestore-kb pipeline) ─────────
+  // The trade-book section sits alongside the CSV upload as an alternate
+  // input. Operator picks a store from mt-filestore-kb, optionally narrows
+  // to a single document, optionally hints the trade, then clicks Extract.
+  // The extracted rows land in the SAME staging area as a CSV upload, so
+  // steps 02 (preview) + 03 (commit) are identical from there on.
+  const [tbOpen, setTbOpen] = useState(false)
+  const [tbStores, setTbStores] = useState<KbStore[] | null>(null)
+  const [tbStoreId, setTbStoreId] = useState('')
+  const [tbDocuments, setTbDocuments] = useState<KbDocument[] | null>(null)
+  const [tbDocumentName, setTbDocumentName] = useState('')
+  const [tbTrade, setTbTrade] = useState('')
+  const [tbSourceLabel, setTbSourceLabel] = useState('')
+  const [tbLoadingStores, setTbLoadingStores] = useState(false)
+  const [tbLoadingDocs, setTbLoadingDocs] = useState(false)
+  const [tbExtracting, setTbExtracting] = useState(false)
+  const [tbResult, setTbResult] = useState<ExtractResult | null>(null)
+
   const token = useCallback(async () => {
     const { data } = await getBrowserSupabase().auth.getSession()
     return data.session?.access_token ?? null
   }, [])
+
+  // ── Trade-book handlers ────────────────────────────────────────────
+  async function loadTbStores() {
+    setTbStores(null)
+    setTbStoreId('')
+    setTbDocuments(null)
+    setTbDocumentName('')
+    setError(null)
+    setTbLoadingStores(true)
+    try {
+      const t = await token()
+      if (!t) { setError('Session expired — sign in again.'); return }
+      const res = await fetch('/api/admin/loader/trade-book/stores', {
+        headers: { authorization: `Bearer ${t}` },
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.ok) {
+        setError(data?.error ?? `Could not list stores (${res.status})`)
+        return
+      }
+      setTbStores(data.stores as KbStore[])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTbLoadingStores(false)
+    }
+  }
+
+  async function loadTbDocs(storeId: string) {
+    setTbDocuments(null)
+    setTbDocumentName('')
+    setError(null)
+    if (!storeId) return
+    setTbLoadingDocs(true)
+    try {
+      const t = await token()
+      if (!t) { setError('Session expired — sign in again.'); return }
+      const res = await fetch(
+        `/api/admin/loader/trade-book/stores/${encodeURIComponent(storeId)}/documents`,
+        { headers: { authorization: `Bearer ${t}` } },
+      )
+      const data = await res.json()
+      if (!res.ok || !data?.ok) {
+        setError(data?.error ?? `Could not list documents (${res.status})`)
+        return
+      }
+      setTbDocuments(data.documents as KbDocument[])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTbLoadingDocs(false)
+    }
+  }
+
+  async function handleExtract() {
+    setError(null)
+    setInfo(null)
+    setTbResult(null)
+    if (!tbStoreId) {
+      setError('Pick a knowledge-base store first.')
+      return
+    }
+    setTbExtracting(true)
+    try {
+      const t = await token()
+      if (!t) { setError('Session expired — sign in again.'); return }
+      const idempotencyKey = `tb-${tbStoreId}-${Date.now()}`
+      const body: Record<string, unknown> = {
+        idempotencyKey,
+        storeId: tbStoreId,
+      }
+      if (tbTrade.trim()) body.trade = tbTrade.trim()
+      if (tbSourceLabel.trim()) body.sourceDocument = tbSourceLabel.trim()
+      if (tbDocumentName.trim()) {
+        // mt-filestore-kb accepts a metadataFilter to scope to a document.
+        // displayName is the most reliable filter key against indexed docs.
+        body.metadataFilter = `displayName="${tbDocumentName.trim()}"`
+      }
+      const res = await fetch('/api/admin/loader/trade-book/extract', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${t}` },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.ok) {
+        const parseErrCount = Array.isArray(data?.parseErrors) ? data.parseErrors.length : 0
+        setError(
+          (data?.error ?? `Extraction failed (${res.status})`) +
+            (parseErrCount > 0 ? ` · ${parseErrCount} parse error(s)` : ''),
+        )
+        return
+      }
+      const result: ExtractResult = {
+        batchId: data.batchId,
+        stagedServices: Number(data.stagedServices ?? 0),
+        stagedMaterials: Number(data.stagedMaterials ?? 0),
+        parseErrors: Array.isArray(data.parseErrors) ? data.parseErrors : [],
+        modelUsed: data.modelUsed ?? null,
+        sourceDocument: data.sourceDocument ?? tbStoreId,
+      }
+      setTbResult(result)
+      // Chain into the existing preview flow — fetch the batch the same
+      // way the approve/rollback buttons do, and group the flat rows by
+      // target_table to fit the PreviewCsv shape the renderer uses.
+      const previewRes = await fetch(`/api/admin/loader/batch/${result.batchId}`, {
+        headers: { authorization: `Bearer ${t}` },
+      })
+      const previewData = await previewRes.json()
+      if (previewRes.ok && previewData?.ok) {
+        const rows = (previewData.batch?.rows ?? []) as Array<{
+          target_table: string
+          row_class: 'NEW' | 'UPDATE'
+          payload: Record<string, unknown>
+          smoke_status: string
+          smoke_reason: string | null
+          source_ref: string | null
+          source_document: string | null
+        }>
+        const byTable = new Map<string, StagedRow[]>()
+        for (const r of rows) {
+          if (!byTable.has(r.target_table)) byTable.set(r.target_table, [])
+          byTable.get(r.target_table)!.push({
+            row_class: r.row_class,
+            payload: r.payload,
+            smoke_status: r.smoke_status as StagedRow['smoke_status'],
+            smoke_reason: r.smoke_reason,
+            source_ref: r.source_ref,
+            source_document: r.source_document,
+          })
+        }
+        const previewCsvs: PreviewCsv[] = Array.from(byTable.entries()).map(
+          ([target, list]) => ({
+            csv: 'trade-book',
+            target_table: target,
+            summary: {
+              newCount: list.filter((r) => r.row_class === 'NEW').length,
+              updateCount: list.filter((r) => r.row_class === 'UPDATE').length,
+              rejectedCount: 0,
+            },
+            forcedDisabledCount: 0,
+            stagedRows: list,
+            rejected: [],
+          }),
+        )
+        setBatchId(result.batchId)
+        setBatchStatus('staged')
+        setPreview(previewCsvs)
+        setInfo(
+          `Extracted ${result.stagedServices} service row(s) + ${result.stagedMaterials} material row(s)${
+            result.parseErrors.length > 0
+              ? ` · ${result.parseErrors.length} row(s) failed schema validation and were skipped`
+              : ''
+          }`,
+        )
+      } else {
+        // Extract succeeded but preview fetch failed — still surface the batchId.
+        setBatchId(result.batchId)
+        setBatchStatus('staged')
+        setInfo(
+          `Extraction succeeded (batch ${result.batchId}) but preview fetch failed — open the batch from /admin/loader/batches.`,
+        )
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTbExtracting(false)
+    }
+  }
 
   function resetAll() {
     setServicesFile(null)
@@ -839,6 +1051,180 @@ export default function AdminLoaderPage() {
           </StepCard>
         )}
 
+        {/* ── Step 01 (alt) · Extract from a trade book PDF ─────────── */}
+        {!batchId && (
+          <StepCard n="01·b" title="Or extract from a trade book PDF">
+            <p className="text-sm text-text-sec leading-relaxed">
+              Pick a knowledge-base store from mt-filestore-kb and we&apos;ll
+              run a structured-extraction prompt against the indexed PDF.
+              Every service the AI finds lands in the staging area below —
+              same Approve / Roll back flow as a CSV upload, with a
+              citation back to the source PDF on every row.
+            </p>
+            <div className="mt-3 text-xs text-text-dim">
+              <span className="font-mono uppercase tracking-[0.14em]">
+                Upload the PDF first via
+              </span>{' '}
+              <a
+                href="https://mt-filestore-kb-production.up.railway.app/console"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-mono text-accent-soft underline-offset-2 hover:underline"
+              >
+                the mt-filestore-kb console
+              </a>
+              <span className="font-mono uppercase tracking-[0.14em]">
+                {' '}— then come back here.
+              </span>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              {/* Store picker */}
+              <div className="border border-ink-line bg-ink-deep px-4 py-4">
+                <div className="flex items-center justify-between">
+                  <p className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-text-dim">
+                    Knowledge-base store
+                  </p>
+                  <button
+                    type="button"
+                    onClick={loadTbStores}
+                    disabled={tbLoadingStores || tbExtracting}
+                    className="font-mono text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-accent-soft disabled:opacity-40 hover:underline"
+                  >
+                    {tbLoadingStores
+                      ? 'Loading…'
+                      : tbStores
+                        ? '↻ Refresh'
+                        : 'Load stores'}
+                  </button>
+                </div>
+                {tbStores === null ? (
+                  <p className="mt-3 text-xs text-text-dim">
+                    Click <strong>Load stores</strong> to pull the list from mt-filestore-kb.
+                  </p>
+                ) : tbStores.length === 0 ? (
+                  <p className="mt-3 text-xs text-[#FCA5A5]">
+                    No stores found. Create one on the mt-filestore-kb console.
+                  </p>
+                ) : (
+                  <select
+                    value={tbStoreId}
+                    onChange={(e) => {
+                      setTbStoreId(e.target.value)
+                      if (e.target.value) loadTbDocs(e.target.value)
+                      else { setTbDocuments(null); setTbDocumentName('') }
+                    }}
+                    disabled={tbExtracting}
+                    aria-label="Knowledge-base store"
+                    title="Knowledge-base store"
+                    className="mt-3 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri focus:border-accent focus:outline-none"
+                  >
+                    <option value="">— Choose a store —</option>
+                    {tbStores.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.displayName ?? s.id}
+                        {s.state ? ` · ${s.state}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Document picker (optional — narrow to one doc) */}
+              <div className="border border-ink-line bg-ink-deep px-4 py-4">
+                <p className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-text-dim">
+                  Document (optional)
+                </p>
+                {!tbStoreId ? (
+                  <p className="mt-3 text-xs text-text-dim">
+                    Pick a store first.
+                  </p>
+                ) : tbLoadingDocs ? (
+                  <p className="mt-3 text-xs text-text-dim">Loading documents…</p>
+                ) : tbDocuments === null ? (
+                  <p className="mt-3 text-xs text-text-dim">—</p>
+                ) : tbDocuments.length === 0 ? (
+                  <p className="mt-3 text-xs text-[#FCA5A5]">
+                    No documents in this store yet — upload one via the console first.
+                  </p>
+                ) : (
+                  <select
+                    value={tbDocumentName}
+                    onChange={(e) => setTbDocumentName(e.target.value)}
+                    disabled={tbExtracting}
+                    aria-label="Document within store"
+                    title="Document within store"
+                    className="mt-3 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri focus:border-accent focus:outline-none"
+                  >
+                    <option value="">(extract from the whole store)</option>
+                    {tbDocuments.map((d) => (
+                      <option key={d.name} value={d.displayName ?? ''}>
+                        {d.displayName ?? d.name}
+                        {d.mimeType ? ` · ${d.mimeType}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs text-text-dim">
+                  Trade hint (optional)
+                </span>
+                <select
+                  value={tbTrade}
+                  onChange={(e) => setTbTrade(e.target.value)}
+                  disabled={tbExtracting}
+                  className="mt-1 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri focus:border-accent focus:outline-none"
+                >
+                  <option value="">— Let the AI infer —</option>
+                  <option value="electrical">Electrical</option>
+                  <option value="plumbing">Plumbing</option>
+                  <option value="carpentry">Carpentry</option>
+                  <option value="hvac">HVAC</option>
+                  <option value="solar">Solar</option>
+                  <option value="painting">Painting</option>
+                  <option value="locksmith">Locksmith</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-text-dim">
+                  Source label (optional)
+                </span>
+                <input
+                  type="text"
+                  value={tbSourceLabel}
+                  onChange={(e) => setTbSourceLabel(e.target.value)}
+                  placeholder="e.g. Sparky pricing guide 2024"
+                  disabled={tbExtracting}
+                  className="mt-1 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none"
+                />
+                <span className="mt-1 block font-mono text-[0.65rem] text-text-dim">
+                  Shown on each staged row so the operator knows where it came from.
+                </span>
+              </label>
+            </div>
+
+            <button
+              type="button"
+              disabled={tbExtracting || !tbStoreId}
+              onClick={handleExtract}
+              className={`mt-6 ${BTN_PRIMARY}`}
+            >
+              {tbExtracting ? 'Extracting…' : 'Extract & preview'}
+            </button>
+
+            {tbResult && !batchId && (
+              <p className="mt-4 text-sm text-text-sec">
+                Batch <span className="font-mono text-accent">{tbResult.batchId}</span> created.
+                {tbResult.modelUsed ? ` Model: ${tbResult.modelUsed}.` : ''}
+              </p>
+            )}
+          </StepCard>
+        )}
+
         {/* ── Step 02 · Preview ────────────────────────────────────── */}
         {preview && (
           <StepCard n="02" title="Preview the diff">
@@ -930,6 +1316,20 @@ export default function AdminLoaderPage() {
                                       {r.smoke_reason}
                                     </span>
                                   )}
+                                {/* Trade-book citation (mig 070) — shown
+                                    only for trade-book-extracted rows.
+                                    NULL on CSV-uploaded rows. */}
+                                {r.source_ref && (
+                                  <span className="mt-1 block font-mono text-[0.65rem] text-text-dim">
+                                    <span className="text-accent-soft">↳ </span>
+                                    {r.source_ref}
+                                    {r.source_document && (
+                                      <span className="text-text-dim/70">
+                                        {' '}· {r.source_document}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                               </td>
                               <td className="px-3 py-2 font-mono text-text-sec">
                                 {num(r.payload.default_unit_price_ex_gst)}
