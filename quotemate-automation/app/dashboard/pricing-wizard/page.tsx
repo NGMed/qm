@@ -143,12 +143,23 @@ export default function PricingWizardPage() {
           }),
         )
 
+        // /api/tenant/me returns material_preferences as a Record map
+        // (category → brand). Older / hypothetical builds may return an
+        // array of {category, brand} rows — handle both shapes
+        // defensively so a future shape change doesn't crash the wizard
+        // with "object is not iterable".
         const brandsMap: Record<string, string | null> = {}
-        for (const m of (data.material_preferences ?? []) as Array<{
-          category?: string
-          brand?: string | null
-        }>) {
-          if (m.category) brandsMap[m.category] = m.brand ?? null
+        const prefs: unknown = data.material_preferences ?? {}
+        if (Array.isArray(prefs)) {
+          for (const m of prefs as Array<{ category?: string; brand?: string | null }>) {
+            if (m.category) brandsMap[m.category] = m.brand ?? null
+          }
+        } else if (prefs && typeof prefs === 'object') {
+          for (const [category, brand] of Object.entries(
+            prefs as Record<string, string | null>,
+          )) {
+            if (category) brandsMap[category] = (brand as string | null) ?? null
+          }
         }
 
         setLoaded({ tenant, assemblies, pricing, brands: brandsMap })
