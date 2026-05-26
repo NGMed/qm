@@ -475,14 +475,23 @@ the state block lists is a hard error.
 
     WHEN to set request_photo_link=true (ALL of these must be true):
       a. PHOTO LINK STATE = 'pending'  (not yet sent in this convo)
-      b. job_type is one of the easy 5 (downlights / power_points /
-         ceiling_fans / smoke_alarms / outdoor_lighting)
+      b. job_type is one of the auto-quoteable easy types:
+         ELECTRICAL: downlights, power_points, ceiling_fans,
+                     smoke_alarms, outdoor_lighting
+         PLUMBING  : blocked_drain, hot_water, tap_repair, tap_replace,
+                     toilet_repair, toilet_replace
+         Photos help on BOTH trades — downlight ceiling shots, HWS
+         location pics, drain access photos, tap leak shots, etc.
       c. action is NOT 'escalate_inspection'
       d. The customer has answered the QUALIFYING questions for the
-         job_type (count, room, ceiling type, replace-vs-new, colour
-         preference for downlights — or whatever the per-job MUST-ASK
-         list requires). Don't fire on turn 1-2 just because they said
-         "downlights"; wait until the picture's clear.
+         job_type — whatever the per-job MUST-ASK list requires. Common
+         shapes:
+           electrical → count, room, ceiling type, replace-vs-new,
+                        colour preference (downlights)
+           plumbing   → fixture / location / system type, supply or
+                        connection details, capacity (hot_water)
+         Don't fire on turn 1-2 just because they named a job_type;
+         wait until the picture's clear.
 
     The natural moment is the SAME turn where you ask the verification
     handshake question ("Sound right?"). Combine the photo heads-up
@@ -1320,7 +1329,7 @@ function declinedServicesDirective(
 function photoLinkDirective(hint: PhotoLinkHint): string {
   switch (hint) {
     case 'pending':
-      return 'PHOTO LINK STATE: pending — the photo SMS has NOT yet been sent. YOU decide when to fire it. See Rule 10: set request_photo_link=true ONLY when the customer has answered all the qualifying questions for their job (count, room, ceiling, replace-vs-new, colour preference for downlights). Combine with the verification "Sound right?" message and include a heads-up phrase. Do NOT fire on turn 1-2.'
+      return 'PHOTO LINK STATE: pending — the photo SMS has NOT yet been sent. YOU decide when to fire it. See Rule 10: set request_photo_link=true ONLY when the customer has answered all the qualifying questions for their job. Eligible job_types include BOTH electrical easy-5 (downlights, power_points, ceiling_fans, smoke_alarms, outdoor_lighting) AND plumbing easy-types (blocked_drain, hot_water, tap_repair, tap_replace, toilet_repair, toilet_replace). Photos help on both trades — ceiling pics for downlights, location pics for HWS, drain access shots, leaking-tap close-ups, etc. Combine with the verification "Sound right?" message and include a heads-up phrase. Do NOT fire on turn 1-2.'
     case 'already_sent':
       return 'PHOTO LINK STATE: already_sent — the customer received the photo link earlier. DO NOT set request_photo_link=true again, and DO NOT mention the photo link in your reply.'
     case 'not_applicable':

@@ -618,6 +618,19 @@ function Shell({
                 status={tenantStatus ?? null}
               />
             )}
+            {/* Pricing Wizard — guided onboarding for tradies without a
+                trade-book PDF to upload. Sits in the nav so it's reachable
+                from every dashboard view, not just first-time signup. */}
+            <Link
+              href="/dashboard/pricing-wizard"
+              aria-label="Pricing wizard"
+              className="inline-flex items-center gap-2 self-stretch border border-accent/55 bg-accent/10 px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wider text-accent transition-colors hover:border-accent hover:bg-accent/20"
+            >
+              <span className="font-mono text-[0.7rem] tracking-[0.14em]">
+                ★
+              </span>
+              <span className="hidden sm:inline">Pricing wizard</span>
+            </Link>
             <button
               type="button"
               onClick={onSignOut}
