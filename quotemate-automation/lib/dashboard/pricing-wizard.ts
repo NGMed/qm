@@ -197,6 +197,33 @@ export function categoriesForTrades(trades: ReadonlyArray<string>): WizardCatego
   return out
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Step 3 — common brand quick-fill
+// ─────────────────────────────────────────────────────────────────────
+
+/** Common-brand quick-fill suggestions per trade. Used by the wizard's
+ *  Step 3 "Fill all" pill row so a tradie can stamp e.g. "Clipsal" onto
+ *  every electrical category in one click instead of typing it into
+ *  each field. The list stays short on purpose — these are the brands
+ *  Australian sparkies/plumbers reach for first; anything bespoke they
+ *  still type by hand. */
+const COMMON_BRANDS_ELECTRICAL = ['Clipsal', 'HPM', 'Legrand', 'PDL'] as const
+const COMMON_BRANDS_PLUMBING = ['Rheem', 'Rinnai', 'Caroma', 'Dux'] as const
+
+export function commonBrandsForTrades(trades: ReadonlyArray<string>): string[] {
+  const tradeSet = new Set(trades.map((t) => t.toLowerCase()))
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (b: string) => {
+    if (seen.has(b)) return
+    seen.add(b)
+    out.push(b)
+  }
+  if (tradeSet.has('electrical')) COMMON_BRANDS_ELECTRICAL.forEach(push)
+  if (tradeSet.has('plumbing')) COMMON_BRANDS_PLUMBING.forEach(push)
+  return out
+}
+
 /** Step labels — kept in the pure module so the page + tests stay in sync. */
 export const STEP_LABELS = [
   'Your rate card',

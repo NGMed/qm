@@ -338,7 +338,7 @@ function buildCountBlock(jobType: string, count: number | null, jobLabel: string
 //   4. Otherwise pick the first remaining material
 //   5. Return null if no anchor can be derived; the prompt then falls
 //      back to the generic job-type label.
-function pickAnchorLine(ctx: PromptContext): PromptLineItem | null {
+export function pickAnchorLine(ctx: PromptContext): PromptLineItem | null {
   if (!ctx.lineItems || ctx.lineItems.length === 0) return null
   const tier = ctx.quote?.selected_tier ?? 'better'
   const count = ctx.intake.scope?.item_count ?? null

@@ -251,6 +251,49 @@ export function buildTradieDraftNotification(opts: {
   return scrubForGsm7(body)
 }
 
+/**
+ * Mig 078 — tradie review-before-send notification.
+ *
+ * Sent INSTEAD of `buildTradieDraftNotification` when the tenant's
+ * review_policy holds the quote (always_review, or
+ * review_over_threshold with total >= threshold). The customer SMS
+ * does NOT fire on this path — it waits for the tradie to tap the
+ * approve link.
+ *
+ * The two URLs in the body cover the two actions a tradie takes here:
+ *   • approveUrl  — one-tap "send to customer now"
+ *   • editUrl     — open the existing /q/<token> edit overlay first,
+ *                   then approve from there
+ */
+export function buildTradieReviewNotification(opts: {
+  tradieFirstName?: string | null
+  customerName?: string
+  customerPhone?: string
+  jobType: string
+  itemCount?: number
+  totalIncGst: number
+  approveUrl: string
+  editUrl: string
+  policyReason?: string | null
+}): string {
+  const greet = opts.tradieFirstName ? `Hi ${opts.tradieFirstName}` : 'Hi'
+  const who = opts.customerName?.split(' ')[0] || opts.customerPhone || 'a customer'
+  const job = JOB_TYPE_LABEL[opts.jobType] ?? opts.jobType.replace(/_/g, ' ')
+  const qty = opts.itemCount ? `${opts.itemCount} ${job}` : job
+  const total = opts.totalIncGst.toFixed(0)
+  // Short reason chip — "over $500" reads cleaner than the policy slug
+  const reasonChip = opts.policyReason?.startsWith('total_')
+    ? ' (over your threshold)'
+    : opts.policyReason === 'tenant_policy_always_review'
+      ? ' (review-all is on)'
+      : ''
+  const body =
+    `${greet}, quote ready for your review${reasonChip} - ${qty}, $${total} inc GST.\n` +
+    `Tap to send: ${opts.approveUrl}\n` +
+    `Edit first: ${opts.editUrl}`
+  return scrubForGsm7(body)
+}
+
 export function buildTradieInspectionNotification(opts: {
   tradieFirstName?: string | null
   customerName?: string

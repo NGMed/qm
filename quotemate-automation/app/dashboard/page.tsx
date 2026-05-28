@@ -95,6 +95,13 @@ type Pricing = {
    *  the full per-line breakdown (today's default); 'summary' rolls the
    *  line items up into a single scope paragraph + hours/items hint. */
   quote_display?: 'itemised' | 'summary' | null
+  /** Migration 078 — tradie review-before-send policy. 'auto_send' is
+   *  the default; 'always_review' holds every quote for tradie approval;
+   *  'review_over_threshold' holds only when total_inc_gst >= threshold. */
+  review_policy?: 'auto_send' | 'always_review' | 'review_over_threshold' | null
+  /** Migration 078 — dollar threshold (inc-GST) used only when
+   *  review_policy === 'review_over_threshold'. */
+  review_threshold_inc_gst?: number | string | null
 } | null
 
 type ServiceOffering = {
@@ -2593,11 +2600,184 @@ function PricingTab({
       {/* Phase A — customer-quote display preference (itemised vs summary).
           Trade-agnostic, written to every pricing_book row by /api/tenant/me. */}
       <QuoteDisplayCard books={books} onSave={onSave} />
+      {/* Mig 078 — tradie review-before-send policy. Sits next to the
+          display card because they're the two "how quotes leave the
+          system" controls; tradies tend to set them together. */}
+      <ReviewPolicyCard books={books} onSave={onSave} />
       {/* A5 — invoice-history calibration. Upload past invoices, see how
           our recipe lines up with what you actually charged, accept a
           suggested hourly-rate adjustment. */}
       <CalibrationCard accessToken={accessToken} />
     </div>
+  )
+}
+
+/**
+ * Migration 078 — tradie review-before-send policy.
+ *
+ * Three policies cover ~95% of real tradie needs:
+ *   • auto_send (default) — quotes go straight to the customer
+ *   • always_review       — every quote waits for tradie approval
+ *   • review_over_threshold — quotes >= $threshold wait; smaller ones send
+ *
+ * Reads from row 0 (preference is identical across the tenant's trade
+ * rows after the /api/tenant/me PATCH fan-out). Saves via PATCH
+ * { review_policy, review_threshold_inc_gst }.
+ *
+ * Mirror of QuoteDisplayCard's shape — same card structure, same save
+ * pattern, sibling control on the same Pricing tab.
+ */
+function ReviewPolicyCard({
+  books,
+  onSave,
+}: {
+  books: PricingBook[]
+  onSave: (payload: Record<string, unknown>) => Promise<void>
+}) {
+  type Policy = 'auto_send' | 'always_review' | 'review_over_threshold'
+
+  const currentPolicy = useMemo<Policy>(() => {
+    const v = books[0]?.review_policy
+    if (v === 'always_review' || v === 'review_over_threshold') return v
+    return 'auto_send'
+  }, [books])
+
+  const currentThreshold = useMemo<string>(() => {
+    const raw = books[0]?.review_threshold_inc_gst
+    const n = typeof raw === 'string' ? parseFloat(raw) : raw
+    if (typeof n === 'number' && Number.isFinite(n) && n > 0) return String(n)
+    return '500' // sensible default — most tradies want $500-ish
+  }, [books])
+
+  const [policy, setPolicy] = useState<Policy>(currentPolicy)
+  const [threshold, setThreshold] = useState<string>(currentThreshold)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      const payload: Record<string, unknown> = { review_policy: policy }
+      // Only send the threshold when it's actually used. Avoids
+      // overwriting a stored value with whatever's in the field when
+      // the tradie picks auto_send or always_review.
+      if (policy === 'review_over_threshold') {
+        const n = parseFloat(threshold)
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new Error('Enter a dollar threshold above $0.')
+        }
+        payload.review_threshold_inc_gst = n
+      }
+      await onSave(payload)
+      setSavedAt(Date.now())
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (books.length === 0) return null
+
+  const dirty =
+    policy !== currentPolicy ||
+    (policy === 'review_over_threshold' && threshold !== currentThreshold)
+
+  return (
+    <Card
+      title="Review before send"
+      subtitle="How quotes leave your QuoteMate number after the AI drafts them. Default is auto-send so the customer never waits on you."
+    >
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <Field label="Policy">
+          <div className="mt-2 space-y-3">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="review_policy"
+                value="auto_send"
+                checked={policy === 'auto_send'}
+                onChange={() => setPolicy('auto_send')}
+                className="mt-1 h-4 w-4 accent-accent"
+              />
+              <span className="text-sm">
+                <span className="font-semibold text-text-pri">Auto-send (default)</span>
+                <span className="block text-xs text-text-dim mt-0.5">
+                  Quotes go straight to the customer; you get a notify SMS after. Fastest — current behaviour.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="review_policy"
+                value="always_review"
+                checked={policy === 'always_review'}
+                onChange={() => setPolicy('always_review')}
+                className="mt-1 h-4 w-4 accent-accent"
+              />
+              <span className="text-sm">
+                <span className="font-semibold text-text-pri">Always review first</span>
+                <span className="block text-xs text-text-dim mt-0.5">
+                  Hold every quote for your approval before the customer sees it. You get a one-tap "Send to customer" link.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="review_policy"
+                value="review_over_threshold"
+                checked={policy === 'review_over_threshold'}
+                onChange={() => setPolicy('review_over_threshold')}
+                className="mt-1 h-4 w-4 accent-accent"
+              />
+              <span className="text-sm flex-1">
+                <span className="font-semibold text-text-pri">Review only if over $</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="50"
+                  value={threshold}
+                  onChange={(e) => setThreshold(e.target.value)}
+                  onFocus={() => setPolicy('review_over_threshold')}
+                  disabled={policy !== 'review_over_threshold'}
+                  className="ml-1 w-20 px-2 py-0.5 bg-ink-deep border border-ink-line text-text-pri text-sm font-mono disabled:opacity-50"
+                  aria-label="Review threshold in dollars inc-GST"
+                />
+                <span className="block text-xs text-text-dim mt-0.5">
+                  Small jobs auto-send; bigger jobs wait for you. Threshold is inc-GST.
+                </span>
+              </span>
+            </label>
+          </div>
+        </Field>
+
+        {error ? (
+          <div className="bg-warning/10 border border-warning/40 px-3 py-2 text-xs text-warning">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-3">
+          <button
+            type="submit"
+            disabled={submitting || !dirty}
+            className="font-mono text-[0.7rem] uppercase tracking-[0.14em] font-bold px-4 py-2 border border-accent text-accent hover:bg-accent/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Saving…' : 'Save policy'}
+          </button>
+          {savedAt && Date.now() - savedAt < 4000 && (
+            <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-accent">
+              ✓ Saved
+            </span>
+          )}
+        </div>
+      </form>
+    </Card>
   )
 }
 

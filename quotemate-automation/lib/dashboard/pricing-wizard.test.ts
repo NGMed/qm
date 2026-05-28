@@ -9,6 +9,7 @@ import {
   WizardAnswersSchema,
   buildPatchPayload,
   categoriesForTrades,
+  commonBrandsForTrades,
   nextStep,
   prevStep,
   STEP_LABELS,
@@ -255,6 +256,42 @@ describe('categoriesForTrades', () => {
 
   it('returns empty array for an unknown trade', () => {
     expect(categoriesForTrades(['astronaut'])).toEqual([])
+  })
+})
+
+describe('commonBrandsForTrades', () => {
+  it('returns electrical brands for an electrical-only tradie', () => {
+    const brands = commonBrandsForTrades(['electrical'])
+    expect(brands).toContain('Clipsal')
+    expect(brands).toContain('HPM')
+    expect(brands).not.toContain('Rheem')
+  })
+
+  it('returns plumbing brands for a plumbing-only tradie', () => {
+    const brands = commonBrandsForTrades(['plumbing'])
+    expect(brands).toContain('Rheem')
+    expect(brands).toContain('Rinnai')
+    expect(brands).not.toContain('Clipsal')
+  })
+
+  it('returns BOTH sets for a cross-trade tradie, no duplicates', () => {
+    const brands = commonBrandsForTrades(['electrical', 'plumbing'])
+    expect(brands).toContain('Clipsal')
+    expect(brands).toContain('Rheem')
+    expect(new Set(brands).size).toBe(brands.length)
+  })
+
+  it('is case-insensitive on the trade name', () => {
+    expect(commonBrandsForTrades(['ELECTRICAL']).length).toBeGreaterThan(0)
+    expect(commonBrandsForTrades(['Plumbing']).length).toBeGreaterThan(0)
+  })
+
+  it('returns an empty array for an unknown trade', () => {
+    expect(commonBrandsForTrades(['astronaut'])).toEqual([])
+  })
+
+  it('returns an empty array for an empty trade list', () => {
+    expect(commonBrandsForTrades([])).toEqual([])
   })
 })
 

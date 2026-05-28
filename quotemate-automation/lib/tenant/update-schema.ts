@@ -105,6 +105,19 @@ export const UpdateSchema = z.object({
   // 'itemised' = today's per-line breakdown (default). 'summary' = single
   // scope paragraph + total (lump-sum read).
   quote_display: z.enum(['itemised', 'summary']).optional(),
+  // Migration 078 — tradie review-before-send policy. Trade-agnostic;
+  // fanned out to every pricing_book row by /api/tenant/me PATCH.
+  //   'auto_send'              — current default behaviour
+  //   'always_review'          — hold every quote for tradie approval
+  //   'review_over_threshold'  — hold quotes whose total_inc_gst is
+  //                              at or over the configured threshold
+  // threshold_inc_gst is only meaningful under review_over_threshold.
+  // Schema permits PATCHing each field independently (e.g. just the
+  // threshold to nudge it from $500 to $750).
+  review_policy: z
+    .enum(['auto_send', 'always_review', 'review_over_threshold'])
+    .optional(),
+  review_threshold_inc_gst: z.coerce.number().min(0).max(1_000_000).optional(),
 })
 
 // Create/update payload for a single tenant_custom_assemblies row.

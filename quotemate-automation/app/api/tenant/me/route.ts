@@ -594,6 +594,26 @@ export async function PATCH(req: Request) {
     if (error) errors.push(`quote_display: ${error.message}`)
   }
 
+  // 2bd. Migration 078 — tradie review-before-send policy. Same fan-out
+  //      pattern as quote_display. Both fields can be PATCHed
+  //      independently — caller can flip just the policy, or just nudge
+  //      the threshold, or both atomically.
+  if (
+    updates.review_policy !== undefined ||
+    updates.review_threshold_inc_gst !== undefined
+  ) {
+    const payload: Record<string, unknown> = {}
+    if (updates.review_policy !== undefined) payload.review_policy = updates.review_policy
+    if (updates.review_threshold_inc_gst !== undefined) {
+      payload.review_threshold_inc_gst = updates.review_threshold_inc_gst
+    }
+    const { error } = await supabase
+      .from('pricing_book')
+      .update(payload)
+      .eq('tenant_id', tenant.id)
+    if (error) errors.push(`review_policy: ${error.message}`)
+  }
+
   // 2bb. v8 Phase A — early-booking discount config. Stored in
   //     pricing_book.overlays.early_bird jsonb (no schema migration for
   //     config). The discount is per-TENANT, so it is written uniformly

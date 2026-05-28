@@ -21,6 +21,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client'
 import {
   buildPatchPayload,
   categoriesForTrades,
+  commonBrandsForTrades,
   STEP_LABELS,
   type BrandPreferences,
   type RateCard,
@@ -133,15 +134,20 @@ export default function PricingWizardPage() {
           after_hours_multiplier: numOrNull(first?.after_hours_multiplier),
         }
 
-        const assemblies: AssemblySummary[] = ((data.services ?? []) as any[]).map(
-          (s) => ({
-            id: String(s.id ?? ''),
+        // /api/tenant/me returns `assembly_id` (uuid) on each service —
+        // NOT `id`. Reading `s.id` here produced empty-string keys in the
+        // toggles map and tripped the route's `z.string().uuid()` check
+        // on PATCH (surfaced as `invalid_payload`). Fall through to `s.id`
+        // for forward-compat in case the shape ever changes back.
+        const assemblies: AssemblySummary[] = ((data.services ?? []) as any[])
+          .map((s) => ({
+            id: String(s.assembly_id ?? s.id ?? ''),
             name: String(s.name ?? ''),
             trade: String(s.trade ?? ''),
             category: s.category ?? null,
             enabled: !!s.enabled,
-          }),
-        )
+          }))
+          .filter((a) => a.id.length > 0)
 
         // /api/tenant/me returns material_preferences as a Record map
         // (category → brand). Older / hypothetical builds may return an
@@ -192,6 +198,29 @@ export default function PricingWizardPage() {
       : []) as string[]
 
   const categories: WizardCategory[] = categoriesForTrades(tradeList)
+  const quickFillBrands: string[] = commonBrandsForTrades(tradeList)
+
+  /** Stamp `brand` onto every visible category. Overwrites whatever the
+   *  tradie has typed — that's the literal "fill all" semantics. They
+   *  can still edit individual fields afterwards. */
+  function fillAllBrands(brand: string) {
+    setBrands((prev) => {
+      const next: BrandPreferences = { ...prev }
+      for (const c of categories) next[c.slug] = brand
+      return next
+    })
+  }
+
+  /** Empty every visible category. Mirrors `fillAllBrands` but with the
+   *  empty-string sentinel — buildPatchPayload turns those into nulls so
+   *  the PATCH route deletes the existing rows on save. */
+  function clearAllBrands() {
+    setBrands((prev) => {
+      const next: BrandPreferences = { ...prev }
+      for (const c of categories) next[c.slug] = ''
+      return next
+    })
+  }
 
   function buildRateCard(): RateCard | null {
     const h = Number(hourly)
@@ -412,22 +441,48 @@ export default function PricingWizardPage() {
               and update on the dashboard later.
             </p>
           ) : (
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {categories.map((c) => (
-                <label key={c.slug} className="block">
-                  <span className="text-xs text-text-dim">{c.label}</span>
-                  <input
-                    type="text"
-                    value={brands[c.slug] ?? ''}
-                    onChange={(e) =>
-                      setBrands((b) => ({ ...b, [c.slug]: e.target.value }))
-                    }
-                    placeholder="e.g. Clipsal"
-                    className="mt-1 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none"
-                  />
-                </label>
-              ))}
-            </div>
+            <>
+              {quickFillBrands.length > 0 && (
+                <div className="mt-5 flex flex-wrap items-center gap-2 border border-ink-line bg-ink-deep px-4 py-3">
+                  <span className="mr-2 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-text-dim">
+                    Fill all with
+                  </span>
+                  {quickFillBrands.map((brand) => (
+                    <button
+                      key={brand}
+                      type="button"
+                      onClick={() => fillAllBrands(brand)}
+                      className="border border-ink-line bg-ink-card px-3 py-1.5 text-xs font-semibold text-text-pri transition-colors hover:border-accent hover:text-accent"
+                    >
+                      {brand}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={clearAllBrands}
+                    className="border border-ink-line bg-transparent px-3 py-1.5 text-xs font-semibold text-text-dim transition-colors hover:border-text-dim hover:text-text-pri"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {categories.map((c) => (
+                  <label key={c.slug} className="block">
+                    <span className="text-xs text-text-dim">{c.label}</span>
+                    <input
+                      type="text"
+                      value={brands[c.slug] ?? ''}
+                      onChange={(e) =>
+                        setBrands((b) => ({ ...b, [c.slug]: e.target.value }))
+                      }
+                      placeholder="e.g. Clipsal"
+                      className="mt-1 block w-full border border-ink-line bg-ink-card px-3 py-2 text-sm text-text-pri placeholder:text-text-dim focus:border-accent focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
           )}
 
           <div className="mt-7 flex flex-wrap gap-3">

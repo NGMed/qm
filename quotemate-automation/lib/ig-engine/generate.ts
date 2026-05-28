@@ -30,6 +30,7 @@ import {
   type SystemUserPrompt,
 } from './prompts'
 import { resolveProductImage, type ProductImage } from './product-image'
+import { summariseReasons, validateImageInputs } from './validate-inputs'
 import { renderVerifyEnabled, verifyRenderMatchesProduct } from './verify'
 import { aspectRatioFromImage } from './image-config'
 import {
@@ -143,6 +144,39 @@ export async function generatePreviewImage(quoteId: string): Promise<PreviewResu
     // to "v2" on a staging or rolling-release deployment, eyeball N
     // generated images against v1 outputs, promote when satisfied.
     const ctx = await loadPromptContext(quoteId, intake as PromptIntake)
+
+    // ── Stage 0 — pre-flight input validation ────────────────────────
+    // Refuses the render when the inputs are unrenderable (missing
+    // count / anchor / broken catalogue photo / replacement without a
+    // source photo). Probes are best-effort — a probe error never
+    // blocks; only confirmed bad inputs do. See lib/ig-engine/validate-inputs.ts.
+    const validation = await validateImageInputs(ctx, {
+      photoPaths,
+      probeProductImage: async (p) => (await resolveProductImage(p)) !== null,
+      // The customer photo is fetched by generateOnePreview anyway, so
+      // skip the probe here — its failure would also be caught there
+      // and we don't want to download the same blob twice.
+    })
+    if (!validation.ok) {
+      const summary = summariseReasons(validation.reasons)
+      console.warn('[preview] Stage 0 validation refused render', {
+        quoteId,
+        reasons: validation.reasons.map((r) => r.code),
+      })
+      await supabase.from('quotes').update({
+        preview_status: 'failed',
+        preview_error: summary,
+        preview_generated_at: new Date().toISOString(),
+      }).eq('id', quoteId)
+      return { status: 'failed', error: summary }
+    }
+    if (validation.warnings.length > 0) {
+      console.warn('[preview] Stage 0 validation warnings (render proceeds)', {
+        quoteId,
+        warnings: validation.warnings.map((w) => w.code),
+      })
+    }
+
     // V2 (pruned, XML-structured) is now the default — see prompts.ts.
     // Set PREVIEW_PROMPT_VERSION=v1 to fall back to the legacy builder.
     const promptVersion = (process.env.PREVIEW_PROMPT_VERSION ?? 'v2').toLowerCase()

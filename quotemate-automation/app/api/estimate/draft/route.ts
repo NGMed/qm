@@ -7,7 +7,9 @@ import {
   buildQuoteSms,
   buildTradieDraftNotification,
   buildTradieInspectionNotification,
+  buildTradieReviewNotification,
 } from '@/lib/sms/templates'
+import { shouldHoldForReview } from '@/lib/quote/review-policy'
 import { pipelineLog } from '@/lib/log/pipeline'
 import { createCheckoutSessionsForQuote, createInspectionCheckoutSession, generateShareToken } from '@/lib/stripe/checkout'
 import { withRetry } from '@/lib/util/retry'
@@ -528,17 +530,69 @@ export async function POST(req: Request) {
       }
     })
 
+    // Mig 078 — tradie review-before-send policy. Decide ONCE here so
+    // the customer-dispatch + tradie-notify branches share one truth.
+    // Inspection routes + WP9 customer-chosen-product flows bypass the
+    // gate (see lib/quote/review-policy.ts docs for why).
+    const reviewDecision = shouldHoldForReview({
+      policy: (pricingBook as { review_policy?: string | null } | null)?.review_policy ?? null,
+      threshold: (pricingBook as { review_threshold_inc_gst?: number | string | null } | null)
+        ?.review_threshold_inc_gst ?? null,
+      totalIncGst: total,
+      isInspection,
+      customerAlreadyEngaged:
+        !!(intake?.scope as { chosen_product?: unknown } | null)?.chosen_product,
+    })
+    log.ok('review-policy decided', {
+      hold: reviewDecision.hold,
+      reason: reviewDecision.reason,
+    })
+
     // Auto-send the quote to the caller via SMS (Path B per current product mode).
-    // Skip if no caller_number available. Errors are logged but never fail the route.
+    // Skip if no caller_number available, OR when the review policy says
+    // hold for tradie approval first (mig 078).
+    // Errors are logged but never fail the route.
     const callerNumber = call?.caller_number ?? null
-    log.step(callerNumber ? 'queueing SMS dispatch' : 'skipping SMS — no caller_number')
+    log.step(
+      reviewDecision.hold
+        ? 'holding SMS — review policy requires tradie approval first'
+        : callerNumber
+          ? 'queueing SMS dispatch'
+          : 'skipping SMS — no caller_number',
+    )
+
+    // When holding, mark the quote awaiting_tradie_approval BEFORE the
+    // after() block runs (which sends the tradie notification with the
+    // approve link). The status is what /api/quote/[id]/approve looks
+    // up to decide whether the approve action is valid.
+    if (reviewDecision.hold) {
+      const { error: holdErr } = await supabase
+        .from('quotes')
+        .update({ status: 'awaiting_tradie_approval' })
+        .eq('id', quote!.id)
+      if (holdErr) {
+        log.err('failed to mark quote awaiting_tradie_approval', null, {
+          quote_id: quote!.id,
+          message: holdErr.message,
+        })
+      }
+    }
 
     after(async () => {
       const dispatch = pipelineLog('dispatch', intake.call_id)
-      if (!callerNumber) {
+      if (reviewDecision.hold) {
+        // Customer SMS is held — tradie review path. We fall through to
+        // the tradie-notify block below, which uses
+        // buildTradieReviewNotification() (approve + edit links)
+        // instead of the regular buildTradieDraftNotification().
+        dispatch.ok('customer SMS held pending tradie approval', {
+          quote_id: quote!.id,
+          reason: reviewDecision.reason,
+        })
+      } else if (!callerNumber) {
         dispatch.err('skipped', null, { quote_id: quote!.id, reason: 'no caller_number on call row' })
         return
-      }
+      } else {
       try {
         dispatch.step('building quote message body')
         const quoteForSms = {
@@ -610,6 +664,7 @@ export async function POST(req: Request) {
       } catch (e) {
         dispatch.err('dispatch threw', e)
       }
+      } // end of: else branch (customer dispatch path — opposite of reviewDecision.hold)
 
       // ──────────────── Phase 4 / notify ────────────────
       // SMS-only tradie ping. Voice quotes intentionally skip this so the
@@ -663,6 +718,11 @@ export async function POST(req: Request) {
         const customerPhone = callerNumber ?? undefined
         const quoteUrl = `${appUrl}/q/${shareToken}`
         const dashboardUrl = `${appUrl}/dashboard`
+        // Mig 078 — three-way pick for the tradie SMS body:
+        //   1. inspection-required → buildTradieInspectionNotification
+        //   2. held by review policy → buildTradieReviewNotification
+        //      (approve + edit links, customer SMS not yet sent)
+        //   3. auto-sent → buildTradieDraftNotification (today's path)
         const tradieBody = isInspection
           ? buildTradieInspectionNotification({
               tradieFirstName: tenantOwnerFirstName,
@@ -673,16 +733,28 @@ export async function POST(req: Request) {
               quoteUrl,
               dashboardUrl,
             })
-          : buildTradieDraftNotification({
-              tradieFirstName: tenantOwnerFirstName,
-              customerName,
-              customerPhone,
-              jobType: intake.job_type,
-              itemCount: intake.scope?.item_count ?? undefined,
-              totalIncGst: total,
-              quoteUrl,
-              dashboardUrl,
-            })
+          : reviewDecision.hold
+            ? buildTradieReviewNotification({
+                tradieFirstName: tenantOwnerFirstName,
+                customerName,
+                customerPhone,
+                jobType: intake.job_type,
+                itemCount: intake.scope?.item_count ?? undefined,
+                totalIncGst: total,
+                approveUrl: `${appUrl}/q/${shareToken}/approve`,
+                editUrl: quoteUrl,
+                policyReason: reviewDecision.reason,
+              })
+            : buildTradieDraftNotification({
+                tradieFirstName: tenantOwnerFirstName,
+                customerName,
+                customerPhone,
+                jobType: intake.job_type,
+                itemCount: intake.scope?.item_count ?? undefined,
+                totalIncGst: total,
+                quoteUrl,
+                dashboardUrl,
+              })
 
         if (notifyMobile) {
           // Send the tradie's "new quote drafted" SMS FROM the tenant's
