@@ -1,10 +1,34 @@
 // ════════════════════════════════════════════════════════════════════
 // Migration 079 — 2-hour customer follow-up check-in cron sweep.
 //
-// Runs every 15 minutes (see vercel.json). For each opted-in tenant,
-// finds delivered quotes in the 2h..24h window that the customer hasn't
-// replied to and hasn't already been auto-followed up on, and sends ONE
-// friendly "just checking in" SMS per quote.
+// SCHEDULING — NOT IN vercel.json
+// --------------------------------
+// This route is intentionally NOT registered in vercel.json on Hobby
+// because Vercel Hobby caps cron frequency at once per day, and the
+// feature needs ~15-min granularity to fire SMS in the 2h..24h window
+// without huge UX latency. Trigger options that work on Hobby:
+//
+//   1. External cron (free): cron-job.org or EasyCron. Configure:
+//        URL:     https://quote-mate-rho.vercel.app/api/cron/followup-2h
+//        Method:  GET
+//        Header:  Authorization: Bearer <CRON_SECRET from .env.local>
+//        Cadence: every 15 minutes
+//
+//   2. GitHub Actions cron (free): schedule a workflow at */15 * * * *
+//      that curls the same URL with the bearer header.
+//
+//   3. Upgrade Vercel to Pro: then add this back to vercel.json with
+//      "schedule": "*/15 * * * *" and Vercel takes it over natively.
+//
+// Until any of those is wired, this endpoint exists but is dormant.
+// It still runs end-to-end if hit by any authenticated caller — the
+// dispatch logic, idempotency, and quote_followup_events bookkeeping
+// all work regardless of who triggers it.
+//
+// For each opted-in tenant, finds delivered quotes in the 2h..24h
+// window that the customer hasn't replied to and hasn't already been
+// auto-followed up on, and sends ONE friendly "just checking in" SMS
+// per quote.
 //
 // Per the feature brief, the unit is the QUOTE not the customer: a
 // single person with 5 quotes receives 5 separate check-ins. The fire
