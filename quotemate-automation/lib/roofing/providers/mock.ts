@@ -12,6 +12,7 @@
 
 import type { RoofingMeasurementProvider } from './base'
 import type {
+  GeoJSONPolygon,
   PitchBucket,
   RoofAddressInput,
   RoofForm,
@@ -52,10 +53,52 @@ export class MockRoofingProvider implements RoofingMeasurementProvider {
         hips,
         valleys,
         ridge_lm: null,
-        polygon_geojson: null,
+        polygon_geojson: synthesisePolygon(h, footprint),
         capture_date: '2025-06-01',
       },
     }
+  }
+}
+
+/**
+ * PURE — synthesise a deterministic GeoJSON polygon for the mock
+ * provider so the dashboard map widget shows a believable building
+ * overlay without needing a live Geoscape account. The polygon is
+ * shaped to roughly match the declared footprint area (within ~10%)
+ * and placed near central Sydney with a small per-address jitter so
+ * different addresses appear in different positions.
+ *
+ * Stays a fixed 1.4:1 aspect ratio (typical AU residential footprint).
+ * Located near central Sydney specifically because Esri World Imagery
+ * has its best resolution there — gives the demo a recognisable AU
+ * satellite backdrop. Real Geoscape responses use the actual property
+ * coordinates, so this synthetic placement disappears once the live
+ * provider is wired.
+ */
+export function synthesisePolygon(seed: number, footprintM2: number): GeoJSONPolygon {
+  // Central Sydney baseline.
+  const baseLng = 151.2093
+  const baseLat = -33.8688
+  // Per-address jitter — keeps polygons within ~0.01° (~1km) of CBD.
+  const lng0 = baseLng + ((seed % 2000) - 1000) / 100_000
+  const lat0 = baseLat + (((seed * 31) % 2000) - 1000) / 100_000
+  // Shape: 1.4 (width) : 1 (height) → width = sqrt(area × 1.4).
+  const widthM = Math.sqrt(footprintM2 * 1.4)
+  const heightM = widthM / 1.4
+  // Convert metres → degrees at lat0 using equirectangular projection.
+  const mPerDegLat = 110_574
+  const mPerDegLng = 111_320 * Math.cos((lat0 * Math.PI) / 180)
+  const dLng = widthM / mPerDegLng
+  const dLat = heightM / mPerDegLat
+  return {
+    type: 'Polygon',
+    coordinates: [[
+      [lng0, lat0],
+      [lng0 + dLng, lat0],
+      [lng0 + dLng, lat0 - dLat],
+      [lng0, lat0 - dLat],
+      [lng0, lat0],
+    ]],
   }
 }
 
