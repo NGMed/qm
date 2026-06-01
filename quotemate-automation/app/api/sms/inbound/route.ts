@@ -18,6 +18,14 @@ import {
 } from '@/lib/sms/twilio-validator'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
 import { decideNextTurn, type ConversationTurn } from '@/lib/sms/dialog'
+import { looksLikeRoofingEnquiry, toRoofingRequest } from '@/lib/sms/roofing-intake'
+import {
+  advanceRoofing,
+  nextRoofingConversationState,
+  type RoofingConversationState,
+} from '@/lib/sms/roofing-receptionist'
+import { buildRoofingReplyMessage } from '@/lib/sms/roofing-compose'
+import { measureAndPriceRoofs } from '@/lib/roofing/measure'
 import { formatActiveFollowupContext } from '@/lib/sms/followup-context'
 import { buildGpoInspectionOverride } from '@/lib/sms/gpo-guard'
 import {
@@ -68,6 +76,17 @@ import { recordTrace } from '@/lib/log/trace'
 // WP9 — mid-conversation product options. Every WP9 block in this route
 // is wrapped in this flag; OFF (default) ⇒ byte-identical behaviour.
 const WP9_ENABLED = process.env.WP9_PRODUCT_OPTIONS === '1'
+
+// SMS roofing receptionist — gathers roofing inputs over SMS, runs the
+// roofing measure/price pipeline, and replies with an MMS (roof image +
+// quote-page link). Flag-gated; OFF (default) ⇒ byte-identical behaviour.
+// Requires migration 085 (sms_conversations.roofing_state +
+// roofing_measurements.public_token).
+const SMS_ROOFING_ENABLED = process.env.SMS_ROOFING_ENABLED === '1'
+
+const ROOFING_APP_BASE_URL = (
+  process.env.NEXT_PUBLIC_APP_URL ?? 'https://quote-mate-rho.vercel.app'
+).replace(/\/$/, '')
 
 // Twilio webhook ack. We send the real customer reply via the REST API
 // inside after() — never as TwiML in the webhook response — so this
@@ -244,6 +263,128 @@ function buildDialogFallbackReply(opts: {
   return first
     ? `Cheers ${first} - hit a quick snag on this turn. Give us a moment and we'll be right back.`
     : "Thanks - we'll be right back to confirm details, just a quick snag on our end."
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// SMS roofing receptionist — deterministic per-turn handler.
+//
+// Returns true when it handled the turn (the caller then returns from
+// after() and skips the electrical/plumbing Sonnet dialog). Only engages
+// when SMS_ROOFING_ENABLED and either the conversation is already a
+// roofing flow or an inbound looks like a roofing enquiry. All pure
+// decision logic lives in lib/sms/roofing-{intake,receptionist,compose};
+// this does the I/O (measure, persist, dispatch).
+// ─────────────────────────────────────────────────────────────────────
+async function handleRoofingTurn(args: {
+  conversationId: string
+  roofingStateRaw: unknown
+  turns: ConversationTurn[]
+  toNumber: string
+  fromNumber: string
+  tenantId: string | null
+  firstName: string | null
+}): Promise<boolean> {
+  const { conversationId, turns, toNumber, fromNumber, tenantId, firstName } = args
+  const prevState = (args.roofingStateRaw ?? null) as RoofingConversationState | null
+
+  const latestInbound =
+    [...turns].reverse().find((t) => t.direction === 'inbound')?.body ?? ''
+
+  // Engage only if we're already mid-roofing-flow, or any inbound this
+  // thread reads like a roofing enquiry.
+  const inRoofingFlow = !!(prevState && prevState.slots)
+  const looksRoofing =
+    inRoofingFlow ||
+    turns.some((t) => t.direction === 'inbound' && looksLikeRoofingEnquiry(t.body))
+  if (!looksRoofing) return false
+
+  const decision = advanceRoofing(prevState, latestInbound)
+  const nextState = nextRoofingConversationState(decision)
+
+  // Persist the roofing state (needs migration 085; best-effort).
+  try {
+    await supabase
+      .from('sms_conversations')
+      .update({ roofing_state: nextState, updated_at: new Date().toISOString() })
+      .eq('id', conversationId)
+  } catch (e) {
+    console.warn('[sms/inbound:roofing] roofing_state persist failed (migration 085?)', e)
+  }
+
+  const replyFrom = process.env.TWILIO_SMS_NUMBER ?? toNumber
+  const sendReply = async (text: string, mediaUrl?: string) => {
+    const res = await dispatchQuoteMessage({ to: fromNumber, text, from: replyFrom, mediaUrl })
+    await supabase.from('sms_messages').insert({
+      conversation_id: conversationId,
+      direction: 'outbound',
+      body: text,
+    })
+    return res
+  }
+
+  // Still gathering inputs — ask the next question.
+  if (decision.action === 'ask') {
+    await sendReply(decision.reply)
+    await supabase
+      .from('sms_conversations')
+      .update({ status: 'open', last_message_at: new Date().toISOString() })
+      .eq('id', conversationId)
+    return true
+  }
+
+  // Ready to price / inspection — run the same roofing pipeline as the
+  // dashboard tab, persist the job, and reply with the MMS + link.
+  const reqInput = toRoofingRequest(decision.slots)
+  if (reqInput) {
+    try {
+      const result = await measureAndPriceRoofs(reqInput.address, reqInput.inputs, {})
+      if (result.ok) {
+        const token = randomBytes(16).toString('hex')
+        const quote = result.quote
+        await supabase.from('roofing_measurements').insert({
+          tenant_id: tenantId,
+          address: reqInput.address.address,
+          postcode: reqInput.address.postcode || null,
+          state: reqInput.address.state,
+          provider: result.provider,
+          customer_phone: fromNumber,
+          structure_count: quote.structures.length,
+          combined_area_m2: quote.combined.area_m2,
+          combined_better_inc_gst: quote.combined.tiers[1]?.inc_gst ?? null,
+          routing: quote.routing.decision,
+          structures: quote.structures,
+          quote,
+          public_token: token,
+        })
+        const quoteUrl = `${ROOFING_APP_BASE_URL}/q/roof/${token}`
+        const imageUrl = `${ROOFING_APP_BASE_URL}/api/roofing/q/${token}/static-map`
+        const body = buildRoofingReplyMessage({
+          quote,
+          address: reqInput.address.address,
+          quoteUrl,
+          firstName,
+        })
+        await sendReply(body, imageUrl)
+        await supabase
+          .from('sms_conversations')
+          .update({ status: 'done', last_message_at: new Date().toISOString() })
+          .eq('id', conversationId)
+        return true
+      }
+    } catch (e) {
+      console.error('[sms/inbound:roofing] measure/save failed', e)
+    }
+  }
+
+  // Fallback — we couldn't price (provider down or missing fields).
+  await sendReply(
+    "Thanks — we've got your roof details. Our team will confirm your quote shortly.",
+  )
+  await supabase
+    .from('sms_conversations')
+    .update({ status: 'done', last_message_at: new Date().toISOString() })
+    .eq('id', conversationId)
+  return true
 }
 
 export async function POST(req: Request) {
@@ -837,6 +978,32 @@ export async function POST(req: Request) {
         body: m.body,
       }))
       const inboundCount = turns.filter(t => t.direction === 'inbound').length
+
+      // ─────── SMS roofing receptionist (flag-gated) ───────
+      // When enabled, a roofing enquiry (or an in-progress roofing thread)
+      // is handled by the deterministic roofing receptionist instead of
+      // the electrical/plumbing Sonnet dialog: gather inputs → run the
+      // roofing measure/price pipeline → reply with the MMS + quote link.
+      // OFF (default) ⇒ this block is skipped entirely (byte-identical).
+      if (SMS_ROOFING_ENABLED && !inflightContinuation) {
+        try {
+          const handledRoofing = await handleRoofingTurn({
+            conversationId,
+            roofingStateRaw: (conversation as Record<string, unknown>).roofing_state,
+            turns,
+            toNumber,
+            fromNumber,
+            tenantId: tenant?.id ?? null,
+            firstName: customer?.first_name ?? guessFirstName(turns) ?? null,
+          })
+          if (handledRoofing) {
+            console.log('[sms/inbound:after] handled by roofing receptionist', { conversationId })
+            return
+          }
+        } catch (e) {
+          console.error('[sms/inbound:after] roofing receptionist threw — falling through to standard dialog', e)
+        }
+      }
 
       // ─────── WP9 CAPTURE — record a pending product pick ───────
       // If we offered the customer 2 products last turn and this inbound
