@@ -21,6 +21,7 @@ import {
   type CatalogueProductRef,
 } from './catalogue'
 import { applyMinLabourFloor } from './min-labour'
+import { specGuardMode, evaluateSpecGuard } from './spec-guard'
 import {
   mergeRecipesIntoDraft,
   buildRecipeSlots,
@@ -76,7 +77,7 @@ export type RecipeConversationState = {
 export async function runEstimation(
   intake: any,
   pricingBook: any,
-  modelId = 'claude-opus-4-7',
+  modelId = 'claude-opus-4-8',
   conversationState: RecipeConversationState = null,
 ): Promise<EstimationResult> {
   const cacheLog = pipelineLog('estimate', intake?.id ?? null)
@@ -520,7 +521,42 @@ export async function runEstimation(
                 ? live.description
                 : chosen.description ?? null,
           }
-          const r = applyChosenProduct(draft, chosenLive)
+          // SPEC GUARD — does the product about to be locked contradict the
+          // spec the customer agreed to (intake.scope.specs.requested_specs)?
+          // Shadow (default) logs only; enforce skips the lock so a wrong-
+          // spec product is never forced — the quote keeps its conventional
+          // grounded Good/Better/Best. Degrade-never-block: only a positive
+          // same-key contradiction blocks; unknown/missing never does.
+          const guardMode = specGuardMode()
+          let guardBlocked = false
+          if (guardMode !== 'off') {
+            try {
+              const requestedSpecs =
+                (intake?.scope as { specs?: { requested_specs?: unknown } } | null)
+                  ?.specs?.requested_specs ?? null
+              const decision = evaluateSpecGuard({
+                requested: requestedSpecs as Record<string, string> | null,
+                properties: chosen?.properties ?? null,
+                name: chosen?.name,
+                trade: (intake?.trade as string | null) ?? chosen?.trade ?? null,
+                category: chosen?.category ?? null,
+                mode: guardMode,
+              })
+              if (decision.verdict === 'mismatch') {
+                cacheLog.err(
+                  `WP9 spec guard [${guardMode}] — chosen product contradicts requested spec${decision.block ? ' (BLOCKED lock)' : ' (shadow — not blocked)'}`,
+                  decision.reason,
+                  { product: chosen?.name, conflicts: decision.conflicts },
+                )
+                guardBlocked = decision.block
+              }
+            } catch (gErr: any) {
+              cacheLog.err('WP9 spec guard errored (non-fatal — lock proceeds)', gErr?.message ?? String(gErr))
+            }
+          }
+          const r = guardBlocked
+            ? { applied: [] as string[] }
+            : applyChosenProduct(draft, chosenLive)
           if (r.applied.length > 0) {
             // The customer already PICKED one product — Good/Better/Best
             // no longer makes sense (all three now hold the same chosen
@@ -1155,16 +1191,29 @@ async function loadDeterministicInputs(
     default_labour_hours: number | string
   }
 
-  // The tradie's OWN recipe for this job. No recipe → not deterministic
-  // (the soft BOM hint still applies to the Opus path as before).
-  const { data: recipe } = await supabase
+  // The tradie's OWN recipe for this job wins; when they haven't authored
+  // one, fall back to the shared baseline recipe (shared_assembly_bom) —
+  // exactly as buildBomHint does above. This lets the deterministic builder
+  // fire for ANY job with a seeded shared recipe, priced from THIS tenant's
+  // tier-hinted catalogue (with shared_materials as the universal floor).
+  // No tenant recipe AND no shared recipe → not deterministic (Opus path).
+  const { data: ownRecipe } = await supabase
     .from('tenant_assembly_bom')
     .select('material_category, quantity, required, description, sort')
     .eq('tenant_id', tenantId)
     .in('assembly_id', ids)
     .order('sort', { ascending: true })
+  let recipe = ownRecipe
   if (!recipe || recipe.length === 0) {
-    return { input: null, reason: 'no tenant recipe for this job' }
+    const { data: sharedRecipe } = await supabase
+      .from('shared_assembly_bom')
+      .select('material_category, quantity, required, description, sort')
+      .in('assembly_id', ids)
+      .order('sort', { ascending: true })
+    recipe = sharedRecipe
+  }
+  if (!recipe || recipe.length === 0) {
+    return { input: null, reason: 'no recipe (tenant or shared) for this job' }
   }
 
   // v7 Phase 0: single source of truth per table —

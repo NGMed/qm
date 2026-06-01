@@ -17,6 +17,7 @@ import { notFound } from 'next/navigation'
 import { getTierPhoto } from '@/lib/quote/tier-photos'
 import { refreshSignedUrl } from '@/lib/storage/upload'
 import { CustomerPhotosBlock } from './CustomerPhotosBlock'
+import { RoofHeroStrip } from './RoofHeroStrip'
 import { generatePreviewImage } from '@/lib/ig-engine/generate'
 import { generateSampleImages } from '@/lib/ig-engine/samples'
 import { PreviewSection } from './PreviewSection'
@@ -148,7 +149,27 @@ export default async function PublicQuotePage(props: {
     .select('id, call_id, job_type, scope, caller, address, suburb, photo_paths, trade')
     .eq('id', quote.intake_id)
     .maybeSingle()
-  const intakeTrade = ((intake as { trade?: string } | null)?.trade as 'electrical' | 'plumbing' | undefined) ?? 'electrical'
+  const intakeTrade = ((intake as { trade?: string } | null)?.trade as 'electrical' | 'plumbing' | 'roofing' | undefined) ?? 'electrical'
+  const isRoofing = intakeTrade === 'roofing'
+  // Pull the roof-hero stats off the intake scope when this IS a roofing
+  // job. The roofing save-as-quote route stamps these into intake.scope
+  // verbatim (see app/api/roofing/save-as-quote/route.ts).
+  const roofScope =
+    isRoofing && intake?.scope && typeof intake.scope === 'object'
+      ? (intake.scope as Record<string, unknown>)
+      : null
+  const roofStats = roofScope
+    ? {
+        area_m2:
+          typeof roofScope.sloped_area_m2 === 'number'
+            ? roofScope.sloped_area_m2
+            : null,
+        form: typeof roofScope.form === 'string' ? roofScope.form : null,
+        hips: typeof roofScope.hips === 'number' ? roofScope.hips : null,
+        valleys: typeof roofScope.valleys === 'number' ? roofScope.valleys : null,
+        storeys: typeof roofScope.storeys === 'number' ? roofScope.storeys : null,
+      }
+    : null
   // WP1 — the licence number + GST status shown to the customer must be
   // THIS quote's tradie, never "whichever pricing_book row Postgres returns
   // first for the trade". Showing another tradie's licence on a quote is a
@@ -507,6 +528,16 @@ export default async function PublicQuotePage(props: {
           initialSamplesStatus={samplesStatus}
           initialSampleImageUrls={sampleImageUrls}
         />
+
+        {/* ─── Roof hero (only for roofing quotes) ──────── */}
+        {isRoofing && roofStats && intake && (
+          <RoofHeroStrip
+            address={String(intake.address ?? '')}
+            suburb={(intake.suburb as string | null | undefined) ?? null}
+            shareToken={token}
+            stats={roofStats}
+          />
+        )}
 
         {/* ─── Inspection-only block OR tier cards ──────── */}
         {isInspection ? (

@@ -1,6 +1,51 @@
 import { anthropic } from '@ai-sdk/anthropic'
 import { generateObject } from 'ai'
+import { z } from 'zod'
 import { IntakeSchema, deriveTradeFromJobType } from './schema'
+
+// The structurer's generateObject schema = the canonical intake (minus the
+// derived `trade`) PLUS one REQUIRED string holding any product specs the
+// caller stated, JSON-encoded. It is REQUIRED on purpose: Anthropic
+// generateObject caps OPTIONAL fields at 24 and IntakeSchema is already at
+// that limit (see schema.ts), so a required field is the only cap-safe way to
+// add capture — and a plain string is a proven shape (an open record is not).
+// We parse it server-side into scope.specs.requested_specs below.
+const StructureScopeSchema = IntakeSchema.shape.scope.extend({
+  requested_specs_json: z.string(),
+})
+const StructureSchema = IntakeSchema.omit({ trade: true }).extend({
+  scope: StructureScopeSchema,
+})
+
+// Parse the structurer's requested_specs_json blob into a flat string map.
+// Robust by construction: any malformed / non-object / non-string-valued input
+// degrades to {} and never throws — a capture miss must never break the intake
+// or, downstream, trigger a false spec mismatch (degrade-never-block).
+export function parseRequestedSpecs(raw: unknown): Record<string, string> {
+  if (raw == null) return {}
+  let obj: unknown = raw
+  if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (s === '' || s === '{}') return {}
+    try {
+      obj = JSON.parse(s)
+    } catch {
+      return {}
+    }
+  }
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (!k) continue
+    if (typeof v === 'string') {
+      if (v.trim() !== '') out[k] = v.trim()
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = String(v)
+    }
+    // nested objects / arrays / null are skipped — specs are flat scalars
+  }
+  return out
+}
 
 // v5 multi-trade: caller passes the trade detected from earlier dialog
 // signals (SMS extract-slots job_type, or 'electrical' for the voice
@@ -13,7 +58,7 @@ export async function structureIntake(
   transcript: string,
   photoUrls: string[] = [],
   tradeHint: TradeHint = 'electrical',
-  modelId = 'claude-opus-4-7',
+  modelId = 'claude-opus-4-8',
 ) {
   // `trade` is required on the canonical IntakeSchema (v5 multi-trade) but
   // omitted from generateObject so Opus doesn't have to classify it. We
@@ -24,7 +69,7 @@ export async function structureIntake(
   const isPlumbing = tradeHint === 'plumbing'
   const { object } = await generateObject({
     model: anthropic(modelId),
-    schema: IntakeSchema.omit({ trade: true }),
+    schema: StructureSchema,
     maxRetries: 0, // wrapper handles retries with logging — no double-retry
     // Opus 4.7 ignores temperature (extended-thinking model). The AI SDK
     // warns on every call if it's set, so omit it. Determinism comes from
@@ -149,6 +194,19 @@ hallucination class we are trying to eliminate.
   structured fields but the estimation engine reads scope.description
   when narrowing the lookup.
 `}
+REQUESTED_SPECS — required output field scope.requested_specs_json
+Emit a COMPACT JSON object STRING of any concrete product specs the caller
+stated in their own words, so the exact spec they asked for is never lost
+(this captures specs the discrete fields above cannot — e.g. amperage).
+Use lowercase snake_case keys. Examples:
+  "15 amp point" / "15A"               → {"amperage":"15A"}
+  "weatherproof outdoor GPO" / "IP56"  → {"ip_rating":"IP56"}
+  "250 litre gas hot water"            → {"energy_source":"gas","litres":"250"}
+  "double power point"                 → {"poles":"double"}
+Combine multiple specs into one object. If the caller stated NO concrete
+product spec, emit exactly "{}". NEVER invent a spec they didn't say. This is
+a REQUIRED field — always output it (use "{}" when empty).
+
 CONFIDENCE RUBRIC — apply uncompromisingly
   HIGH:    every required field captured, scope.item_count known,
            access fields populated when relevant, no ambiguity
@@ -206,5 +264,15 @@ no explicit safety/load/switchboard risk is stated.`}`,
       ],
     }],
   })
-  return { ...object, trade: deriveTradeFromJobType(object.job_type) }
+  // Strip the raw JSON blob and attach the parsed map under scope.specs.
+  // Only attach when non-empty so an intake with no stated spec keeps its
+  // scope.specs exactly as before (no behaviour change for the common case).
+  const { requested_specs_json, ...scopeRest } = object.scope
+  const requested_specs = parseRequestedSpecs(requested_specs_json)
+  const scope =
+    Object.keys(requested_specs).length > 0
+      ? { ...scopeRest, specs: { ...(scopeRest.specs ?? {}), requested_specs } }
+      : scopeRest
+
+  return { ...object, scope, trade: deriveTradeFromJobType(object.job_type) }
 }

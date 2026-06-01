@@ -91,6 +91,10 @@ export default function RoofingMeasurePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [savedId, setSavedId] = useState<string | null>(null)
+  // Wave 2b — "Send as customer quote" persists into the `quotes` table
+  // and returns a /q/[token] link the tradie can copy + share.
+  const [quoteState, setQuoteState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [quoteShareUrl, setQuoteShareUrl] = useState<string | null>(null)
 
   useEffect(() => {
     const sb = getBrowserSupabase()
@@ -221,6 +225,81 @@ export default function RoofingMeasurePage() {
     },
     [quote, selectedId, runMeasure],
   )
+
+  /** Wave 2b — POST to /api/roofing/save-as-quote so a real `quotes` row
+   *  exists and the tradie gets a shareable /q/[token] URL. Uses the
+   *  COMBINED view across included structures as the customer-facing
+   *  single quote; metrics + inputs come from the first included
+   *  structure (the "primary" one). */
+  const onSendAsQuote = useCallback(async () => {
+    if (!token || !resp || resp.ok !== true) return
+    const includedStructures = resp.quote.structures.filter(
+      (s, i) => included[structureKey(s, i)] !== false,
+    )
+    if (includedStructures.length === 0) {
+      setErrMsg('Include at least one structure before saving.')
+      return
+    }
+    const primary = includedStructures[0]
+    const combined = resp.quote.combined
+    setQuoteState('saving')
+    setQuoteShareUrl(null)
+    setErrMsg(null)
+    try {
+      const res = await fetch('/api/roofing/save-as-quote', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          address: { address, postcode, state },
+          inputs: {
+            material: primary.inputs.material,
+            pitch: primary.inputs.pitch,
+            intent: primary.inputs.intent,
+            building_year_built: primary.inputs.building_year_built ?? null,
+          },
+          metrics: {
+            footprint_m2: primary.metrics.footprint_m2,
+            sloped_area_m2: combined.area_m2,
+            storeys: primary.metrics.storeys,
+            form: primary.metrics.form,
+            hips: primary.metrics.hips,
+            valleys: primary.metrics.valleys,
+            ridge_lm: primary.metrics.ridge_lm ?? null,
+            polygon_geojson: primary.metrics.polygon_geojson ?? null,
+            capture_date: primary.metrics.capture_date ?? null,
+          },
+          price: {
+            area_m2: combined.area_m2,
+            effective_rate_per_m2: primary.price.effective_rate_per_m2,
+            tiers: combined.tiers,
+            // `combined` carries only area + tiers; routing + loadings
+            // live per-structure. Take them from the primary structure
+            // — its routing decision propagates to the whole job
+            // (inspection_required on any structure forces the whole
+            // quote to inspection).
+            loadings_applied: primary.price.loadings_applied,
+            routing: primary.price.routing,
+          },
+        }),
+      })
+      const json = (await res.json()) as
+        | { ok: true; shareUrl: string }
+        | { ok: false; error: string; detail?: string }
+      if (json.ok) {
+        setQuoteShareUrl(json.shareUrl)
+        setQuoteState('saved')
+      } else {
+        setQuoteState('error')
+        setErrMsg(json.detail ?? json.error)
+      }
+    } catch (e) {
+      setQuoteState('error')
+      setErrMsg(e instanceof Error ? e.message : String(e))
+    }
+  }, [token, resp, included, address, postcode, state])
 
   const onSave = useCallback(async () => {
     if (!token || !resp || resp.ok !== true) return
@@ -393,6 +472,9 @@ export default function RoofingMeasurePage() {
           onSave={onSave}
           saveState={saveState}
           savedId={savedId}
+          onSendAsQuote={onSendAsQuote}
+          quoteState={quoteState}
+          quoteShareUrl={quoteShareUrl}
           onMaterialDetected={setMaterial}
         />
       )}
@@ -424,6 +506,9 @@ function MultiResultBlock({
   onSave,
   saveState,
   savedId,
+  onSendAsQuote,
+  quoteState,
+  quoteShareUrl,
   onMaterialDetected,
 }: {
   quote: MultiRoofQuote
@@ -441,6 +526,9 @@ function MultiResultBlock({
   onSave: () => void | Promise<void>
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   savedId: string | null
+  onSendAsQuote: () => void | Promise<void>
+  quoteState: 'idle' | 'saving' | 'saved' | 'error'
+  quoteShareUrl: string | null
   onMaterialDetected: (m: RoofMaterial) => void
 }) {
   const keyOf = (i: number) => structureKey(quote.structures[i], i)
@@ -558,7 +646,52 @@ function MultiResultBlock({
               ✓ Saved · {savedId.slice(0, 8)}
             </span>
           )}
+          <button
+            type="button"
+            onClick={onSendAsQuote}
+            disabled={quoteState === 'saving' || combined.count === 0}
+            className="inline-flex items-center gap-2 border border-ink-line px-6 py-3.5 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-text-pri transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {quoteState === 'saving' ? (<><Spinner /> Sending…</>) : (<>Send as customer quote <span aria-hidden="true">&rarr;</span></>)}
+          </button>
         </div>
+        {quoteState === 'saved' && quoteShareUrl && (
+          <div className="mt-4 border border-ink-line border-l-4 border-l-teal-glow bg-ink-deep p-5">
+            <div className="font-mono text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-teal-glow">
+              ✓ Customer quote created
+            </div>
+            <p className="mt-2 text-base text-text-sec">
+              Share this link with the customer — it shows the polygon overlay, the tier prices, and the deposit CTAs:
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <a
+                href={quoteShareUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-sm text-accent underline-offset-4 hover:underline break-all"
+              >
+                {quoteShareUrl}
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(quoteShareUrl)
+                }}
+                className="inline-flex items-center gap-2 border border-ink-line px-3 py-1.5 font-mono text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-text-sec hover:border-accent hover:text-accent"
+              >
+                Copy
+              </button>
+              <a
+                href={quoteShareUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 bg-accent px-3 py-1.5 font-mono text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-white hover:bg-accent-press"
+              >
+                Open <span aria-hidden="true">&rarr;</span>
+              </a>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* AI photo verification — for the selected structure */}

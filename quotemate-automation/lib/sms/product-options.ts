@@ -24,6 +24,8 @@ import {
   normaliseCategory,
   type TenantMaterial,
 } from '@/lib/estimate/catalogue'
+import { reconcileProductSpecs } from '@/lib/estimate/spec-guard'
+import type { RequestedSpecs } from '@/lib/estimate/spec-reconcile'
 
 function num(v: number | string | null | undefined): number {
   if (v === null || v === undefined || v === '') return NaN
@@ -38,6 +40,9 @@ export interface ProductOption {
   price_ex_gst: number
   image_path: string | null
   description: string | null
+  /** Structured product specs (amperage, ip_rating…) — drives spec-aware
+   *  selection + the reconcile guard. Optional/null on legacy rows. */
+  properties?: Record<string, string | number | boolean | null> | null
   /** WP9 surfaces only TWO buckets to the customer. */
   tier: 'good' | 'better'
 }
@@ -52,6 +57,10 @@ export type ProductChoiceStatus = 'pending' | 'chosen' | 'declined'
  *  keeps product picks out of the slot merge/update path. */
 export interface ProductChoiceState {
   category: string
+  /** Trade the offered products belong to — carried so the reconcile guard
+   *  picks the right (trade, category) SpecDefs downstream. Optional for
+   *  back-compat with choice rows written before spec-aware pricing. */
+  trade?: string | null
   token: string
   status: ProductChoiceStatus
   options: ProductOption[]
@@ -73,6 +82,7 @@ export interface ProductChoiceState {
 export function selectProductOptions(
   rows: TenantMaterial[],
   category: string,
+  opts?: { requestedSpecs?: RequestedSpecs; trade?: string | null },
 ): ProductOption[] | null {
   const cat = normaliseCategory(category)
   if (!cat) return null
@@ -98,12 +108,38 @@ export function selectProductOptions(
     price_ex_gst: +num(r.unit_price_ex_gst).toFixed(2),
     image_path: r.image_path ?? null,
     description: r.description ?? null,
+    properties: r.properties ?? null,
     tier,
   })
 
+  // Spec-aware selection: when the customer stated specs (e.g. "15 amp"),
+  // prefer products whose spec MATCHES — match outranks price + is_preferred.
+  // When NOTHING in the catalogue matches, fall back to today's price-only
+  // behaviour over all usable rows (never an empty offer; the reconcile guard
+  // is the net that stops a contradicting product being locked).
+  let candidates = usable
+  const requested = opts?.requestedSpecs
+  const specsRequested =
+    !!requested &&
+    typeof requested === 'object' &&
+    Object.values(requested).some((v) => v != null && String(v).trim() !== '')
+  if (specsRequested) {
+    const matched = usable.filter(
+      (r) =>
+        reconcileProductSpecs({
+          requested,
+          properties: r.properties ?? null,
+          name: r.name,
+          trade: opts?.trade ?? r.trade ?? null,
+          category: cat,
+        }).verdict === 'match',
+    )
+    if (matched.length > 0) candidates = matched
+  }
+
   // Sort cheapest → dearest; tie-break preferring is_preferred so the
   // operator's go-to wins when prices match.
-  const sorted = [...usable].sort((a, b) => {
+  const sorted = [...candidates].sort((a, b) => {
     const pa = num(a.unit_price_ex_gst)
     const pb = num(b.unit_price_ex_gst)
     if (pa !== pb) return pa - pb
@@ -426,6 +462,11 @@ export interface ChosenProduct {
    *  extra "this is the exact product" context alongside the photo. */
   description: string | null
   category: string
+  /** Trade of the chosen product — for the reconcile guard's SpecDefs. */
+  trade?: string | null
+  /** Structured specs of the chosen product — read by the reconcile guard,
+   *  never by price math. Null/empty when the catalogue row has none. */
+  properties?: Record<string, string | number | boolean | null> | null
 }
 export function chosenProductFromChoice(
   choice: ProductChoiceState | null | undefined,
@@ -443,5 +484,7 @@ export function chosenProductFromChoice(
     image_path: o.image_path ?? null,
     description: o.description ?? null,
     category: choice.category,
+    trade: choice.trade ?? null,
+    properties: o.properties ?? null,
   }
 }

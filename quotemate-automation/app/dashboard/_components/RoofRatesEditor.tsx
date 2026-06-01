@@ -1,15 +1,18 @@
 'use client'
 
-// /dashboard Pricing tab — per-tenant "Roof rates" editor.
+// /dashboard Pricing tab — per-tenant "Roof rates" editor (extended).
 //
-// Five inputs (one per editable material). Each shows the canonical
-// default as placeholder + tiny caption. Saving PATCHes
-// /api/tenant/roofing-rates, which writes pricing_book.overlays
-// .roofing_rate_card. Blank inputs clear that material's override (the
-// global default takes over). Validation: positive number ≤ $500/m².
+// Wave 1b — exposes the full RoofingRateCard, not just the $/m² rates:
+//   • Five $/m² material rates
+//   • Multi-storey loading %
+//   • Asbestos handling loading %
+//   • NEW — Complexity loading % (per the Jobber research learning)
+//   • Upgrade material (drives Best tier)
+//   • GST registered flag
 //
-// Forward-only: existing quotes don't re-price; only NEW measurements
-// pick up the change.
+// All fields are independent — leaving any input blank falls back to
+// the global default. Numeric validation: rates 0..500 $/m²; loadings
+// 0..100%.
 
 import { useCallback, useEffect, useState } from 'react'
 
@@ -23,42 +26,53 @@ const MATERIALS = [
 
 type MaterialKey = (typeof MATERIALS)[number][0]
 
+type Defaults = {
+  reroof_rate_per_m2: Record<MaterialKey, number>
+  multi_storey_loading_pct: number
+  asbestos_loading_pct: number
+  complexity_loading_pct: number
+  upgrade_material: MaterialKey
+  gst_registered: boolean
+}
+
+type Overrides = {
+  reroof_rate_per_m2: Partial<Record<MaterialKey, number>>
+  multi_storey_loading_pct: number | null
+  asbestos_loading_pct: number | null
+  complexity_loading_pct: number | null
+  upgrade_material: MaterialKey | null
+  gst_registered: boolean | null
+}
+
 type GetResponse =
-  | {
-      ok: true
-      materials: readonly MaterialKey[]
-      defaults: Record<MaterialKey, number>
-      overrides: Partial<Record<MaterialKey, number>>
-      has_pricing_book: boolean
-    }
+  | { ok: true; materials: readonly MaterialKey[]; defaults: Defaults; overrides: Overrides; has_pricing_book: boolean }
   | { ok: false; error: string }
 
 type PatchResponse =
-  | {
-      ok: true
-      overrides: Partial<Record<MaterialKey, number>>
-      effective_rate_per_m2: Record<MaterialKey, number>
-    }
+  | { ok: true }
   | { ok: false; error: string; issues?: Array<{ field: string; message: string }> }
 
-type Props = {
-  accessToken: string | null
-}
+type Props = { accessToken: string | null }
 
 export function RoofRatesEditor({ accessToken }: Props) {
-  const [defaults, setDefaults] = useState<Record<MaterialKey, number> | null>(null)
-  const [values, setValues] = useState<Record<MaterialKey, string>>({
+  const [defaults, setDefaults] = useState<Defaults | null>(null)
+  const [rates, setRates] = useState<Record<MaterialKey, string>>({
     colorbond_trimdek: '',
     colorbond_kliplok: '',
     concrete_tile: '',
     terracotta_tile: '',
     cement_sheet: '',
   })
+  const [multiStorey, setMultiStorey] = useState<string>('')
+  const [asbestos, setAsbestos] = useState<string>('')
+  const [complexity, setComplexity] = useState<string>('')
+  const [upgradeMat, setUpgradeMat] = useState<MaterialKey | ''>('')
+  const [gstMode, setGstMode] = useState<'' | 'true' | 'false'>('')
   const [hasPricingBook, setHasPricingBook] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<MaterialKey, string>>>({})
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [savedAt, setSavedAt] = useState<number | null>(null)
 
   const load = useCallback(async () => {
@@ -77,13 +91,21 @@ export function RoofRatesEditor({ accessToken }: Props) {
       }
       setDefaults(json.defaults)
       setHasPricingBook(json.has_pricing_book)
-      setValues({
-        colorbond_trimdek: stringify(json.overrides.colorbond_trimdek),
-        colorbond_kliplok: stringify(json.overrides.colorbond_kliplok),
-        concrete_tile: stringify(json.overrides.concrete_tile),
-        terracotta_tile: stringify(json.overrides.terracotta_tile),
-        cement_sheet: stringify(json.overrides.cement_sheet),
+      const o = json.overrides
+      setRates({
+        colorbond_trimdek: stringify(o.reroof_rate_per_m2.colorbond_trimdek),
+        colorbond_kliplok: stringify(o.reroof_rate_per_m2.colorbond_kliplok),
+        concrete_tile: stringify(o.reroof_rate_per_m2.concrete_tile),
+        terracotta_tile: stringify(o.reroof_rate_per_m2.terracotta_tile),
+        cement_sheet: stringify(o.reroof_rate_per_m2.cement_sheet),
       })
+      setMultiStorey(stringifyPct(o.multi_storey_loading_pct))
+      setAsbestos(stringifyPct(o.asbestos_loading_pct))
+      setComplexity(stringifyPct(o.complexity_loading_pct))
+      setUpgradeMat((o.upgrade_material as MaterialKey | null) ?? '')
+      setGstMode(
+        o.gst_registered === true ? 'true' : o.gst_registered === false ? 'false' : '',
+      )
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : String(e))
     } finally {
@@ -103,30 +125,33 @@ export function RoofRatesEditor({ accessToken }: Props) {
       setErrMsg(null)
       setFieldErrors({})
       try {
+        const body = {
+          reroof_rate_per_m2: {
+            colorbond_trimdek: rates.colorbond_trimdek === '' ? null : rates.colorbond_trimdek,
+            colorbond_kliplok: rates.colorbond_kliplok === '' ? null : rates.colorbond_kliplok,
+            concrete_tile: rates.concrete_tile === '' ? null : rates.concrete_tile,
+            terracotta_tile: rates.terracotta_tile === '' ? null : rates.terracotta_tile,
+            cement_sheet: rates.cement_sheet === '' ? null : rates.cement_sheet,
+          },
+          multi_storey_loading_pct: multiStorey === '' ? null : parsePctToFraction(multiStorey),
+          asbestos_loading_pct: asbestos === '' ? null : parsePctToFraction(asbestos),
+          complexity_loading_pct: complexity === '' ? null : parsePctToFraction(complexity),
+          upgrade_material: upgradeMat === '' ? null : upgradeMat,
+          gst_registered: gstMode === '' ? null : gstMode === 'true',
+        }
         const res = await fetch('/api/tenant/roofing-rates', {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            reroof_rate_per_m2: {
-              colorbond_trimdek: values.colorbond_trimdek === '' ? null : values.colorbond_trimdek,
-              colorbond_kliplok: values.colorbond_kliplok === '' ? null : values.colorbond_kliplok,
-              concrete_tile: values.concrete_tile === '' ? null : values.concrete_tile,
-              terracotta_tile: values.terracotta_tile === '' ? null : values.terracotta_tile,
-              cement_sheet: values.cement_sheet === '' ? null : values.cement_sheet,
-            },
-          }),
+          body: JSON.stringify(body),
         })
         const json = (await res.json()) as PatchResponse
         if (!json.ok) {
           if (json.issues && json.issues.length > 0) {
-            const fe: Partial<Record<MaterialKey, string>> = {}
-            for (const i of json.issues) {
-              const k = i.field.split('.').pop() as MaterialKey | undefined
-              if (k) fe[k] = i.message
-            }
+            const fe: Record<string, string> = {}
+            for (const i of json.issues) fe[i.field] = i.message
             setFieldErrors(fe)
             setErrMsg('Fix the highlighted fields and try again.')
           } else {
@@ -135,7 +160,6 @@ export function RoofRatesEditor({ accessToken }: Props) {
           return
         }
         setSavedAt(Date.now())
-        // Refresh values so blanks show the cleared state.
         await load()
       } catch (e) {
         setErrMsg(e instanceof Error ? e.message : String(e))
@@ -143,7 +167,7 @@ export function RoofRatesEditor({ accessToken }: Props) {
         setSaving(false)
       }
     },
-    [accessToken, values, load],
+    [accessToken, rates, multiStorey, asbestos, complexity, upgradeMat, gstMode, load],
   )
 
   if (!hasPricingBook) {
@@ -172,7 +196,7 @@ export function RoofRatesEditor({ accessToken }: Props) {
             Roof rates
           </div>
           <h3 className="mt-2 font-extrabold uppercase tracking-tight text-xl text-text-pri sm:text-2xl">
-            Your $/m² per material
+            Tune the roofing pricing engine
           </h3>
           <p className="mt-3 max-w-2xl text-base leading-relaxed text-text-sec">
             Override the global defaults the roofing estimator uses. Blank fields
@@ -196,54 +220,108 @@ export function RoofRatesEditor({ accessToken }: Props) {
         </div>
       )}
 
-      <div className="mt-6 grid gap-5 sm:grid-cols-2">
+      {/* ── Material rates ──────────────────────────────────────── */}
+      <SectionHeader title="$/m² per material" subtitle="The base rate the estimator multiplies sloped area by." />
+      <div className="mt-4 grid gap-5 sm:grid-cols-2">
         {MATERIALS.map(([key, label]) => {
-          const def = defaults?.[key]
-          const fe = fieldErrors[key]
+          const def = defaults?.reroof_rate_per_m2[key]
+          const fe = fieldErrors[`reroof_rate_per_m2.${key}`]
           return (
             <label key={key} className="block">
-              <div className="font-mono text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-text-dim">
-                {label}
-              </div>
-              <div className="relative mt-2">
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-base text-text-dim"
-                >
-                  $
-                </span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={0}
-                  max={500}
-                  step={1}
-                  value={values[key]}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, [key]: e.target.value }))
-                  }
-                  placeholder={def !== undefined ? String(def) : ''}
-                  disabled={loading || saving}
-                  aria-label={`${label} $/m²`}
-                  className={`w-full border bg-ink-deep px-8 py-3 font-mono text-base text-text-pri placeholder:text-text-dim focus:outline-none ${
-                    fe ? 'border-warning' : 'border-ink-line focus:border-accent'
-                  }`}
-                />
-                <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-xs text-text-dim">
-                  /m²
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-text-dim">
-                <span>
-                  {def !== undefined ? `Default $${def}/m²` : 'Default unavailable'}
-                </span>
-                {fe && <span className="text-warning">{fe}</span>}
-              </div>
+              <FieldLabel>{label}</FieldLabel>
+              <CurrencyInput
+                value={rates[key]}
+                onChange={(v) => setRates((r) => ({ ...r, [key]: v }))}
+                placeholder={def !== undefined ? String(def) : ''}
+                disabled={loading || saving}
+                hasError={!!fe}
+                ariaLabel={`${label} $/m²`}
+              />
+              <Caption error={fe} defaultHint={def !== undefined ? `Default $${def}/m²` : 'Default unavailable'} />
             </label>
           )
         })}
       </div>
 
+      {/* ── Loadings ────────────────────────────────────────────── */}
+      <SectionHeader
+        title="Loadings"
+        subtitle="Percentages that stack multiplicatively on the base rate. Stored as fractions (20% = 0.20)."
+      />
+      <div className="mt-4 grid gap-5 sm:grid-cols-3">
+        <PctInput
+          label="Multi-storey access"
+          value={multiStorey}
+          onChange={setMultiStorey}
+          defaultValue={defaults ? defaults.multi_storey_loading_pct * 100 : null}
+          error={fieldErrors.multi_storey_loading_pct}
+          disabled={loading || saving}
+          hint="Fires when 2+ storeys."
+        />
+        <PctInput
+          label="Asbestos handling"
+          value={asbestos}
+          onChange={setAsbestos}
+          defaultValue={defaults ? defaults.asbestos_loading_pct * 100 : null}
+          error={fieldErrors.asbestos_loading_pct}
+          disabled={loading || saving}
+          hint="Only on cement-sheet roofs after inspection."
+        />
+        <PctInput
+          label="Complexity (always on)"
+          value={complexity}
+          onChange={setComplexity}
+          defaultValue={defaults ? defaults.complexity_loading_pct * 100 : null}
+          error={fieldErrors.complexity_loading_pct}
+          disabled={loading || saving}
+          hint="Always-applied buffer (industry norm 10–25%)."
+        />
+      </div>
+
+      {/* ── Upgrade material + GST ──────────────────────────────── */}
+      <SectionHeader
+        title="Tier framing"
+        subtitle="Which material drives the Best tier upgrade, and whether GST is added."
+      />
+      <div className="mt-4 grid gap-5 sm:grid-cols-2">
+        <label className="block">
+          <FieldLabel>Best-tier upgrade material</FieldLabel>
+          <select
+            aria-label="Upgrade material"
+            value={upgradeMat}
+            onChange={(e) => setUpgradeMat(e.target.value as MaterialKey | '')}
+            disabled={loading || saving}
+            className="w-full border border-ink-line bg-ink-deep px-4 py-3 font-mono text-base text-text-pri focus:border-accent focus:outline-none"
+          >
+            <option value="">
+              {defaults ? `Default — ${displayMaterial(defaults.upgrade_material)}` : '—'}
+            </option>
+            {MATERIALS.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <Caption error={fieldErrors.upgrade_material} defaultHint={defaults ? `Default ${displayMaterial(defaults.upgrade_material)}` : ''} />
+        </label>
+        <label className="block">
+          <FieldLabel>GST registered</FieldLabel>
+          <select
+            aria-label="GST registered"
+            value={gstMode}
+            onChange={(e) => setGstMode(e.target.value as '' | 'true' | 'false')}
+            disabled={loading || saving}
+            className="w-full border border-ink-line bg-ink-deep px-4 py-3 font-mono text-base text-text-pri focus:border-accent focus:outline-none"
+          >
+            <option value="">{defaults ? `Default — ${defaults.gst_registered ? 'Yes' : 'No'}` : '—'}</option>
+            <option value="true">Yes — add 10% GST to inc-GST tier</option>
+            <option value="false">No — inc-GST equals ex-GST</option>
+          </select>
+          <Caption error={fieldErrors.gst_registered} defaultHint={defaults ? `Default ${defaults.gst_registered ? 'Yes' : 'No'}` : ''} />
+        </label>
+      </div>
+
+      {/* ── Actions ─────────────────────────────────────────────── */}
       <div className="mt-7 flex flex-wrap items-center gap-4 pt-2">
         <button
           type="submit"
@@ -266,15 +344,20 @@ export function RoofRatesEditor({ accessToken }: Props) {
         </button>
         <button
           type="button"
-          onClick={() =>
-            setValues({
+          onClick={() => {
+            setRates({
               colorbond_trimdek: '',
               colorbond_kliplok: '',
               concrete_tile: '',
               terracotta_tile: '',
               cement_sheet: '',
             })
-          }
+            setMultiStorey('')
+            setAsbestos('')
+            setComplexity('')
+            setUpgradeMat('')
+            setGstMode('')
+          }}
           disabled={loading || saving}
           className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-text-dim hover:text-accent disabled:opacity-50"
         >
@@ -285,7 +368,150 @@ export function RoofRatesEditor({ accessToken }: Props) {
   )
 }
 
+// ─── Sub-components ────────────────────────────────────────────────
+
+function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="mt-7 border-t border-ink-line pt-5">
+      <div className="font-mono text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-accent">
+        {title}
+      </div>
+      <p className="mt-1 text-sm text-text-sec">{subtitle}</p>
+    </div>
+  )
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="font-mono text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-text-dim">
+      {children}
+    </div>
+  )
+}
+
+function Caption({ error, defaultHint }: { error?: string; defaultHint?: string }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-text-dim">
+      <span>{defaultHint ?? ''}</span>
+      {error && <span className="text-warning">{error}</span>}
+    </div>
+  )
+}
+
+function CurrencyInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  hasError,
+  ariaLabel,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  disabled: boolean
+  hasError: boolean
+  ariaLabel: string
+}) {
+  return (
+    <div className="relative mt-2">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-base text-text-dim"
+      >
+        $
+      </span>
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        max={500}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        className={`w-full border bg-ink-deep px-8 py-3 font-mono text-base text-text-pri placeholder:text-text-dim focus:outline-none ${
+          hasError ? 'border-warning' : 'border-ink-line focus:border-accent'
+        }`}
+      />
+      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-xs text-text-dim">
+        /m²
+      </span>
+    </div>
+  )
+}
+
+function PctInput({
+  label,
+  value,
+  onChange,
+  defaultValue,
+  error,
+  disabled,
+  hint,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  defaultValue: number | null
+  error?: string
+  disabled: boolean
+  hint: string
+}) {
+  return (
+    <label className="block">
+      <FieldLabel>{label}</FieldLabel>
+      <div className="relative mt-2">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          max={100}
+          step={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={defaultValue !== null ? String(Math.round(defaultValue)) : ''}
+          disabled={disabled}
+          aria-label={label}
+          className={`w-full border bg-ink-deep px-4 py-3 pr-10 font-mono text-base text-text-pri placeholder:text-text-dim focus:outline-none ${
+            error ? 'border-warning' : 'border-ink-line focus:border-accent'
+          }`}
+        />
+        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-sm text-text-dim">
+          %
+        </span>
+      </div>
+      <Caption
+        error={error}
+        defaultHint={defaultValue !== null ? `Default ${Math.round(defaultValue)}% · ${hint}` : hint}
+      />
+    </label>
+  )
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────
+
 function stringify(v: number | null | undefined): string {
   if (v === null || v === undefined) return ''
   return String(v)
+}
+
+/** Convert a stored fraction (0.20) to a display string ("20"). */
+function stringifyPct(v: number | null | undefined): string {
+  if (v === null || v === undefined) return ''
+  return String(Math.round(v * 100))
+}
+
+/** Convert a display string ("20") to a stored fraction (0.20). */
+function parsePctToFraction(s: string): number | null {
+  const n = Number(s)
+  if (!Number.isFinite(n)) return null
+  return n / 100
+}
+
+function displayMaterial(m: MaterialKey): string {
+  const pair = MATERIALS.find(([k]) => k === m)
+  return pair ? pair[1] : m
 }

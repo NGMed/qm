@@ -5067,7 +5067,13 @@ function QuoteCard({ q, isMultiTrade, accessToken }: { q: Quote; isMultiTrade: b
   const betterTotal = betterSub !== null ? +(betterSub * gstRatio).toFixed(2) : null
   const bestTotal = bestSub !== null ? +(bestSub * gstRatio).toFixed(2) : null
   const customerLabel = q.customer_full_name || q.customer_first_name || '—'
-  const trade = q.trade as 'electrical' | 'plumbing' | null
+  const trade = q.trade as 'electrical' | 'plumbing' | 'roofing' | null
+  // Wave 3b — surface a "Roofing" trade badge so the tradie spots a
+  // roofing quote in the list at a glance. The detailed stat strip
+  // (m² / form / storeys / hips / valleys) lives on the customer page
+  // at /q/[token] via RoofHeroStrip — extending the dashboard data
+  // model to include intake.scope here is a follow-up.
+  const isRoofingTrade = trade === 'roofing'
   const isInspection = !!(q.needs_inspection || q.inspection_required)
   const hasTierLadder =
     goodTotal !== null || betterTotal !== null || bestTotal !== null
@@ -5126,6 +5132,13 @@ function QuoteCard({ q, isMultiTrade, accessToken }: { q: Quote; isMultiTrade: b
             {isMultiTrade && trade && (
               <span className="hidden sm:inline font-mono text-[0.6rem] uppercase tracking-[0.14em] text-accent font-bold">
                 · {tradeLabel(trade)}
+              </span>
+            )}
+            {/* Wave 3b — always-show ROOF pill on roofing quotes so it
+                stands out from electrical/plumbing in a mixed list. */}
+            {isRoofingTrade && (
+              <span className="inline-flex items-center bg-accent/15 px-1.5 py-0.5 font-mono text-[0.55rem] uppercase tracking-[0.16em] font-bold text-accent">
+                Roof
               </span>
             )}
           </div>
@@ -10102,8 +10115,10 @@ function SaveHint({ savedAt }: { savedAt: number | null }) {
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-function tradeLabel(t: 'electrical' | 'plumbing'): string {
-  return t === 'electrical' ? 'Electrical' : 'Plumbing'
+function tradeLabel(t: 'electrical' | 'plumbing' | 'roofing'): string {
+  if (t === 'electrical') return 'Electrical'
+  if (t === 'plumbing')   return 'Plumbing'
+  return 'Roofing'
 }
 
 /** Render the tenant's full trade portfolio. Falls back to the legacy

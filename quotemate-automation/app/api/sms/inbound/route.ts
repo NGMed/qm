@@ -62,6 +62,7 @@ import {
   type ProductChoiceState,
 } from '@/lib/sms/product-options'
 import type { TenantMaterial } from '@/lib/estimate/catalogue'
+import { deriveTradeFromJobType } from '@/lib/intake/schema'
 import { recordTrace } from '@/lib/log/trace'
 
 // WP9 — mid-conversation product options. Every WP9 block in this route
@@ -1781,13 +1782,20 @@ export async function POST(req: Request) {
             const { data: catRows } = await supabase
               .from('tenant_material_catalogue')
               .select(
-                'id, category, name, brand, range_series, unit_price_ex_gst, image_path, description, tier_hint, is_preferred, active',
+                'id, category, name, brand, range_series, unit_price_ex_gst, image_path, description, tier_hint, is_preferred, active, properties, trade',
               )
               .eq('tenant_id', tenant.id)
               .eq('active', true)
             const options = selectProductOptions(
               (catRows ?? []) as TenantMaterial[],
               category,
+              {
+                requestedSpecs:
+                  (conversationState.slots.requested_specs as
+                    | Record<string, string>
+                    | undefined) ?? null,
+                trade: deriveTradeFromJobType(decision.job_type_guess),
+              },
             )
             if (!options) {
               console.log('[sms/inbound:after] WP9 OFFER — no catalogue products for this category, skipping', {
@@ -1798,6 +1806,7 @@ export async function POST(req: Request) {
               const token = randomBytes(16).toString('hex')
               const choiceState: ProductChoiceState = {
                 category,
+                trade: deriveTradeFromJobType(decision.job_type_guess),
                 token,
                 status: 'pending',
                 options,

@@ -92,6 +92,14 @@ export const SlotsSchema = z.object({
     .enum(['10A', '20A', 'three-phase', 'unknown'])
     .nullable()
     .optional(),
+  // Open key->value bag of ANY product spec the customer states verbatim
+  // ("15 amp" -> {amperage:"15A"}, weatherproof outdoor GPO -> {ip_rating:"IP56"},
+  // "250L gas HWS" -> {energy_source:"gas", litres:"250"}). Captured ALONGSIDE
+  // circuit_required (which the recipe engine still uses, and which cannot
+  // represent 15A) so the agreed spec is never lost. Reconciled against the
+  // chosen catalogue product's properties downstream (lib/estimate/spec-reconcile).
+  // Accumulates across turns via the deep-merge in mergeSlotUpdates.
+  requested_specs: z.record(z.string(), z.string()).nullable().optional(),
 })
 
 // Slots that get persisted back to the customers row when the customer
@@ -183,6 +191,10 @@ export function seedStateFromKnownFields(args: {
   }
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
 // Pure function: merge an extractor's updates into existing state and
 // compute source attribution for each changed slot. No DB / LLM here —
 // makes this trivially testable.
@@ -202,6 +214,22 @@ export function mergeSlotUpdates(
   for (const [key, rawValue] of Object.entries(updates) as [SlotKey, unknown][]) {
     if (rawValue === null || rawValue === undefined) continue
     const oldValue = current.slots[key]
+
+    // requested_specs is an accumulating map — specs can be stated across
+    // multiple turns, so deep-merge new keys over old rather than wholesale
+    // replacing (an earlier "15 amp" must not be lost when a later turn adds
+    // "weatherproof"). New keys win on conflict. Deterministic, no LLM.
+    if (key === 'requested_specs' && isPlainObject(rawValue)) {
+      const prev = isPlainObject(oldValue) ? oldValue : {}
+      const merged = { ...prev, ...rawValue }
+      if (JSON.stringify(merged) !== JSON.stringify(prev)) {
+        ;(nextSlots as Record<string, unknown>).requested_specs = merged
+        nextSources.requested_specs = 'from_transcript'
+        changed = true
+      }
+      continue
+    }
+
     if (oldValue === rawValue) continue
 
     // Type-erased assignment is safe here — the Zod schema already validated.
@@ -499,6 +527,23 @@ EXTRACTION RULES:
         that case.
       - DO NOT confuse with the existing supplied_by slot: "I'll supply
         my own GPO" → supplied_by='customer', NOT circuit_required.
+  10e. REQUESTED_SPECS (open spec bag — captures ANY product spec verbatim):
+      - A key→value object of product specs the customer states IN THEIR OWN
+        WORDS, so the spec they agree to is never lost (circuit_required cannot
+        represent 15A; this can). Use lowercase snake_case keys.
+      - Phrasings → key:value:
+          "15 amp" / "15A" / "needs to be 15 amp"        → {"amperage":"15A"}
+          "20 amp circuit"                               → {"amperage":"20A"}
+          "weatherproof" / "outdoor IP56" / "IP-rated"   → {"ip_rating":"IP56"}
+          "gas hot water" / "gas HWS"                     → {"energy_source":"gas"}
+          "electric hot water" / "heat pump"             → {"energy_source":"electric"} / {"energy_source":"heat pump"}
+          "250 litre" / "250L tank"                      → {"litres":"250"}
+          "double GPO" / "single outlet"                 → {"poles":"double"} / {"poles":"single"}
+      - Combine multiple specs in ONE object: "250L gas unit" →
+        {"energy_source":"gas","litres":"250"}.
+      - Capture amperage HERE in addition to circuit_required (both are fine).
+      - Omit the field entirely when the customer states no concrete product spec.
+        NEVER invent a spec they didn't say.
   11. VERIFIED: true ONLY when the customer affirms a verification summary the
       agent just sent. Triggers: "yep", "yes", "correct", "that's right",
       "perfect", "all good", "spot on", "sounds good", "no worries", "yeah".

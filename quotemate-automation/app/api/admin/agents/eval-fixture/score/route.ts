@@ -45,7 +45,7 @@ const BodySchema = z.object({
   /** Optional override — defaults to EVAL_TENANT_ID env. Lets the agent
    *  pin a different tenant per fixture in future. */
   tenant_id: z.string().uuid().optional(),
-  /** Optional model override — defaults to claude-opus-4-7. */
+  /** Optional model override — defaults to claude-opus-4-8. */
   model_id: z.string().optional(),
 })
 
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
   }
 
   const { intake } = parsed.data
-  const modelId = parsed.data.model_id || 'claude-opus-4-7'
+  const modelId = parsed.data.model_id || 'claude-opus-4-8'
 
   // ── Load pricing_book for (tenant, trade) ─────────────────────────
   const { data: tenantBook, error: bookErr } = await supabase

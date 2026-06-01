@@ -39,6 +39,14 @@ export interface TenantMaterial {
    *  chooseMaterial(), strictly below an exact brand/range/tier match. */
   is_preferred?: boolean | null
   active?: boolean | null
+  /** Structured product specs (amperage, ip_rating, energy_source, litres…)
+   *  — the spec-aware-pricing lever. Used by selectProductOptions (match-
+   *  then-price) and the reconcile guard; NEVER by price math. Empty on
+   *  legacy rows (mig 028 default '{}') — callers degrade-never-block. */
+  properties?: Record<string, string | number | boolean | null> | null
+  /** Trade the catalogue row belongs to (electrical/plumbing/…). Surfaced
+   *  so spec reconciliation can pick the right (trade,category) SpecDefs. */
+  trade?: string | null
 }
 
 export interface SharedMaterial {
@@ -578,6 +586,9 @@ export interface ChosenProductInput {
   image_path?: string | null
   /** Operator's own product blurb (render-only context for WP4). */
   description?: string | null
+  /** Structured specs of the chosen product — read by the reconcile guard
+   *  (run.ts), never by price math. Optional; guard degrades when absent. */
+  properties?: Record<string, string | number | boolean | null> | null
 }
 export interface ApplyChosenResult {
   draft: any

@@ -87,15 +87,26 @@ export async function GET(req: Request) {
     | null
     | undefined
   const parsed = parseRoofingRateOverlay(overlay?.roofing_rate_card)
-  const overrides =
-    parsed.ok && parsed.overlay.reroof_rate_per_m2
-      ? parsed.overlay.reroof_rate_per_m2
-      : {}
+  const overrideObj = parsed.ok ? parsed.overlay : {}
   return Response.json({
     ok: true,
     materials: EDITABLE_MATERIALS,
-    defaults: DEFAULT_ROOFING_RATE_CARD.reroof_rate_per_m2,
-    overrides,
+    defaults: {
+      reroof_rate_per_m2: DEFAULT_ROOFING_RATE_CARD.reroof_rate_per_m2,
+      multi_storey_loading_pct: DEFAULT_ROOFING_RATE_CARD.multi_storey_loading_pct,
+      asbestos_loading_pct: DEFAULT_ROOFING_RATE_CARD.asbestos_loading_pct,
+      complexity_loading_pct: 0,
+      upgrade_material: DEFAULT_ROOFING_RATE_CARD.upgrade_material,
+      gst_registered: DEFAULT_ROOFING_RATE_CARD.gst_registered,
+    },
+    overrides: {
+      reroof_rate_per_m2: overrideObj.reroof_rate_per_m2 ?? {},
+      multi_storey_loading_pct: overrideObj.multi_storey_loading_pct ?? null,
+      asbestos_loading_pct: overrideObj.asbestos_loading_pct ?? null,
+      complexity_loading_pct: overrideObj.complexity_loading_pct ?? null,
+      upgrade_material: overrideObj.upgrade_material ?? null,
+      gst_registered: overrideObj.gst_registered ?? null,
+    },
     has_pricing_book: !!book,
   })
 }
@@ -118,14 +129,16 @@ export async function PATCH(req: Request) {
   } catch {
     return Response.json({ ok: false, error: 'invalid_json' }, { status: 400 })
   }
-  const inputs = (body as { reroof_rate_per_m2?: unknown })?.reroof_rate_per_m2 ?? {}
-  if (typeof inputs !== 'object' || inputs === null || Array.isArray(inputs)) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return Response.json(
-      { ok: false, error: 'invalid_request', issues: [{ field: 'reroof_rate_per_m2', message: 'Must be an object' }] },
+      { ok: false, error: 'invalid_request', issues: [{ field: '', message: 'Body must be an object' }] },
       { status: 400 },
     )
   }
-  const built = buildOverlayFromInputs(inputs as Record<string, unknown>)
+  // The PATCH now accepts the full overlay shape (rate map + 3 loadings
+  // + upgrade material + gst flag). buildOverlayFromInputs handles
+  // partial bodies (any key omitted falls back to the default).
+  const built = buildOverlayFromInputs(body as Record<string, unknown>)
   if (!built.ok) {
     return Response.json(
       { ok: false, error: 'validation_failed', issues: built.issues },

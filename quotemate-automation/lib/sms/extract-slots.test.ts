@@ -82,6 +82,70 @@ describe('Phase 4: SlotsSchema accepts the new recipe slots', () => {
   })
 })
 
+describe('requested_specs: open spec bag (spec-aware pricing Phase 1)', () => {
+  it('SlotsSchema accepts a key->value spec map', () => {
+    const r = SlotsSchema.safeParse({
+      job_type: 'power_points',
+      circuit_required: '20A',
+      requested_specs: { amperage: '15A' },
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.requested_specs).toEqual({ amperage: '15A' })
+  })
+
+  it('SlotsSchema accepts multiple spec keys', () => {
+    const r = SlotsSchema.safeParse({
+      requested_specs: { energy_source: 'gas', litres: '250' },
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('SlotsSchema rejects a non-string spec value', () => {
+    const r = SlotsSchema.safeParse({ requested_specs: { amperage: 15 } })
+    expect(r.success).toBe(false)
+  })
+
+  it('captures amperage HERE even though circuit_required cannot hold 15A', () => {
+    // The exact 15A-sauna bug: circuit_required enum has no 15A, but the
+    // open bag keeps the real spec the customer agreed to.
+    const r = SlotsSchema.safeParse({ requested_specs: { amperage: '15A' } })
+    expect(r.success).toBe(true)
+    // And the enum still rejects 15A (regression guard — unchanged behaviour).
+    expect(SlotsSchema.safeParse({ circuit_required: '15A' }).success).toBe(false)
+  })
+
+  it('first capture → from_transcript source', () => {
+    const next = mergeSlotUpdates(EMPTY_STATE, { requested_specs: { amperage: '15A' } })
+    expect(next.slots.requested_specs).toEqual({ amperage: '15A' })
+    expect(next.sources.requested_specs).toBe('from_transcript')
+    expect(next.last_extracted_at).not.toBeNull()
+  })
+
+  it('deep-merges specs stated across turns (earlier keys are not lost)', () => {
+    const turn1 = mergeSlotUpdates(EMPTY_STATE, { requested_specs: { amperage: '15A' } })
+    const turn2 = mergeSlotUpdates(turn1, { requested_specs: { ip_rating: 'IP56' } })
+    expect(turn2.slots.requested_specs).toEqual({ amperage: '15A', ip_rating: 'IP56' })
+  })
+
+  it('a later value for an existing key wins (correction)', () => {
+    const turn1 = mergeSlotUpdates(EMPTY_STATE, { requested_specs: { amperage: '10A' } })
+    const turn2 = mergeSlotUpdates(turn1, { requested_specs: { amperage: '15A' } })
+    expect(turn2.slots.requested_specs).toEqual({ amperage: '15A' })
+  })
+
+  it('a turn with no requested_specs leaves the accumulated map intact', () => {
+    const turn1 = mergeSlotUpdates(EMPTY_STATE, { requested_specs: { amperage: '15A' } })
+    const turn2 = mergeSlotUpdates(turn1, { room: 'garage' })
+    expect(turn2.slots.requested_specs).toEqual({ amperage: '15A' })
+  })
+
+  it('normaliseState round-trips a state carrying requested_specs', () => {
+    const state = mergeSlotUpdates(EMPTY_STATE, { requested_specs: { energy_source: 'gas' } })
+    const round = normaliseState(JSON.parse(JSON.stringify(state)))
+    expect(round.slots.requested_specs).toEqual({ energy_source: 'gas' })
+  })
+})
+
 describe('Phase 4: mergeSlotUpdates handles the new recipe slots', () => {
   it('first capture of distance_to_existing_power → from_transcript source', () => {
     const next = mergeSlotUpdates(EMPTY_STATE, {

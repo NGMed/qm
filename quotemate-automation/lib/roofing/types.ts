@@ -213,7 +213,7 @@ export type RoofingQuotePrice = {
   tiers: [RoofingPriceTier, RoofingPriceTier, RoofingPriceTier]
   /** Total active loadings that were stacked on the base rate. */
   loadings_applied: Array<{
-    code: 'multi_storey' | 'asbestos'
+    code: 'multi_storey' | 'asbestos' | 'complexity'
     pct: number
     detail: string
   }>

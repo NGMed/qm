@@ -71,6 +71,56 @@ describe('selectProductOptions', () => {
   })
 })
 
+describe('selectProductOptions — spec-aware (Phase 4)', () => {
+  const gpos: TenantMaterial[] = [
+    { id: 'g10', category: 'gpo', name: 'Clipsal 2000 double GPO 10A', unit_price_ex_gst: 10, active: true, trade: 'electrical', properties: { amperage: '10A' } },
+    { id: 'g15', category: 'gpo', name: 'Clipsal 15Amp', unit_price_ex_gst: 44, active: true, trade: 'electrical', properties: { amperage: '15A' } },
+  ]
+
+  it('offers ONLY the spec-matching product when a spec was requested', () => {
+    const r = selectProductOptions(gpos, 'gpo', { requestedSpecs: { amperage: '15A' }, trade: 'electrical' })!
+    expect(r).toHaveLength(1)
+    expect(r[0].name).toBe('Clipsal 15Amp')
+  })
+
+  it('falls back to price-only over ALL usable when nothing matches (never empty)', () => {
+    const r = selectProductOptions(gpos, 'gpo', { requestedSpecs: { amperage: '32A' }, trade: 'electrical' })!
+    expect(r).toHaveLength(2)
+    expect(r[0].name).toBe('Clipsal 2000 double GPO 10A')
+    expect(r[1].name).toBe('Clipsal 15Amp')
+  })
+
+  it('matches via the product NAME when properties are empty', () => {
+    const named: TenantMaterial[] = [
+      { id: 'a', category: 'gpo', name: 'Generic GPO 10A', unit_price_ex_gst: 9, active: true, trade: 'electrical' },
+      { id: 'b', category: 'gpo', name: 'Heavy GPO 15A', unit_price_ex_gst: 40, active: true, trade: 'electrical' },
+    ]
+    const r = selectProductOptions(named, 'gpo', { requestedSpecs: { amperage: '15A' }, trade: 'electrical' })!
+    expect(r).toHaveLength(1)
+    expect(r[0].name).toBe('Heavy GPO 15A')
+  })
+
+  it('two matching products → cheapest Good, dearest Better; wrong-spec dropped', () => {
+    const two: TenantMaterial[] = [
+      { id: 'a', category: 'gpo', name: 'Cheap 15A', unit_price_ex_gst: 30, active: true, trade: 'electrical', properties: { amperage: '15A' } },
+      { id: 'b', category: 'gpo', name: 'Premium 15A', unit_price_ex_gst: 60, active: true, trade: 'electrical', properties: { amperage: '15A' } },
+      { id: 'c', category: 'gpo', name: 'Wrong 10A', unit_price_ex_gst: 10, active: true, trade: 'electrical', properties: { amperage: '10A' } },
+    ]
+    const r = selectProductOptions(two, 'gpo', { requestedSpecs: { amperage: '15A' }, trade: 'electrical' })!
+    expect(r.map((o) => o.name)).toEqual(['Cheap 15A', 'Premium 15A'])
+  })
+
+  it('no specs / empty specs → unchanged price-only behaviour', () => {
+    expect(selectProductOptions(gpos, 'gpo')!).toHaveLength(2)
+    expect(selectProductOptions(gpos, 'gpo', { requestedSpecs: {}, trade: 'electrical' })!).toHaveLength(2)
+  })
+
+  it('carries product properties through onto the offered option', () => {
+    const r = selectProductOptions(gpos, 'gpo', { requestedSpecs: { amperage: '15A' }, trade: 'electrical' })!
+    expect(r[0].properties).toEqual({ amperage: '15A' })
+  })
+})
+
 describe('buildProductOptionsSms', () => {
   const opts = selectProductOptions(taps, 'tap')!
   it('includes both prices, a 1/2 instruction and the link', () => {

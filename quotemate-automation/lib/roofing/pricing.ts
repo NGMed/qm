@@ -147,7 +147,7 @@ export const DEFAULT_ROOFING_RATE_CARD: RoofingRateCard = {
 // ── Loadings ────────────────────────────────────────────────────────
 
 type Loading = {
-  code: 'multi_storey' | 'asbestos'
+  code: 'multi_storey' | 'asbestos' | 'complexity'
   pct: number
   detail: string
 }
@@ -174,6 +174,19 @@ export function applicableLoadings(
       code: 'asbestos',
       pct: rateCard.asbestos_loading_pct,
       detail: `${(rateCard.asbestos_loading_pct * 100).toFixed(0)}% asbestos handling loading`,
+    })
+  }
+  // Complexity loading — per-tenant override from the rate-card overlay
+  // (the "always-applied buffer" lever borrowed from Jobber's research,
+  // industry norm 0–25% to absorb on-the-job overhead that can't be
+  // named in advance). Only applies when > 0; preserves the no-load
+  // shape for tenants that don't set it.
+  const cx = (rateCard as { complexity_loading_pct?: unknown }).complexity_loading_pct
+  if (typeof cx === 'number' && Number.isFinite(cx) && cx > 0) {
+    out.push({
+      code: 'complexity',
+      pct: cx,
+      detail: `${(cx * 100).toFixed(0)}% complexity loading`,
     })
   }
   return out

@@ -1,17 +1,18 @@
 // ════════════════════════════════════════════════════════════════════
 // Roofing — per-tenant rate-card overlay (read + merge + validate).
 //
-// Purpose: let a tradie override the per-material $/m² rates in
-// `DEFAULT_ROOFING_RATE_CARD` without changing the global code defaults.
+// Wave 1b — extended to cover the full RoofingRateCard:
+//   • reroof_rate_per_m2 (per material)
+//   • multi_storey_loading_pct
+//   • asbestos_loading_pct
+//   • upgrade_material
+//   • gst_registered
+//   • NEW — complexity_loading_pct (per the Jobber research learning;
+//     industry norm 0–25% to absorb on-the-job overhead a tradie can
+//     never name in advance: broken tiles during lift, sarking strips,
+//     extra ridge bedding, etc.)
 //
 // Storage: pricing_book.overlays.roofing_rate_card (jsonb, per-tenant).
-//   Shape:
-//     {
-//       reroof_rate_per_m2?: Partial<Record<RoofMaterial, number>>
-//     }
-//   Only the rate-per-m² map is editable in Phase 1; multi-storey
-//   loading, asbestos loading, upgrade material, and gst_registered
-//   remain global (the polished spec explicitly punts them).
 //
 // MERGE SEMANTICS:
 //   • Every override value REPLACES the corresponding default.
@@ -36,6 +37,12 @@ export const MAX_RATE_PER_M2 = 500
  *  every tier price and quietly produce a $0 quote). */
 export const MIN_RATE_PER_M2 = 0
 
+/** Loadings are expressed as fractions (0.20 = +20%). Hard cap at 100%
+ *  to prevent runaway quotes (a tradie typing 150 expecting "%" would
+ *  multiply the price by 2.5×). */
+export const MAX_LOADING_PCT = 1.0
+export const MIN_LOADING_PCT = 0
+
 /** Materials the editor exposes. Phase 1 covers every key in the
  *  rate card except `unknown` (which is never user-selected). */
 export const EDITABLE_MATERIALS: ReadonlyArray<RoofMaterial> = [
@@ -54,6 +61,11 @@ const RatePerM2 = z
   .positive('Rate must be greater than 0')
   .max(MAX_RATE_PER_M2, `Rate must be at most $${MAX_RATE_PER_M2}/m²`)
 
+const LoadingPct = z
+  .number()
+  .min(MIN_LOADING_PCT, 'Loading must be 0% or more')
+  .max(MAX_LOADING_PCT, `Loading must be at most ${MAX_LOADING_PCT * 100}%`)
+
 export const RoofingRateOverlaySchema = z.object({
   reroof_rate_per_m2: z
     .object({
@@ -65,6 +77,20 @@ export const RoofingRateOverlaySchema = z.object({
     })
     .partial()
     .optional(),
+  multi_storey_loading_pct: LoadingPct.optional().nullable(),
+  asbestos_loading_pct: LoadingPct.optional().nullable(),
+  complexity_loading_pct: LoadingPct.optional().nullable(),
+  upgrade_material: z
+    .enum([
+      'colorbond_trimdek',
+      'colorbond_kliplok',
+      'concrete_tile',
+      'terracotta_tile',
+      'cement_sheet',
+    ])
+    .optional()
+    .nullable(),
+  gst_registered: z.boolean().optional().nullable(),
 })
 
 export type RoofingRateOverlay = z.infer<typeof RoofingRateOverlaySchema>
@@ -80,14 +106,8 @@ export type ParseOverlayResult =
 
 /**
  * PURE — parse + validate an unknown JSON value as a RoofingRateOverlay.
- *
- * Best-effort: each field is checked independently. A failed field is
- * reported and dropped from the parsed overlay so a single bad entry
- * doesn't poison the whole payload.
  */
 export function parseRoofingRateOverlay(input: unknown): ParseOverlayResult {
-  // null / undefined / empty → empty overlay (perfectly valid — means
-  // "no overrides").
   if (input == null) return { ok: true, overlay: {} }
   if (typeof input !== 'object' || Array.isArray(input)) {
     return {
@@ -95,10 +115,8 @@ export function parseRoofingRateOverlay(input: unknown): ParseOverlayResult {
       issues: [{ field: '', message: 'Overlay must be an object.' }],
     }
   }
-
   const parsed = RoofingRateOverlaySchema.safeParse(input)
   if (parsed.success) return { ok: true, overlay: parsed.data }
-
   const issues = parsed.error.issues.map((i) => ({
     field: i.path.join('.'),
     message: i.message,
@@ -109,42 +127,80 @@ export function parseRoofingRateOverlay(input: unknown): ParseOverlayResult {
 /**
  * PURE — merge an overlay onto the canonical default rate card.
  *
- * The overlay's per-material values replace the corresponding default;
- * any missing/null/undefined key uses the default. Multi-storey loading,
- * asbestos loading, upgrade material, and gst_registered all pass through
- * from the default (out of scope for this iteration).
+ * Every key the overlay supplies REPLACES the corresponding default;
+ * missing/null keys use the default.
+ *
+ * Note: `complexity_loading_pct` does NOT exist on the base RoofingRateCard
+ * type — it's a new lever introduced by the overlay. We stash it on the
+ * returned card via a typed-extension so the pricing engine can read it
+ * during loading-stack assembly.
  */
 export function mergeRoofingRateCard(
   base: RoofingRateCard,
   overlay: RoofingRateOverlay | null | undefined,
 ): RoofingRateCard {
-  if (!overlay || !overlay.reroof_rate_per_m2) return base
-  // `o` is keyed only by the editable materials (the schema rules out
-  // 'unknown'), so cast the lookup type narrowly to avoid a TS index
-  // error from the broader RoofMaterial enum.
-  const o = overlay.reroof_rate_per_m2 as Record<
-    (typeof EDITABLE_MATERIALS)[number],
-    number | null | undefined
-  >
-  const merged: Record<RoofMaterial, number> = { ...base.reroof_rate_per_m2 }
-  for (const m of EDITABLE_MATERIALS) {
-    const v = o[m]
-    if (typeof v === 'number' && Number.isFinite(v)) {
-      merged[m] = v
+  if (!overlay) return base
+
+  // Rate map merge (same as before).
+  let merged: RoofingRateCard = base
+  if (overlay.reroof_rate_per_m2) {
+    const o = overlay.reroof_rate_per_m2 as Record<
+      (typeof EDITABLE_MATERIALS)[number],
+      number | null | undefined
+    >
+    const map: Record<RoofMaterial, number> = { ...base.reroof_rate_per_m2 }
+    for (const m of EDITABLE_MATERIALS) {
+      const v = o[m]
+      if (typeof v === 'number' && Number.isFinite(v)) map[m] = v
     }
+    merged = { ...merged, reroof_rate_per_m2: map }
   }
-  return {
-    ...base,
-    reroof_rate_per_m2: merged,
+
+  // Scalar overrides.
+  if (
+    typeof overlay.multi_storey_loading_pct === 'number' &&
+    Number.isFinite(overlay.multi_storey_loading_pct)
+  ) {
+    merged = { ...merged, multi_storey_loading_pct: overlay.multi_storey_loading_pct }
   }
+  if (
+    typeof overlay.asbestos_loading_pct === 'number' &&
+    Number.isFinite(overlay.asbestos_loading_pct)
+  ) {
+    merged = { ...merged, asbestos_loading_pct: overlay.asbestos_loading_pct }
+  }
+  if (overlay.upgrade_material) {
+    merged = { ...merged, upgrade_material: overlay.upgrade_material }
+  }
+  if (typeof overlay.gst_registered === 'boolean') {
+    merged = { ...merged, gst_registered: overlay.gst_registered }
+  }
+
+  // Complexity loading — new lever the base type does not declare.
+  // Stash on the returned object so callers that read it via the
+  // `withComplexityLoading` helper find it; callers that ignore it see
+  // an ordinary RoofingRateCard.
+  if (
+    typeof overlay.complexity_loading_pct === 'number' &&
+    Number.isFinite(overlay.complexity_loading_pct)
+  ) {
+    ;(merged as RoofingRateCard & { complexity_loading_pct?: number }).complexity_loading_pct =
+      overlay.complexity_loading_pct
+  }
+
+  return merged
+}
+
+/** PURE — read the optional complexity loading from a merged card. */
+export function complexityLoadingFromCard(card: RoofingRateCard): number {
+  const v = (card as { complexity_loading_pct?: unknown }).complexity_loading_pct
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
 }
 
 /**
  * Convenience — build the effective rate card for a tenant from a raw
- * jsonb overlay value (e.g. `pricing_book.overlays.roofing_rate_card`).
- * Unparseable overlays silently fall back to the default so a malformed
- * DB row never breaks a quote — operators still see the validation error
- * in the API response when they save.
+ * jsonb overlay value. Unparseable overlays silently fall back to the
+ * default so a malformed DB row never breaks a quote.
  */
 export function effectiveRateCardFromOverlay(
   overlayJson: unknown,
@@ -155,48 +211,121 @@ export function effectiveRateCardFromOverlay(
   return mergeRoofingRateCard(base, parsed.overlay)
 }
 
+/** Shape of the partial body the dashboard PATCH sends. */
+export type DashboardInputs = {
+  reroof_rate_per_m2?: Partial<Record<RoofMaterial, number | string | null | undefined>>
+  multi_storey_loading_pct?: number | string | null
+  asbestos_loading_pct?: number | string | null
+  complexity_loading_pct?: number | string | null
+  upgrade_material?: RoofMaterial | null
+  gst_registered?: boolean | null
+}
+
 /**
  * PURE — turn a partial rate-card body from the dashboard into the
- * canonical overlay shape, dropping any blank/null values (so they fall
- * back to the default). Used by the PATCH handler.
- *
- * Validation issues are returned in the result so the route can surface
- * them to the UI verbatim.
+ * canonical overlay shape, dropping any blank/null values (so they
+ * fall back to the default).
  */
 export function buildOverlayFromInputs(
-  inputs: Partial<Record<RoofMaterial, number | string | null | undefined>>,
+  inputs: DashboardInputs | Partial<Record<RoofMaterial, number | string | null | undefined>>,
 ): ParseOverlayResult {
-  const cleaned: Record<string, number> = {}
   const issues: Array<{ field: string; message: string }> = []
-  for (const m of EDITABLE_MATERIALS) {
-    const raw = inputs[m]
+  const overlay: RoofingRateOverlay = {}
+
+  // Back-compat — earlier callers passed the rate map directly; detect
+  // that shape and rewrap.
+  const inputsAny = inputs as Record<string, unknown>
+  const isLegacyRateMap =
+    !('reroof_rate_per_m2' in inputsAny) &&
+    Object.keys(inputsAny).some((k) =>
+      (EDITABLE_MATERIALS as readonly string[]).includes(k),
+    )
+  const dashboard: DashboardInputs = isLegacyRateMap
+    ? { reroof_rate_per_m2: inputsAny as Partial<Record<RoofMaterial, number | string | null | undefined>> }
+    : (inputs as DashboardInputs)
+
+  // ── Rate map ─────────────────────────────────────────────────────
+  const rates = dashboard.reroof_rate_per_m2
+  if (rates) {
+    const cleaned: Record<string, number> = {}
+    for (const m of EDITABLE_MATERIALS) {
+      const raw = rates[m]
+      if (raw === null || raw === undefined || raw === '') continue
+      const n = typeof raw === 'number' ? raw : Number(raw)
+      if (!Number.isFinite(n)) {
+        issues.push({ field: `reroof_rate_per_m2.${m}`, message: 'Rate must be a number.' })
+        continue
+      }
+      if (n <= MIN_RATE_PER_M2) {
+        issues.push({
+          field: `reroof_rate_per_m2.${m}`,
+          message: 'Rate must be greater than 0.',
+        })
+        continue
+      }
+      if (n > MAX_RATE_PER_M2) {
+        issues.push({
+          field: `reroof_rate_per_m2.${m}`,
+          message: `Rate must be at most $${MAX_RATE_PER_M2}/m².`,
+        })
+        continue
+      }
+      cleaned[m] = n
+    }
+    if (Object.keys(cleaned).length > 0) {
+      overlay.reroof_rate_per_m2 = cleaned as Partial<Record<RoofMaterial, number>>
+    }
+  }
+
+  // ── Loadings (3 of them — multi_storey, asbestos, complexity) ────
+  const loadingKeys = [
+    ['multi_storey_loading_pct', dashboard.multi_storey_loading_pct],
+    ['asbestos_loading_pct',     dashboard.asbestos_loading_pct],
+    ['complexity_loading_pct',   dashboard.complexity_loading_pct],
+  ] as const
+  for (const [key, raw] of loadingKeys) {
     if (raw === null || raw === undefined || raw === '') continue
     const n = typeof raw === 'number' ? raw : Number(raw)
     if (!Number.isFinite(n)) {
-      issues.push({ field: `reroof_rate_per_m2.${m}`, message: 'Rate must be a number.' })
+      issues.push({ field: key, message: 'Loading must be a number.' })
       continue
     }
-    if (n <= MIN_RATE_PER_M2) {
+    if (n < MIN_LOADING_PCT) {
+      issues.push({ field: key, message: 'Loading must be 0% or more.' })
+      continue
+    }
+    if (n > MAX_LOADING_PCT) {
       issues.push({
-        field: `reroof_rate_per_m2.${m}`,
-        message: 'Rate must be greater than 0.',
+        field: key,
+        message: `Loading must be at most ${MAX_LOADING_PCT * 100}%.`,
       })
       continue
     }
-    if (n > MAX_RATE_PER_M2) {
-      issues.push({
-        field: `reroof_rate_per_m2.${m}`,
-        message: `Rate must be at most $${MAX_RATE_PER_M2}/m².`,
-      })
-      continue
-    }
-    cleaned[m] = n
+    overlay[key] = n
   }
+
+  // ── Upgrade material (enum) ──────────────────────────────────────
+  if (dashboard.upgrade_material) {
+    if (!(EDITABLE_MATERIALS as readonly string[]).includes(dashboard.upgrade_material)) {
+      issues.push({
+        field: 'upgrade_material',
+        message: `Upgrade material must be one of: ${EDITABLE_MATERIALS.join(', ')}.`,
+      })
+    } else {
+      overlay.upgrade_material = dashboard.upgrade_material as
+        | 'colorbond_trimdek'
+        | 'colorbond_kliplok'
+        | 'concrete_tile'
+        | 'terracotta_tile'
+        | 'cement_sheet'
+    }
+  }
+
+  // ── GST flag ─────────────────────────────────────────────────────
+  if (typeof dashboard.gst_registered === 'boolean') {
+    overlay.gst_registered = dashboard.gst_registered
+  }
+
   if (issues.length > 0) return { ok: false, issues }
-  return {
-    ok: true,
-    overlay: Object.keys(cleaned).length > 0
-      ? { reroof_rate_per_m2: cleaned as Partial<Record<RoofMaterial, number>> }
-      : {},
-  }
+  return { ok: true, overlay }
 }
