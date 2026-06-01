@@ -351,10 +351,11 @@ async function handleRoofingTurn(args: {
   if (decision.action === 'reconfirm' || decision.action === 'send_saved') {
     const pending = await loadPending(prevState?.pending_quote_token ?? null)
     if (pending) {
+      // Plain SMS (no MMS attachment) — AU long-code MMS delivery is
+      // unreliable. The roof image + map live on the linked page.
       const quoteUrl = `${baseUrl}/q/roof/${pending.token}`
-      const imageUrl = `${baseUrl}/api/roofing/q/${pending.token}/static-map`
       if (decision.action === 'reconfirm') {
-        await sendReply(composeConfirmMessage({ quote: pending.quote, address: pending.address, quoteUrl, firstName }), imageUrl)
+        await sendReply(composeConfirmMessage({ quote: pending.quote, address: pending.address, quoteUrl, firstName }))
         await persist({ slots: decision.slots, last_step: 'confirm_roof', pending_quote_token: pending.token, pending_structure_count: prevState?.pending_structure_count ?? pending.quote.structures.length }, 'open')
         return true
       }
@@ -362,7 +363,7 @@ async function handleRoofingTurn(args: {
       const finalQuote = decision.structureChoice != null
         ? narrowQuoteToStructure(pending.quote, decision.structureChoice)
         : pending.quote
-      await sendReply(buildRoofingReplyMessage({ quote: finalQuote, address: pending.address, quoteUrl, firstName }), imageUrl)
+      await sendReply(buildRoofingReplyMessage({ quote: finalQuote, address: pending.address, quoteUrl, firstName }))
       await persist({ slots: decision.slots, last_step: null, pending_quote_token: null, pending_structure_count: null }, 'done')
       return true
     }
@@ -401,17 +402,18 @@ async function handleRoofingTurn(args: {
           quote,
           public_token: token,
         })
+        // Plain SMS (no MMS attachment) — AU long-code MMS is unreliable;
+        // the roof image + map are on the linked page.
         const quoteUrl = `${baseUrl}/q/roof/${token}`
-        const imageUrl = `${baseUrl}/api/roofing/q/${token}/static-map`
         if (isInspection) {
-          // Inspection — terminal: send the inspection message + photo.
-          await sendReply(buildRoofingReplyMessage({ quote, address: reqInput.address.address, quoteUrl, firstName }), imageUrl)
+          // Inspection — terminal: send the inspection next-step + link.
+          await sendReply(buildRoofingReplyMessage({ quote, address: reqInput.address.address, quoteUrl, firstName }))
           await persist({ slots: decision.slots, last_step: null, pending_quote_token: null, pending_structure_count: null }, 'done')
           return true
         }
-        // Quotable — send the roof photo + "is this your roof?" and PARK
-        // at confirm_roof; the price goes out only after they confirm.
-        await sendReply(composeConfirmMessage({ quote, address: reqInput.address.address, quoteUrl, firstName }), imageUrl)
+        // Quotable — send "is this your roof?" + link and PARK at
+        // confirm_roof; the price goes out only after they confirm.
+        await sendReply(composeConfirmMessage({ quote, address: reqInput.address.address, quoteUrl, firstName }))
         await persist({ slots: decision.slots, last_step: 'confirm_roof', pending_quote_token: token, pending_structure_count: quote.structures.length }, 'open')
         return true
       }
