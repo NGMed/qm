@@ -16,19 +16,37 @@ const supabase = createClient(
 
 type LngLat = [number, number]
 
+function vertexOfStructure(s: unknown): LngLat | null {
+  const v = (s as { metrics?: { polygon_geojson?: { coordinates?: number[][][] } } })
+    ?.metrics?.polygon_geojson?.coordinates?.[0]?.[0]
+  if (Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number') {
+    return [v[0], v[1]]
+  }
+  return null
+}
+
 function firstVertexOf(quote: unknown): LngLat | null {
   // quote.structures[0].metrics.polygon_geojson.coordinates[0][0]
   const structures = (quote as { structures?: unknown })?.structures
   if (!Array.isArray(structures)) return null
   for (const s of structures) {
-    const coords = (s as { metrics?: { polygon_geojson?: { coordinates?: number[][][] } } })
-      ?.metrics?.polygon_geojson?.coordinates
-    const v = coords?.[0]?.[0]
-    if (Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number') {
-      return [v[0], v[1]]
-    }
+    const v = vertexOfStructure(s)
+    if (v) return v
   }
   return null
+}
+
+/** Centre on a specific 1-based building when `?b=N` is given (used for the
+ *  per-building roof-photo MMS); falls back to the first vertex / address. */
+function vertexForBuilding(quote: unknown, b: number | null): LngLat | null {
+  if (b != null) {
+    const structures = (quote as { structures?: unknown })?.structures
+    if (Array.isArray(structures) && b >= 1 && b <= structures.length) {
+      const v = vertexOfStructure(structures[b - 1])
+      if (v) return v
+    }
+  }
+  return firstVertexOf(quote)
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
@@ -36,6 +54,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   if (!token || token.length < 8) {
     return Response.json({ ok: false, error: 'bad_token' }, { status: 400 })
   }
+
+  // Optional 1-based building index — centre the image on that structure
+  // (used for the per-building roof-photo MMS on multi-building parcels).
+  const bRaw = new URL(req.url).searchParams.get('b')
+  const b = bRaw != null && /^\d{1,2}$/.test(bRaw) ? Number(bRaw) : null
 
   const { data: row, error } = await supabase
     .from('roofing_measurements')
@@ -52,7 +75,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   }
 
   const address = (row.address as string | null) ?? undefined
-  const vertex = firstVertexOf(row.quote)
+  const vertex = vertexForBuilding(row.quote, b)
   const center = vertex ? { lat: vertex[1], lng: vertex[0] } : undefined
   if (!address && !center) {
     return Response.json({ ok: false, error: 'no_location' }, { status: 400 })

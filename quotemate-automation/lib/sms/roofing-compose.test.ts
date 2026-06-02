@@ -7,6 +7,7 @@ import { priceMultiRoof, type RoofStructureInput } from '@/lib/roofing/pricing'
 import type { RoofMetrics, RoofUserInputs } from '@/lib/roofing/types'
 import {
   buildRoofingReplyMessage,
+  buildRoofPhotoMedia,
   composeBookingMessage,
   composeCancelMessage,
   composeConfirmMessage,
@@ -128,6 +129,41 @@ describe('composeConfirmMessage', () => {
     expect(msg).toMatch(/2\)/)
     expect(msg).toMatch(/number for just one/i)
     expect(msg).not.toMatch(/\$\d/)
+  })
+})
+
+describe('buildRoofPhotoMedia (best-effort MMS attachments)', () => {
+  const B = 'https://quote-mate-rho.vercel.app'
+
+  it('single building → one image, no ?b=, generic caption', () => {
+    const quote = priceMultiRoof({ structures: [house] })
+    const media = buildRoofPhotoMedia({ baseUrl: B, token: 'tok123', quote })
+    expect(media).toHaveLength(1)
+    expect(media[0].mediaUrl).toBe(`${B}/api/roofing/q/tok123/static-map`)
+    expect(media[0].caption).toBe('Your roof')
+  })
+
+  it('multiple buildings → one per building, ?b= per structure, label captions', () => {
+    const quote = priceMultiRoof({ structures: [house, shed] })
+    const media = buildRoofPhotoMedia({ baseUrl: B, token: 'tok123', quote })
+    expect(media).toHaveLength(2)
+    expect(media[0].mediaUrl).toBe(`${B}/api/roofing/q/tok123/static-map?b=1`)
+    expect(media[1].mediaUrl).toBe(`${B}/api/roofing/q/tok123/static-map?b=2`)
+    expect(media[0].caption).toBe(quote.structures[0].label)
+    expect(media[1].caption).toBe(quote.structures[1].label)
+  })
+
+  it('caps the number of images sent', () => {
+    const quote = priceMultiRoof({ structures: [house, shed, { ...shed, buildingId: 's3' }, { ...shed, buildingId: 's4' }] })
+    const media = buildRoofPhotoMedia({ baseUrl: B, token: 'tok123', quote, max: 3 })
+    expect(media).toHaveLength(3)
+  })
+
+  it('captions never contain a price', () => {
+    const quote = priceMultiRoof({ structures: [house, shed] })
+    for (const m of buildRoofPhotoMedia({ baseUrl: B, token: 'tok123', quote })) {
+      expect(m.caption).not.toMatch(/\$\d/)
+    }
   })
 })
 

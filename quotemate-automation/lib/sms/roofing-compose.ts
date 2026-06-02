@@ -25,6 +25,37 @@ export type RoofingReplyContext = {
   firstName?: string | null
 }
 
+/** One best-effort MMS roof photo: a public image URL + a short caption. */
+export type RoofPhotoMedia = { mediaUrl: string; caption: string }
+
+/**
+ * PURE — the roof-photo MMS attachments to send BEFORE the confirm SMS.
+ * One image for a single building; one per building (capped) for multiple,
+ * each centred on that structure via the static-map `?b=` param. Captions
+ * are the structure labels (price-free). The SMS confirm + page link is the
+ * canonical message; these MMS are a best-effort bonus for numbers that
+ * support MMS, so the caller never blocks on them.
+ */
+export function buildRoofPhotoMedia(opts: {
+  baseUrl: string
+  token: string
+  quote: MultiRoofQuote
+  /** Max images to send (avoid fanning out into many texts). Default 3. */
+  max?: number
+}): RoofPhotoMedia[] {
+  const { baseUrl, token, quote } = opts
+  const max = Math.max(1, opts.max ?? 3)
+  const base = `${baseUrl}/api/roofing/q/${token}/static-map`
+  const structures = Array.isArray(quote?.structures) ? quote.structures : []
+  if (structures.length <= 1) {
+    return [{ mediaUrl: base, caption: 'Your roof' }]
+  }
+  return structures.slice(0, max).map((s, i) => ({
+    mediaUrl: `${base}?b=${i + 1}`,
+    caption: s.label,
+  }))
+}
+
 /** PURE — whole-dollar AUD, no cents (SMS brevity). */
 export function fmtAud(n: number): string {
   const safe = Number.isFinite(n) ? n : 0
@@ -113,8 +144,8 @@ export function composeConfirmMessage(ctx: RoofingReplyContext): string {
   if (structures.length <= 1) {
     return [
       `${greeting(ctx.firstName)}is this your roof at ${ctx.address}?`,
-      `Reply YES and I'll send your quote, or NO if it's the wrong building.`,
-      `See it here: ${ctx.quoteUrl}`,
+      `I've sent you a photo to check. Reply YES and I'll send your quote, or NO if it's the wrong building.`,
+      `See it here too: ${ctx.quoteUrl}`,
     ].join('\n')
   }
   const list = structures.map((s, i) => {
@@ -122,10 +153,10 @@ export function composeConfirmMessage(ctx: RoofingReplyContext): string {
     return `${i + 1}) ${s.label}${area}`
   })
   return [
-    `${greeting(ctx.firstName)}I found ${structures.length} buildings at ${ctx.address}:`,
+    `${greeting(ctx.firstName)}I found ${structures.length} buildings at ${ctx.address} (I've sent photos to check):`,
     ...list,
     `Reply YES to quote all of them, the number for just one, or NO if none are right.`,
-    `See them here: ${ctx.quoteUrl}`,
+    `See them here too: ${ctx.quoteUrl}`,
   ].join('\n')
 }
 

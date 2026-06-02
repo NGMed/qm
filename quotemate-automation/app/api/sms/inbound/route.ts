@@ -26,6 +26,7 @@ import {
 } from '@/lib/sms/roofing-receptionist'
 import {
   buildRoofingReplyMessage,
+  buildRoofPhotoMedia,
   composeBookingMessage,
   composeCancelMessage,
   composeConfirmMessage,
@@ -331,6 +332,36 @@ async function handleRoofingTurn(args: {
     }
   }
   const baseUrl = ROOFING_APP_BASE_URL
+  // Best-effort roof-photo MMS sent BEFORE the confirm SMS. One image for a
+  // single building, one per building (capped) for several. Uses sendSms
+  // directly (NOT dispatchQuoteMessage) so a failure or a non-MMS number
+  // just means no photo — we never fall back to a plain SMS here, which
+  // would spam non-MMS numbers with extra texts. The confirm SMS that
+  // follows carries the page link, so this is purely a bonus. Never throws.
+  const sendRoofPhotos = async (token: string, quote: MultiRoofQuote) => {
+    // Fully guarded: nothing here may throw or it could skip the confirm SMS
+    // that follows. buildRoofPhotoMedia is inside the try for that reason.
+    try {
+      const media = buildRoofPhotoMedia({ baseUrl, token, quote, max: 3 })
+      for (const { mediaUrl, caption } of media) {
+        try {
+          const res = await sendSms({ to: fromNumber, from: replyFrom, text: caption, mediaUrl })
+          if (!res.ok) {
+            console.warn('[sms/inbound:roofing] roof photo MMS not sent (non-fatal)', { code: res.code })
+          }
+          await supabase.from('sms_messages').insert({
+            conversation_id: conversationId,
+            direction: 'outbound',
+            body: `[roof photo] ${caption}`,
+          })
+        } catch (e) {
+          console.warn('[sms/inbound:roofing] roof photo MMS threw (non-fatal)', e)
+        }
+      }
+    } catch (e) {
+      console.warn('[sms/inbound:roofing] sendRoofPhotos failed (non-fatal)', e)
+    }
+  }
   const loadPending = async (token: string | null) => {
     if (!token) return null
     const { data } = await supabase
@@ -458,9 +489,12 @@ async function handleRoofingTurn(args: {
           quote,
           public_token: token,
         })
-        // Plain SMS (no MMS attachment) — AU long-code MMS is unreliable;
-        // the roof image + map are on the linked page.
         const quoteUrl = `${baseUrl}/q/roof/${token}`
+        // Best-effort roof-photo MMS FIRST (one per building, capped), then
+        // the SMS. MMS is a bonus for numbers that support it; the SMS body
+        // carries the page link regardless, so a non-MMS number loses
+        // nothing. Never blocks the SMS that follows.
+        await sendRoofPhotos(token, quote)
         if (isInspection) {
           // Inspection: send the next-step + link, then PARK at
           // await_booking so a "yes" books it (instead of re-quoting).
