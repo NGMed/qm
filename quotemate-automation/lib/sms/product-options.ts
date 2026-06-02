@@ -26,6 +26,7 @@ import {
 } from '@/lib/estimate/catalogue'
 import { reconcileProductSpecs } from '@/lib/estimate/spec-guard'
 import type { RequestedSpecs } from '@/lib/estimate/spec-reconcile'
+import { requiresWeatherproof, productIsWeatherproof } from '@/lib/estimate/weatherproof'
 
 function num(v: number | string | null | undefined): number {
   if (v === null || v === undefined || v === '') return NaN
@@ -151,6 +152,30 @@ export function selectProductOptions(
   // Only one distinct product → offer it as the single option.
   if (good === better) return [toOpt(good, 'good')]
   return [toOpt(good, 'good'), toOpt(better, 'better')]
+}
+
+/**
+ * Does this job need a weatherproof product, and does the operator have one?
+ * Drives the customer-facing flag when an external install has no
+ * weatherproof option in the catalogue. selectProductOptions already PREFERS
+ * a weatherproof match (an indoor product reconciles as a mismatch for an
+ * outdoor job), so this only reports the gap. Pure.
+ */
+export function weatherproofAdvisory(
+  rows: TenantMaterial[],
+  category: string,
+  requested: RequestedSpecs,
+  trade?: string | null,
+): { required: boolean; available: boolean } {
+  const t = (trade ?? '').toLowerCase()
+  if (t === 'plumbing' || t === 'roofing' || !requiresWeatherproof(requested)) {
+    return { required: false, available: true }
+  }
+  const cat = normaliseCategory(category)
+  const available = (rows ?? [])
+    .filter((r) => (r.active ?? true) && normaliseCategory(r.category) === cat)
+    .some((r) => productIsWeatherproof(r.properties ?? null, r.name))
+  return { required: true, available }
 }
 
 /** Title-case-ish, human label for the category in the SMS. */

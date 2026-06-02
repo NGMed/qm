@@ -74,6 +74,7 @@ import {
   buildProductOptionsSms,
   buildChoiceHoldSms,
   categoryForJobType,
+  weatherproofAdvisory,
   type ProductChoiceState,
 } from '@/lib/sms/product-options'
 import type { TenantMaterial } from '@/lib/estimate/catalogue'
@@ -2047,7 +2048,24 @@ export async function POST(req: Request) {
               wp9HoldingOptionCount = options.length
               const appUrl = process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app'
               const chooseUrl = `${appUrl}/q/choose/${token}`
-              const optionsBody = buildProductOptionsSms(options, chooseUrl, category)
+              let optionsBody = buildProductOptionsSms(options, chooseUrl, category)
+              // External / weather-exposed install with no weatherproof
+              // product in the catalogue → flag it so the sparky confirms
+              // the right (IP-rated) unit rather than fitting an indoor one.
+              const wpAdvisory = weatherproofAdvisory(
+                (catRows ?? []) as TenantMaterial[],
+                category,
+                (conversationState.slots.requested_specs as Record<string, string> | undefined) ?? null,
+                deriveTradeFromJobType(decision.job_type_guess),
+              )
+              if (wpAdvisory.required && !wpAdvisory.available) {
+                optionsBody +=
+                  "\nNote: this looks like an outdoor spot, so it needs a weatherproof unit. The sparky will confirm the right one before booking."
+                console.log('[sms/inbound:after] WP9 OFFER — weatherproof flagged (no IP-rated product in catalogue)', {
+                  conversationId,
+                  category,
+                })
+              }
               const offerDispatch = await dispatchQuoteMessage({
                 to: fromNumber,
                 from: toNumber,

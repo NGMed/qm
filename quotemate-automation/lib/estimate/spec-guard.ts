@@ -27,6 +27,7 @@ import {
   type ReconcileVerdict,
   type SpecConflict,
 } from './spec-reconcile'
+import { weatherproofConflict } from './weatherproof'
 
 export type SpecGuardMode = 'off' | 'shadow' | 'enforce'
 
@@ -94,7 +95,18 @@ export function reconcileProductSpecs(args: {
   const checkKeys =
     defKeys.size > 0 ? reqKeys.filter((k) => defKeys.has(k.toLowerCase())) : reqKeys
   const effective = effectiveProductProps(args.properties, args.name, checkKeys)
-  return reconcileSpecs(requested, effective, args.trade, args.category)
+  const base = reconcileSpecs(requested, effective, args.trade, args.category)
+
+  // Cross-cutting outdoor rule: an external/weather-exposed install needs a
+  // weatherproof fitting. A non-weatherproof product is a positive mismatch
+  // (so spec-aware selection won't prefer it and the guard flags it). Applies
+  // to electrical fittings; skipped for plumbing/roofing where it's not a spec.
+  const trade = (args.trade ?? '').toLowerCase()
+  if (trade !== 'plumbing' && trade !== 'roofing') {
+    const wp = weatherproofConflict(args.requested, args.properties, args.name)
+    if (wp) return { verdict: 'mismatch', conflicts: [...base.conflicts, wp] }
+  }
+  return base
 }
 
 /** A catalogue row, narrowed to what the coverage-gap rule reads. */
