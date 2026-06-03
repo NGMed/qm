@@ -24,6 +24,7 @@ import { RoofMap, type RoofMapBuilding } from '../_components/RoofMap'
 import { AddressAutocomplete } from '../_components/AddressAutocomplete'
 import { GoogleStaticMap } from '../_components/GoogleStaticMap'
 import { PhotoVerify } from '../_components/PhotoVerify'
+import { SolarCheck } from '../_components/SolarCheck'
 
 type MultiResponse =
   | {
@@ -209,6 +210,7 @@ export default function RoofingMeasurePage() {
   )
 
   const quote = resp && resp.ok === true ? resp.quote : null
+  const solarTotals = quote ? combinedIncludedTotals(quote, included) : null
 
   /** Override one structure's material and re-price the whole property
    *  (Geoscape building set is stable for the same address). */
@@ -477,6 +479,18 @@ export default function RoofingMeasurePage() {
           quoteShareUrl={quoteShareUrl}
           onMaterialDetected={setMaterial}
         />
+      )}
+
+      {quote && solarTotals && (
+        <section className="relative z-10 mx-auto mt-6 max-w-6xl px-6 pb-8 sm:px-10">
+          <SolarCheck
+            accessToken={token}
+            address={address}
+            intent={intent}
+            betterIncGst={solarTotals.incGst[1]}
+            bestIncGst={solarTotals.incGst[2]}
+          />
+        </section>
       )}
 
       <div className="relative z-10 bg-accent px-6 py-5 text-center text-white">

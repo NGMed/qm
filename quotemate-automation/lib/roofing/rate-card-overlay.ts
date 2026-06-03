@@ -43,6 +43,10 @@ export const MIN_RATE_PER_M2 = 0
 export const MAX_LOADING_PCT = 1.0
 export const MIN_LOADING_PCT = 0
 
+/** Solar detach & reinstate is a dollar allowance, not a fraction. Cap it
+ *  so a typo can't add an absurd amount to a quote. */
+export const MAX_SOLAR_ALLOWANCE = 20000
+
 /** Materials the editor exposes. Phase 1 covers every key in the
  *  rate card except `unknown` (which is never user-selected). */
 export const EDITABLE_MATERIALS: ReadonlyArray<RoofMaterial> = [
@@ -80,6 +84,18 @@ export const RoofingRateOverlaySchema = z.object({
   multi_storey_loading_pct: LoadingPct.optional().nullable(),
   asbestos_loading_pct: LoadingPct.optional().nullable(),
   complexity_loading_pct: LoadingPct.optional().nullable(),
+  solar_detach_reinstate_base_ex_gst: z
+    .number()
+    .min(0)
+    .max(MAX_SOLAR_ALLOWANCE)
+    .optional()
+    .nullable(),
+  solar_detach_reinstate_per_array_ex_gst: z
+    .number()
+    .min(0)
+    .max(MAX_SOLAR_ALLOWANCE)
+    .optional()
+    .nullable(),
   upgrade_material: z
     .enum([
       'colorbond_trimdek',
@@ -186,6 +202,23 @@ export function mergeRoofingRateCard(
   ) {
     ;(merged as RoofingRateCard & { complexity_loading_pct?: number }).complexity_loading_pct =
       overlay.complexity_loading_pct
+  }
+
+  // Solar detach & reinstate dollar allowance — new levers the base type
+  // does not declare; read back via solarAllowanceConfigFromCard (lib/roofing/solar.ts).
+  if (
+    typeof overlay.solar_detach_reinstate_base_ex_gst === 'number' &&
+    Number.isFinite(overlay.solar_detach_reinstate_base_ex_gst)
+  ) {
+    ;(merged as RoofingRateCard & { solar_detach_reinstate_base_ex_gst?: number }).solar_detach_reinstate_base_ex_gst =
+      overlay.solar_detach_reinstate_base_ex_gst
+  }
+  if (
+    typeof overlay.solar_detach_reinstate_per_array_ex_gst === 'number' &&
+    Number.isFinite(overlay.solar_detach_reinstate_per_array_ex_gst)
+  ) {
+    ;(merged as RoofingRateCard & { solar_detach_reinstate_per_array_ex_gst?: number }).solar_detach_reinstate_per_array_ex_gst =
+      overlay.solar_detach_reinstate_per_array_ex_gst
   }
 
   return merged
