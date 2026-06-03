@@ -178,12 +178,18 @@ export default function SignageHubPage() {
                 <Stat label="Needs review" value={rollup.needs_review} tone="accent" />
                 <Stat label="Awaiting" value={rollup.awaiting} />
               </div>
-              <div className="mt-5">
+              <div className="mt-5 flex flex-wrap gap-3">
                 <Link
                   href="/dashboard/signage/queue"
                   className="inline-flex items-center gap-2 bg-accent px-6 py-3.5 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-accent-press"
                 >
                   Open review queue <span aria-hidden="true">&rarr;</span>
+                </Link>
+                <Link
+                  href="/dashboard/signage/audit"
+                  className="inline-flex items-center gap-2 border border-ink-line px-6 py-3.5 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-text-pri transition-colors hover:border-accent hover:text-accent"
+                >
+                  Instant audit (upload PDF / photos) <span aria-hidden="true">&rarr;</span>
                 </Link>
               </div>
             </section>

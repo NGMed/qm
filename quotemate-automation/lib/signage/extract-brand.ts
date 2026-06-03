@@ -12,7 +12,7 @@
 
 import type { Confidence, ShotDef, VerdictMode } from './types'
 
-const DEFAULT_MODEL = process.env.SIGNAGE_EXTRACT_MODEL ?? 'claude-opus-4-8'
+const DEFAULT_MODEL = process.env.SIGNAGE_EXTRACT_MODEL ?? 'claude-sonnet-4-6'
 
 export type ExtractedRule = {
   rule_key: string
@@ -157,6 +157,9 @@ export async function extractBrand(args: {
     const { text } = await generateText({
       model: anthropic(args.model ?? DEFAULT_MODEL),
       temperature: 0,
+      // A full rule set is large JSON — give it room so the output isn't
+      // truncated (truncation → unparseable → silently empty).
+      maxOutputTokens: 32000,
       messages: [{ role: 'user' as const, content: prompt }],
     })
     return parseBrandExtraction(text)
