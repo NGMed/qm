@@ -1,7 +1,5 @@
-EE2 GPO x1 (standard) — PASS. AUTO-QUOTE. assembly $29.92(=$22x1.36) grounded; labour 0.3+2.7 floor=3.0; $422.31.
-=3.0; $431.29. Easy job correctly auto-quoted.
-quote, $99 = FAIL
-================================================================================
+EE4 outdoor LED light x1 (picker Lumiere) — PASS. AUTO-QUOTE. mat $42 grounded; labour 0.7(0.6+brick)+2.3 floor=3.0; $435.60. classified electrical OK (used "external brick wall" not eaves).
+=======================================================================
 d per-tap 3x$68=$204 (steep).
 
 ================================================================================
