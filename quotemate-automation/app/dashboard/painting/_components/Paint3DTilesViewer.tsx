@@ -76,16 +76,18 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
     setStage('Locating property…')
     setErrMsg(null)
 
-    // Never spin forever — surface a hint if something stalls.
+    // Never spin forever. NB the FIRST open in `npm run dev` compiles the
+    // (very large) CesiumJS chunk, which can take 1–2 min; it's cached after
+    // and instant in the production build. So the timeout is generous.
     const watchdog = setTimeout(() => {
       if (cancelled) return
       setStatus((s) => (s === 'loading' ? 'error' : s))
       setErrMsg(
         (m) =>
           m ??
-          'The 3D view is taking unusually long — likely the Map Tiles API key/billing, or no 3D coverage for this address. Open the browser console to see tile errors.',
+          'Still loading after 3 min. In dev the first open compiles the CesiumJS engine (1–2 min) — try once more and it should be cached. If it persists, open DevTools → Console and share any red errors.',
       )
-    }, 50_000)
+    }, 180_000)
 
     void (async () => {
       try {
@@ -96,6 +98,7 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
           body: JSON.stringify({ address, postcode, state }),
         })
         const locJson = (await locRes.json()) as ({ ok: true } & Loc) | { ok: false; code?: string; detail?: string }
+        console.log('[paint-3d] 3d-location:', locJson)
         if (!locJson.ok) throw new Error(locJson.detail ?? locJson.code ?? 'Could not locate the property.')
         if (cancelled) return
 
@@ -105,7 +108,10 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
         ;(window as unknown as { CESIUM_BASE_URL?: string }).CESIUM_BASE_URL = '/cesium'
         ensureCesiumCss()
         setStage('Loading 3D engine…')
+        console.log('[paint-3d] importing CesiumJS (first time in dev compiles a large chunk — can take 1–2 min)…')
+        console.time('[paint-3d] cesium import')
         const Cesium = await import('cesium')
+        console.timeEnd('[paint-3d] cesium import')
         if (cancelled || !containerRef.current) return
         cesiumRef.current = Cesium
         if (ION_TOKEN) Cesium.Ion.defaultAccessToken = ION_TOKEN
@@ -134,10 +140,12 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
         // 4. Google Photorealistic 3D Tiles via the official helper — it
         // attaches the key to EVERY tile request (a raw root URL does not).
         setStage('Loading Google 3D tiles…')
+        console.log('[paint-3d] requesting Google Photorealistic 3D Tiles…')
         const tileset = await Cesium.createGooglePhotorealistic3DTileset(
           { key: MAPS_3D_KEY },
           { showCreditsOnScreen: true },
         )
+        console.log('[paint-3d] tileset ready')
         if (cancelled) {
           viewer.destroy()
           return
@@ -166,6 +174,7 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
           setStatus('ready')
         }
       } catch (e) {
+        console.error('[paint-3d] failed:', e)
         if (!cancelled) {
           clearTimeout(watchdog)
           setStatus('error')

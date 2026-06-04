@@ -56,8 +56,8 @@ export function RoofTilesViewer({ token, address, postcode, state }: Props) {
     const watchdog = setTimeout(() => {
       if (cancelled) return
       setStatus((s) => (s === 'loading' ? 'error' : s))
-      setErrMsg((m) => m ?? 'The 3D view is taking unusually long — check the Map Tiles API key/billing, or there may be no 3D coverage for this address.')
-    }, 50_000)
+      setErrMsg((m) => m ?? 'Still loading after 3 min. In dev the first open compiles the CesiumJS engine (1–2 min) — try once more; it caches after. If it persists, open DevTools → Console for errors.')
+    }, 180_000)
 
     void (async () => {
       try {

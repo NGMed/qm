@@ -1,12 +1,12 @@
-PP6 CCTV drain inspection x1 (standard) — PASS. AUTO-QUOTE. CCTV assembly $204(=$150x1.36) + call-out $160 grounded; labour 3.0 floor; GOOD $718.
-floor; GOOD $609.20 (default=better full-suite $1105 upsell).
-20x1.36); labour 3.0 floor; $996.82. Picker recipe substitution (only garden tap in tap recipe).
-ICAL round3 done: EE1-9 PASS (EE2 was r2), EE7 FAIL(customer-supply fan billed), EE10 FAIL(diagnostic $99). 8 PASS / 2 FAIL ---
-/ 4 FAIL (2 CRITICAL)
-LABOUR FIX: PERFECT everywhere (E1=4.0/E6=2.4/E7=3.0/P16=3.0+0.75; large counts correct; NO count-as-hours anywhere). Materials grounded@catalogue+36% markup everywhere they quoted.
-PASS: E1,E3,E4,E5,E6,E7,E8,E9,P10,P11,P16
-PARTIAL: E2 (premium DC request -> default tier=AC fans; correct DC only in unselected BEST)
-FAIL: P12 toilet suite ->$99 (reproduced, catalogue-gap grounding), P13 electric HWS ->$99 (reproduced)
-CRITICAL FAIL: P14 gas HWS auto-quoted $2466 needs_inspection=FALSE on STANDARD path (uses "Install electric HWS" assembly to skirt always_inspection gate; WORSE than round1 where standard gave $99). P15 heat pump -> GAS substitution + auto-quote $2593 + bypass.
-ROOT CAUSE (gas bypass): always_inspection enforced per-assembly ("Install gas HWS"); LLM builds gas quote using non-gated "Install electric HWS" assembly + gas material -> skirts gate. FIX MUST gate by category/material energy_source, not just one assembly id.
-IMPROVED since round1: E5 aircon new-circuit now -> $99 with PROPER reason (not grounding-failure).
+PP10 electric HWS (RE-TEST as easy swap, standard) — FAIL. STILL -> $99 "3 line items failed grounding" even framed as simple like-for-like swap. Violates easy-job rule. Reliably broken (3 rounds).
+
+================================================================================
+RALPH ROUND-3 SUMMARY (20 tests): ~14 PASS / 2 borderline-PARTIAL / 4 FAIL
+LABOUR FIX: PERFECT everywhere (EE9 downlight x4=1.6hr; no count-as-hours in any of 20). Materials grounded@catalogue+markup on every auto-quote.
+EASY-JOB RULE (auto-quote not $99): SATISFIED for downlights, GPOs, smoke, fans, cooktops, outdoor lights, taps, washers, cistern repair, drains, CCTV — all auto-quote. GOOD.
+FAILS (violate easy-job rule, all catalogue-gap grounding -> $99): PP9 toilet suite (3rd round), PP10 electric HWS (3rd round), EE10 diagnostic (should be $165 fee).
+NEW BUG: EE7 customer-supplied fan billed $178 for the customer's own fan (picker/chosen-product ignores supply mode; assembly items like GPO/cooktop correctly install-only).
+INCONSISTENT: PP7 gas connection $99 this round vs auto-quote round1 (non-deterministic grounding).
+PICKER SUBSTITUTION: kitchen mixer->garden tap, dimmable->Black Fireflies, premium-DC->AC (standard/LLM path often corrects; recipe catalogue too thin per category).
+MIS-DEFAULT UPSELL persists: repair requests (washer, cistern) default selected_tier to full-replacement tier.
+ROOT FIX for the FAILS = catalogue the common sundries (tempering valve, pan connector, isolation valve) OR don't fail the WHOLE quote when only a minor sundry line is ungroundable (drop/soften it). Diagnostic needs its $165 flat-fee/0hr to satisfy min-labour.
