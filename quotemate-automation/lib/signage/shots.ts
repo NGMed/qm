@@ -35,6 +35,33 @@ export function shotLabel(slot: ShotSlot, shots: ShotDef[]): string {
   return shots.find((s) => s.slot === slot)?.label ?? slot
 }
 
+function slugifySlot(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+/** Sanitise shots-editor input into clean ShotDef[]: snake_case slot,
+ *  trimmed label/instruction, de-duplicated by slot, dropping entries with
+ *  no slot or no label. Used by the brand shots-editor PATCH route. */
+export function normalizeShots(input: unknown): ShotDef[] {
+  if (!Array.isArray(input)) return []
+  const out: ShotDef[] = []
+  const seen = new Set<string>()
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue
+    const o = raw as Record<string, unknown>
+    const slot = slugifySlot(typeof o.slot === 'string' ? o.slot : '')
+    const label = typeof o.label === 'string' ? o.label.trim() : ''
+    if (!slot || !label || seen.has(slot)) continue
+    seen.add(slot)
+    out.push({ slot, label, instruction: typeof o.instruction === 'string' ? o.instruction.trim() : '' })
+  }
+  return out
+}
+
 /** The rules the AI actually scores for a given shot — those it may at
  *  least FLAG (verdict_mode pass_fail or detect_only) whose `required_shots`
  *  include this slot. needs_reference + review rules are never sent to the

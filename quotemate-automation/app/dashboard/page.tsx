@@ -10425,13 +10425,14 @@ function SignageHubTab({ accessToken }: { accessToken: string | null }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void navigator.clipboard.writeText(r.link)}
-                    className="border border-ink-line px-3 py-1.5 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-text-sec transition-colors hover:border-accent hover:text-accent"
+                  <a
+                    href={r.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 border border-ink-line px-3 py-1.5 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-text-sec transition-colors hover:border-accent hover:text-accent"
                   >
-                    Copy link
-                  </button>
+                    Open <span aria-hidden="true">&#8599;</span>
+                  </a>
                   {r.assessment_id && (
                     <Link
                       href={`/dashboard/signage/queue?a=${r.assessment_id}`}

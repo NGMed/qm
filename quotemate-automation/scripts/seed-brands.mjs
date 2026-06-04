@@ -28,6 +28,13 @@ const F45 = {
     { slot: 'reception', label: 'Reception / desk', instruction: 'The reception desk and the wall directly behind it.' },
     { slot: 'workout_walls', label: 'Workout walls', instruction: 'The training-floor walls — capture the colour bands (dark grey, red stripe, light grey) and any wall decals.' },
     { slot: 'retail', label: 'Retail area', instruction: 'The retail racks and the slogan above them.' },
+    { slot: 'external_master_logo', label: 'External master logo', instruction: 'The external master F45 logo lockup on the glass/facade — ideally white-on-blue.' },
+    { slot: 'main_door_decal', label: 'Main door decal', instruction: 'The entrance door decal on the main glass door.' },
+    { slot: 'window_wrap', label: 'Window wrap', instruction: 'The perforated window wrap / vinyl covering the storefront windows.' },
+    { slot: 'racing_stripe', label: 'Racing stripe', instruction: 'The external window racing stripe and its tagline.' },
+    { slot: 'reception_desk_sign', label: 'Reception desk sign', instruction: "The 'Team [Studio Name]' signage on the front of the reception desk." },
+    { slot: 'team_training_decal', label: 'Team Training decal', instruction: "The 'Team Training' wall decal in the workout area." },
+    { slot: 'banners_aframes', label: 'Banners / A-frames', instruction: 'Any teardrop banners, pull-up banners, or A-frame signage on site.' },
   ],
 }
 

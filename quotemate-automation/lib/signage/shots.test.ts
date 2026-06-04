@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { coerceShots, autoRulesForShot, shotSlots, shotLabel } from './shots'
+import { coerceShots, autoRulesForShot, shotSlots, shotLabel, normalizeShots } from './shots'
 import type { ShotDef, SignageRule } from './types'
 
 const SHOTS: ShotDef[] = [
@@ -44,6 +44,26 @@ describe('shotSlots / shotLabel', () => {
   it('looks up a label, falling back to the slot id', () => {
     expect(shotLabel('logo_wall', SHOTS)).toBe('Logo wall')
     expect(shotLabel('unknown', SHOTS)).toBe('unknown')
+  })
+})
+
+describe('normalizeShots', () => {
+  it('snake_cases slots, trims, de-dupes, drops entries with no slot or label', () => {
+    const out = normalizeShots([
+      { slot: 'External Master Logo', label: ' External logo ', instruction: 'on the glass' },
+      { slot: 'external-master-logo', label: 'dup slot', instruction: '' }, // dup after slugify
+      { slot: '', label: 'no slot' },
+      { slot: 'window_wrap', label: '' }, // no label
+      { slot: 'racing stripe!!', label: 'Racing stripe', instruction: '' },
+    ])
+    expect(out).toEqual([
+      { slot: 'external_master_logo', label: 'External logo', instruction: 'on the glass' },
+      { slot: 'racing_stripe', label: 'Racing stripe', instruction: '' },
+    ])
+  })
+  it('returns [] for non-array input', () => {
+    expect(normalizeShots('nope')).toEqual([])
+    expect(normalizeShots(null)).toEqual([])
   })
 })
 

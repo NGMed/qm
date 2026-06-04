@@ -79,6 +79,12 @@ export default function StudioUploadPage() {
   return (
     <main className="min-h-screen bg-ink-deep text-text-pri">
       <section className="mx-auto max-w-2xl px-6 pt-14 pb-10 sm:px-8">
+        <a
+          href="/dashboard/signage"
+          className="mb-5 inline-flex items-center gap-2 font-mono text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-text-dim transition-colors hover:text-accent"
+        >
+          <span aria-hidden="true">&larr;</span> Back to signage
+        </a>
         <div className="font-mono text-[0.78rem] font-semibold uppercase tracking-[0.18em] text-accent">
           {brand?.name ?? 'Brand'} compliance check
         </div>
@@ -114,11 +120,15 @@ export default function StudioUploadPage() {
                     {picked > 0 && <span className="font-mono text-[0.7rem] uppercase tracking-[0.12em] text-teal-glow">{picked} ✓</span>}
                   </div>
                   <p className="mt-2 text-sm text-text-sec">{s.instruction}</p>
+                  {/* No `capture` attr: on mobile this lets the user EITHER
+                      take a new photo OR pick one already in their gallery
+                      (capture="environment" forced the live camera + blocked
+                      the gallery, so phone-saved photos couldn't be chosen). */}
                   <input
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     multiple
+                    aria-label={`Upload photo for ${s.label}`}
                     onChange={(e) => onPick(s.slot, e.target.files)}
                     className="mt-3 block w-full text-sm text-text-sec file:mr-4 file:border-0 file:bg-accent file:px-4 file:py-2.5 file:font-mono file:text-xs file:font-semibold file:uppercase file:tracking-[0.12em] file:text-white"
                   />

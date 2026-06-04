@@ -191,6 +191,18 @@ export default function SignageHubPage() {
                 >
                   Instant audit (upload PDF / photos) <span aria-hidden="true">&rarr;</span>
                 </Link>
+                <Link
+                  href="/dashboard/signage/studios"
+                  className="inline-flex items-center gap-2 border border-ink-line px-6 py-3.5 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-text-pri transition-colors hover:border-accent hover:text-accent"
+                >
+                  Manage studios <span aria-hidden="true">&rarr;</span>
+                </Link>
+                <Link
+                  href="/dashboard/signage/shots"
+                  className="inline-flex items-center gap-2 border border-ink-line px-6 py-3.5 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-text-pri transition-colors hover:border-accent hover:text-accent"
+                >
+                  Edit shots <span aria-hidden="true">&rarr;</span>
+                </Link>
               </div>
             </section>
           )}
@@ -309,13 +321,14 @@ function SweepCard({ sweep }: { sweep: Sweep }) {
               <span className="font-mono text-sm text-text-pri">{r.studio_name}</span>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard.writeText(r.link)}
-                className="border border-ink-line px-3 py-1.5 font-mono text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-text-sec hover:border-accent hover:text-accent"
+              <a
+                href={r.link}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 border border-ink-line px-3 py-1.5 font-mono text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-text-sec transition-colors hover:border-accent hover:text-accent"
               >
-                Copy link
-              </button>
+                Open <span aria-hidden="true">&#8599;</span>
+              </a>
               {r.assessment_id && (
                 <Link
                   href={`/dashboard/signage/queue?a=${r.assessment_id}`}
