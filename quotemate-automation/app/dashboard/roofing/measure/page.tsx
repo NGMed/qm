@@ -24,7 +24,10 @@ import { RoofMap, type RoofMapBuilding } from '../_components/RoofMap'
 import { AddressAutocomplete } from '../_components/AddressAutocomplete'
 import { GoogleStaticMap } from '../_components/GoogleStaticMap'
 import { PhotoVerify } from '../_components/PhotoVerify'
+import { SolarRoofInsight } from '../_components/SolarRoofInsight'
+import { RoofTilesViewer } from '../_components/RoofTilesViewer'
 import { SolarCheck } from '../_components/SolarCheck'
+import { StreetView } from '../_components/StreetView'
 
 type MultiResponse =
   | {
@@ -493,6 +496,12 @@ export default function RoofingMeasurePage() {
         </section>
       )}
 
+      {quote && (
+        <section className="relative z-10 mx-auto mt-6 max-w-6xl px-6 pb-8 sm:px-10">
+          <RoofTilesViewer token={token} address={address} postcode={postcode} state={state} />
+        </section>
+      )}
+
       <div className="relative z-10 bg-accent px-6 py-5 text-center text-white">
         <span className="font-mono text-sm font-semibold uppercase tracking-[0.16em]">
           QuoteMate · Roof measure · multi-structure
@@ -598,6 +607,17 @@ function MultiResultBlock({
           onRecenter={onMapRecenter}
         />
       </div>
+
+      {/* Street-level front elevation — access / height / scaffold read.
+          DISPLAY-ONLY: never feeds area / pitch / price. The cinematic 3D
+          fly-around lives below in <RoofTilesViewer/>. */}
+      <div className="mt-5">
+        <StreetView accessToken={accessToken} address={address} />
+      </div>
+
+      {/* Google Solar — aerial roof breakdown (planes, area, measured pitch).
+          AU-covered; complements the satellite + 3D views with estimation data. */}
+      <SolarRoofInsight accessToken={accessToken} metrics={selectedMetrics} />
 
       {/* Job-level routing strip */}
       <RoutingStrip routing={quote.routing} />
