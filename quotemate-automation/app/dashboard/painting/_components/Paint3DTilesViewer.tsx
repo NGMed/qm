@@ -135,6 +135,14 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
         })
         viewerRef.current = viewer
         if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = false
+        // Sharper rendering: MSAA + FXAA edges + retina pixel density.
+        try {
+          viewer.scene.msaaSamples = 4
+          if (viewer.scene.postProcessStages?.fxaa) viewer.scene.postProcessStages.fxaa.enabled = true
+          viewer.resolutionScale = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2)
+        } catch {
+          /* older WebGL — keep defaults */
+        }
 
         // 4. Google Photorealistic 3D Tiles via the official helper — it
         // attaches the key to EVERY tile request (a raw root URL does not).
@@ -150,6 +158,8 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
           return
         }
         viewer.scene.primitives.add(tileset)
+        // Load finer tiles near the building for a sharper look (default 16).
+        tileset.maximumScreenSpaceError = 8
         setStage('Framing the property…')
 
         // 5. The recolour shader (wall mask + luminance-preserving tint).

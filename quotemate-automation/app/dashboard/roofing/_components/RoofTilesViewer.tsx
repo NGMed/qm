@@ -95,6 +95,13 @@ export function RoofTilesViewer({ token, address, postcode, state }: Props) {
         })
         viewerRef.current = viewer
         if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = false
+        try {
+          viewer.scene.msaaSamples = 4
+          if (viewer.scene.postProcessStages?.fxaa) viewer.scene.postProcessStages.fxaa.enabled = true
+          viewer.resolutionScale = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2)
+        } catch {
+          /* older WebGL — keep defaults */
+        }
 
         setStage('Loading Google 3D tiles…')
         const tileset = await Cesium.createGooglePhotorealistic3DTileset({ key: MAPS_3D_KEY }, { showCreditsOnScreen: true })
@@ -103,6 +110,7 @@ export function RoofTilesViewer({ token, address, postcode, state }: Props) {
           return
         }
         viewer.scene.primitives.add(tileset)
+        tileset.maximumScreenSpaceError = 8
         setStage('Framing the roof…')
 
         const groundH = typeof loc.groundHeight === 'number' ? loc.groundHeight : 25
