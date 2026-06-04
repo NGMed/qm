@@ -2,10 +2,10 @@
 
 // /dashboard/signage/studios — manage real locations (replaces demo seeds).
 //   • Find a studio by name/area (Google Places) → real address + coords.
-//   • Or type an address (Geoscape autocomplete) — geocoded server-side.
-//   • Bulk-import a roster CSV.
-//   • Each studio shows a Street View storefront + a Maps Static location.
-//   • Delete studios (e.g. the demo rows).
+//   • Or type an address (Geoscape autocomplete) — geocoded live for a map.
+//   • Live Street View + map preview as you fill the form; thumbnails open
+//     full-size in a lightbox.
+//   • Bulk-import a roster CSV. Delete studios (e.g. the demo rows).
 // Maintain Technology design system.
 
 import Link from 'next/link'
@@ -30,6 +30,7 @@ export default function SignageStudiosPage() {
   const [token, setToken] = useState<string | null>(null)
   const [authState, setAuthState] = useState<'loading' | 'signed-out' | 'ready'>('loading')
   const [studios, setStudios] = useState<Studio[]>([])
+  const [lightbox, setLightbox] = useState<string | null>(null)
 
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
@@ -43,11 +44,11 @@ export default function SignageStudiosPage() {
   const [err, setErr] = useState<string | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
 
-  // Places search
   const [placeQuery, setPlaceQuery] = useState('')
   const [places, setPlaces] = useState<PlaceResult[]>([])
   const [searching, setSearching] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const geoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async (t: string) => {
     const res = await fetch('/api/signage/studios', { headers: { Authorization: `Bearer ${t}` }, cache: 'no-store' })
@@ -92,6 +93,28 @@ export default function SignageStudiosPage() {
     }
   }, [placeQuery, token])
 
+  // Auto-geocode a typed address so the live map shows (Places picks already
+  // carry coords, so this only fires when lat is null).
+  useEffect(() => {
+    if (geoTimer.current) clearTimeout(geoTimer.current)
+    if (!token || lat !== null || address.trim().length < 6) return
+    geoTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/signage/geocode?address=${encodeURIComponent(address)}`, { headers: { Authorization: `Bearer ${token}` } })
+        const json = await res.json()
+        if (json.ok) {
+          setLat(json.lat)
+          setLng(json.lng)
+        }
+      } catch {
+        /* best-effort */
+      }
+    }, 600)
+    return () => {
+      if (geoTimer.current) clearTimeout(geoTimer.current)
+    }
+  }, [address, lat, token])
+
   const pickPlace = (p: PlaceResult) => {
     setName(p.name)
     setAddress(p.address)
@@ -102,6 +125,17 @@ export default function SignageStudiosPage() {
     setPostcode(null)
     setPlaces([])
     setPlaceQuery('')
+  }
+
+  const resetForm = () => {
+    setName('')
+    setAddress('')
+    setStateCode(null)
+    setPostcode(null)
+    setRegion('')
+    setLat(null)
+    setLng(null)
+    setPlaceId(null)
   }
 
   const addStudio = useCallback(
@@ -128,14 +162,7 @@ export default function SignageStudiosPage() {
         const json = await res.json()
         if (!json.ok) setErr(json.error)
         else {
-          setName('')
-          setAddress('')
-          setStateCode(null)
-          setPostcode(null)
-          setRegion('')
-          setLat(null)
-          setLng(null)
-          setPlaceId(null)
+          resetForm()
           await load(token)
         }
       } finally {
@@ -184,7 +211,7 @@ export default function SignageStudiosPage() {
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-relaxed text-text-sec">
           Add your real locations. Search Google for a studio by name/area, or type an address — we
-          geocode it and show a Street View storefront + a map. Delete the demo rows once your real list is in.
+          geocode it, show a live Street View + map, and you can click any image to view it full-size.
         </p>
       </section>
 
@@ -198,12 +225,7 @@ export default function SignageStudiosPage() {
           <div className="border border-ink-line bg-ink-card p-7 sm:p-8">
             <Label>Find a studio on Google (name or area)</Label>
             <div className="relative">
-              <input
-                value={placeQuery}
-                onChange={(e) => setPlaceQuery(e.target.value)}
-                placeholder="e.g. F45 Bondi Beach"
-                className={INPUT}
-              />
+              <input value={placeQuery} onChange={(e) => setPlaceQuery(e.target.value)} placeholder="e.g. F45 Bondi Beach" className={INPUT} />
               {searching && <span className="absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[0.7rem] text-text-dim">…</span>}
               {places.length > 0 && (
                 <ul className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto border border-ink-line bg-ink-card shadow-lg">
@@ -234,6 +256,26 @@ export default function SignageStudiosPage() {
                 onSelect={(s) => { setAddress(s.address); setStateCode(s.state); setPostcode(s.postcode); setLat(null); setLng(null) }}
               />
             </div>
+
+            {/* Live preview — appears as soon as there's an address */}
+            {address.trim().length > 5 && (
+              <div className="md:col-span-2 grid gap-3 sm:grid-cols-2">
+                <Preview
+                  token={token}
+                  label="Storefront (Street View)"
+                  url={`/api/signage/street-view?${new URLSearchParams({ address, state: stateCode ?? '', postcode: postcode ?? '' }).toString()}`}
+                  onView={setLightbox}
+                />
+                <Preview
+                  token={token}
+                  label="Location (map)"
+                  url={lat !== null && lng !== null ? `/api/signage/static-map?${new URLSearchParams({ lat: String(lat), lng: String(lng), maptype: 'hybrid' }).toString()}` : null}
+                  emptyHint="locating…"
+                  onView={setLightbox}
+                />
+              </div>
+            )}
+
             <div>
               <Label>Region (optional)</Label>
               <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="AU-NSW" className={INPUT} />
@@ -267,25 +309,35 @@ export default function SignageStudiosPage() {
           <div className="mt-4 grid gap-3">
             {studios.map((s) => (
               <div key={s.id} className="flex items-center gap-3 border border-ink-line bg-ink-card p-4">
-                <StreetThumb token={token} studio={s} />
-                <StaticMapThumb token={token} studio={s} />
+                <StreetThumb token={token} studio={s} onView={setLightbox} />
+                <StaticMapThumb token={token} studio={s} onView={setLightbox} />
                 <div className="min-w-0 flex-1">
                   <div className="font-mono text-sm text-text-pri">{s.name}</div>
                   <div className="font-mono text-[0.7rem] uppercase tracking-[0.12em] text-text-dim">
                     {[s.region, s.address].filter(Boolean).join(' · ') || 'No address'}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void deleteStudio(s)}
-                  className="border border-ink-line px-3 py-1.5 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-text-dim hover:border-warning hover:text-warning"
-                >
+                <button type="button" onClick={() => void deleteStudio(s)} className="border border-ink-line px-3 py-1.5 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-text-dim hover:border-warning hover:text-warning">
                   Delete
                 </button>
               </div>
             ))}
           </div>
         </section>
+      )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox} alt="Preview" className="max-h-[88vh] max-w-[92vw] border border-ink-line object-contain" />
+          <button type="button" className="absolute right-6 top-6 border border-ink-line bg-ink-card px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-text-pri hover:text-accent">
+            Close ✕
+          </button>
+        </div>
       )}
     </main>
   )
@@ -294,49 +346,80 @@ export default function SignageStudiosPage() {
 function useAuthedImage(url: string | null, token: string | null) {
   const [src, setSrc] = useState<string | null>(null)
   useEffect(() => {
+    setSrc(null)
     if (!url || !token) return
     let revoke: string | null = null
+    let cancelled = false
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (r) => {
-        if (!r.ok) return
+        if (!r.ok || cancelled) return
         const blob = await r.blob()
         revoke = URL.createObjectURL(blob)
-        setSrc(revoke)
+        if (!cancelled) setSrc(revoke)
       })
       .catch(() => {})
     return () => {
+      cancelled = true
       if (revoke) URL.revokeObjectURL(revoke)
     }
   }, [url, token])
   return src
 }
 
-function StreetThumb({ token, studio }: { token: string | null; studio: Studio }) {
+/** Larger in-form preview tile. */
+function Preview({ token, label, url, emptyHint, onView }: { token: string | null; label: string; url: string | null; emptyHint?: string; onView: (src: string) => void }) {
+  const src = useAuthedImage(url, token)
+  return (
+    <div>
+      <div className="mb-1.5 font-mono text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-text-dim">{label}</div>
+      <button
+        type="button"
+        disabled={!src}
+        onClick={() => src && onView(src)}
+        className="block h-32 w-full overflow-hidden border border-ink-line bg-ink-deep transition-colors enabled:hover:border-accent disabled:cursor-default"
+      >
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt={label} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center font-mono text-[0.6rem] uppercase tracking-[0.1em] text-text-dim">{emptyHint ?? 'no imagery'}</div>
+        )}
+      </button>
+    </div>
+  )
+}
+
+function StreetThumb({ token, studio, onView }: { token: string | null; studio: Studio; onView: (src: string) => void }) {
   const url = studio.address
     ? `/api/signage/street-view?${new URLSearchParams({ address: studio.address, state: studio.state ?? '', postcode: studio.postcode ?? '' }).toString()}`
     : null
   const src = useAuthedImage(url, token)
-  return <Thumb src={src} alt={`${studio.name} storefront`} empty={studio.address ? '…' : 'no addr'} />
+  return <Thumb src={src} alt={`${studio.name} storefront`} empty={studio.address ? '…' : 'no addr'} onView={onView} />
 }
 
-function StaticMapThumb({ token, studio }: { token: string | null; studio: Studio }) {
+function StaticMapThumb({ token, studio, onView }: { token: string | null; studio: Studio; onView: (src: string) => void }) {
   const url = studio.lat !== null && studio.lng !== null
     ? `/api/signage/static-map?${new URLSearchParams({ lat: String(studio.lat), lng: String(studio.lng) }).toString()}`
     : null
   const src = useAuthedImage(url, token)
-  return <Thumb src={src} alt={`${studio.name} map`} empty="no map" />
+  return <Thumb src={src} alt={`${studio.name} map`} empty="no map" onView={onView} />
 }
 
-function Thumb({ src, alt, empty }: { src: string | null; alt: string; empty: string }) {
+function Thumb({ src, alt, empty, onView }: { src: string | null; alt: string; empty: string; onView: (src: string) => void }) {
   return (
-    <div className="h-14 w-20 shrink-0 overflow-hidden border border-ink-line bg-ink-deep">
+    <button
+      type="button"
+      disabled={!src}
+      onClick={() => src && onView(src)}
+      className="h-14 w-20 shrink-0 overflow-hidden border border-ink-line bg-ink-deep transition-colors enabled:hover:border-accent disabled:cursor-default"
+    >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={alt} className="h-full w-full object-cover" />
       ) : (
         <div className="flex h-full w-full items-center justify-center font-mono text-[0.55rem] uppercase tracking-[0.1em] text-text-dim">{empty}</div>
       )}
-    </div>
+    </button>
   )
 }
 
