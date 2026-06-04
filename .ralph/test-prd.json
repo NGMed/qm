@@ -1,0 +1,28 @@
+{
+  "project": "Sparky SMS receptionist — round 3 (20 tests, easy-job=no-site-visit gate)",
+  "mode": "test-loop",
+  "tenant": "Sparky 6dca084c-10d5-4459-b48f-9b45e4bbc68a",
+  "gate": "PASS = materials grounded@catalogue+markup, labour=count×hrs, routing correct. NEW: easy jobs (no supervision/inspection needed) MUST auto-quote — routing such a job to $99 inspection is a FAIL. Gas/switchboard/new-circuit SHOULD still inspect.",
+  "stories": [
+    {"id": "EE1", "service": "Replace LED downlight", "qty": 1, "note": "smallest easy job — must auto-quote at floor, NOT $99", "status": "pending"},
+    {"id": "EE2", "service": "Replace double GPO", "qty": 1, "note": "single easy swap — auto-quote", "status": "pending"},
+    {"id": "EE3", "service": "Replace double GPO (customer-supplied)", "qty": 2, "note": "supply-by-customer variant", "status": "pending"},
+    {"id": "EE4", "service": "Install outdoor IP-rated LED light", "qty": 1, "note": "single", "status": "pending"},
+    {"id": "EE5", "service": "Hardwire 240V smoke alarm", "qty": 1, "note": "single easy", "status": "pending"},
+    {"id": "EE6", "service": "Supply + install AC ceiling fan", "qty": 1, "note": "fan supply+install", "status": "pending"},
+    {"id": "EE7", "service": "Install customer-supplied ceiling fan", "qty": 1, "note": "customer-supply fan", "status": "pending"},
+    {"id": "EE8", "service": "Hardwire induction cooktop", "qty": 1, "note": "existing circuit easy", "status": "pending"},
+    {"id": "EE9", "service": "Replace LED downlight (dimmable spec)", "qty": 4, "note": "different spec -> different material tier", "status": "pending"},
+    {"id": "EE10", "service": "Diagnostic call-out", "qty": 1, "note": "should be $165 fee, NOT $99 fallback", "status": "pending"},
+    {"id": "PP1", "service": "Tap washer replacement", "qty": 1, "note": "smallest easy plumbing job — auto-quote not $99", "status": "pending"},
+    {"id": "PP2", "service": "Tap washer replacement", "qty": 2, "note": "multi", "status": "pending"},
+    {"id": "PP3", "service": "Tap replacement", "qty": 1, "note": "single kitchen mixer", "status": "pending"},
+    {"id": "PP4", "service": "Toilet cistern repair", "qty": 1, "note": "easy repair", "status": "pending"},
+    {"id": "PP5", "service": "Hand rod blocked drain", "qty": 1, "note": "easy clear", "status": "pending"},
+    {"id": "PP6", "service": "CCTV drain inspection", "qty": 1, "note": "standalone", "status": "pending"},
+    {"id": "PP7", "service": "Gas appliance connection (customer cooktop)", "qty": 1, "note": "gas conn (NOT gas HWS) — should auto-quote", "status": "pending"},
+    {"id": "PP8", "service": "Disposal and site cleanup", "qty": 1, "note": "add-on; combined with a tap job", "status": "pending"},
+    {"id": "PP9", "service": "Toilet suite install", "qty": 1, "note": "RE-TEST per new rule: straight swap should auto-quote not $99", "status": "pending"},
+    {"id": "PP10", "service": "Install electric HWS", "qty": 1, "note": "RE-TEST per new rule: straight swap should auto-quote not $99", "status": "pending"}
+  ]
+}

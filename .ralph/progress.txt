@@ -1,0 +1,15 @@
+EE2 GPO x1 (standard) — PASS. AUTO-QUOTE. assembly $29.92(=$22x1.36) grounded; labour 0.3+2.7 floor=3.0; $422.31.
+=3.0; $431.29. Easy job correctly auto-quoted.
+quote, $99 = FAIL
+================================================================================
+d per-tap 3x$68=$204 (steep).
+
+================================================================================
+RALPH ROUND-2 SUMMARY (16 tests): 11 PASS / 1 PARTIAL / 4 FAIL (2 CRITICAL)
+LABOUR FIX: PERFECT everywhere (E1=4.0/E6=2.4/E7=3.0/P16=3.0+0.75; large counts correct; NO count-as-hours anywhere). Materials grounded@catalogue+36% markup everywhere they quoted.
+PASS: E1,E3,E4,E5,E6,E7,E8,E9,P10,P11,P16
+PARTIAL: E2 (premium DC request -> default tier=AC fans; correct DC only in unselected BEST)
+FAIL: P12 toilet suite ->$99 (reproduced, catalogue-gap grounding), P13 electric HWS ->$99 (reproduced)
+CRITICAL FAIL: P14 gas HWS auto-quoted $2466 needs_inspection=FALSE on STANDARD path (uses "Install electric HWS" assembly to skirt always_inspection gate; WORSE than round1 where standard gave $99). P15 heat pump -> GAS substitution + auto-quote $2593 + bypass.
+ROOT CAUSE (gas bypass): always_inspection enforced per-assembly ("Install gas HWS"); LLM builds gas quote using non-gated "Install electric HWS" assembly + gas material -> skirts gate. FIX MUST gate by category/material energy_source, not just one assembly id.
+IMPROVED since round1: E5 aircon new-circuit now -> $99 with PROPER reason (not grounding-failure).
