@@ -11,6 +11,7 @@
 // proven setup (official Google-tiles helper + baseLayer:false).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { loadCesium } from '../../_components/loadCesium'
 
 type Props = {
   token: string | null
@@ -70,10 +71,9 @@ export function RoofTilesViewer({ token, address, postcode, state }: Props) {
         if (!loc.ok) throw new Error(loc.detail ?? loc.code ?? 'Could not locate the property.')
         if (cancelled) return
 
-        ;(window as unknown as { CESIUM_BASE_URL?: string }).CESIUM_BASE_URL = '/cesium'
-        ensureCesiumCss()
         setStage('Loading 3D engine…')
-        const Cesium = await import('cesium')
+        console.log('[roof-3d] loading CesiumJS from CDN…')
+        const Cesium = await loadCesium()
         if (cancelled || !containerRef.current) return
         cesiumRef.current = Cesium
         if (ION_TOKEN) Cesium.Ion.defaultAccessToken = ION_TOKEN
@@ -213,12 +213,3 @@ export function RoofTilesViewer({ token, address, postcode, state }: Props) {
   )
 }
 
-let cssInjected = false
-function ensureCesiumCss() {
-  if (cssInjected || typeof document === 'undefined') return
-  const link = document.createElement('link')
-  link.rel = 'stylesheet'
-  link.href = '/cesium/Widgets/widgets.css'
-  document.head.appendChild(link)
-  cssInjected = true
-}

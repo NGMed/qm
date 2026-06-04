@@ -17,6 +17,7 @@
 // /cesium (copied by scripts/copy-cesium-assets.mjs).
 
 import { useEffect, useRef, useState } from 'react'
+import { loadCesium } from '../../_components/loadCesium'
 
 type Props = {
   token: string | null
@@ -105,13 +106,11 @@ export function Paint3DTilesViewer({ token, address, postcode, state, colour }: 
         // 2. Load Cesium (set asset base + tokens before the import). The
         // first dynamic import compiles a large chunk — slow on the first
         // open in dev, fast after.
-        ;(window as unknown as { CESIUM_BASE_URL?: string }).CESIUM_BASE_URL = '/cesium'
-        ensureCesiumCss()
         setStage('Loading 3D engine…')
-        console.log('[paint-3d] importing CesiumJS (first time in dev compiles a large chunk — can take 1–2 min)…')
-        console.time('[paint-3d] cesium import')
-        const Cesium = await import('cesium')
-        console.timeEnd('[paint-3d] cesium import')
+        console.log('[paint-3d] loading CesiumJS from CDN…')
+        console.time('[paint-3d] cesium load')
+        const Cesium = await loadCesium()
+        console.timeEnd('[paint-3d] cesium load')
         if (cancelled || !containerRef.current) return
         cesiumRef.current = Cesium
         if (ION_TOKEN) Cesium.Ion.defaultAccessToken = ION_TOKEN
@@ -291,14 +290,4 @@ function colourToRgb(colour: string): [number, number, number] {
   const g = parseInt(hex.slice(3, 5), 16) / 255
   const b = parseInt(hex.slice(5, 7), 16) / 255
   return [r, g, b]
-}
-
-let cssInjected = false
-function ensureCesiumCss() {
-  if (cssInjected || typeof document === 'undefined') return
-  const link = document.createElement('link')
-  link.rel = 'stylesheet'
-  link.href = '/cesium/Widgets/widgets.css'
-  document.head.appendChild(link)
-  cssInjected = true
 }
