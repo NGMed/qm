@@ -57,20 +57,38 @@ export default function StudioUploadPage() {
     setBusy(true)
     setErr(null)
     try {
+      // Re-encode every photo through a canvas before upload. This is the
+      // fix for the iOS Safari "The string did not match the expected
+      // pattern." crash: appending a picked File straight into FormData can
+      // throw inside WebKit, and full-size iPhone photos also blow past the
+      // request-size limit. Canvas downscaling hands fetch a small, fresh,
+      // in-memory JPEG Blob — which sidesteps both failure modes.
       const fd = new FormData()
       for (const [slot, list] of Object.entries(files)) {
-        for (const f of list) fd.append(slot, f)
+        for (const f of list) {
+          const prepared = await prepareImage(f)
+          fd.append(slot, prepared.blob, prepared.filename)
+        }
       }
+
       const res = await fetch(`/api/signage/request/${token}`, { method: 'POST', body: fd })
-      const json = await res.json()
-      if (!json.ok) {
-        setErr(humanError(json.error))
+      let json: { ok?: boolean; error?: string } | null = null
+      try {
+        json = await res.json()
+      } catch {
+        json = null
+      }
+      if (!res.ok || !json?.ok) {
+        setErr(humanError(json?.error ?? (res.status === 413 ? 'too_large' : 'unknown')))
         return
       }
       setState('done')
       setTimeout(() => router.push(`/studio/${token}/report`), 1200)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      // Never surface a raw WebKit message (e.g. "The string did not match
+      // the expected pattern.") to a franchisee — map it to plain guidance.
+      console.error('signage submit failed', e)
+      setErr('We couldn’t upload those photos. Please try again, or use smaller images.')
     } finally {
       setBusy(false)
     }
@@ -157,6 +175,59 @@ function humanError(code: string): string {
   if (code?.endsWith('_over_5mb')) return 'One of your photos is over 5MB — please use a smaller image.'
   if (code?.endsWith('_bad_type')) return 'Only JPG, PNG or WebP images are accepted.'
   if (code === 'no_photos') return 'Add at least one photo before submitting.'
+  if (code === 'too_large') return 'Those photos were too large to upload — try selecting fewer at once.'
   if (code === 'invalid_or_expired') return 'This link is invalid or has expired.'
   return 'Something went wrong — please try again.'
+}
+
+// Downscale + re-encode a picked photo to a small in-memory JPEG Blob.
+// Falls back to re-buffering the original bytes if canvas decoding fails —
+// that alone is enough to dodge the iOS Safari File-in-FormData bug that
+// surfaces as "The string did not match the expected pattern.".
+async function prepareImage(file: File): Promise<{ blob: Blob; filename: string }> {
+  try {
+    const blob = await downscaleToJpeg(file, 2000, 0.82)
+    if (blob && blob.size > 0) {
+      return { blob, filename: replaceExt(file.name || 'photo', 'jpg') }
+    }
+  } catch {
+    // fall through to the raw re-buffer path
+  }
+  const buf = await file.arrayBuffer()
+  return {
+    blob: new Blob([buf], { type: file.type || 'image/jpeg' }),
+    filename: file.name || 'photo.jpg',
+  }
+}
+
+function downscaleToJpeg(file: File, maxDim: number, quality: number): Promise<Blob | null> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      if (!w || !h) return resolve(null)
+      const scale = Math.min(1, maxDim / Math.max(w, h))
+      const cw = Math.max(1, Math.round(w * scale))
+      const ch = Math.max(1, Math.round(h * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = cw
+      canvas.height = ch
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return resolve(null)
+      ctx.drawImage(img, 0, 0, cw, ch)
+      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('image decode failed'))
+    }
+    img.src = url
+  })
+}
+
+function replaceExt(name: string, ext: string): string {
+  return name.replace(/\.[^.]+$/, '') + '.' + ext
 }
