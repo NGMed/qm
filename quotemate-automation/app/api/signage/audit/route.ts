@@ -11,7 +11,13 @@ import { loadActiveRules, applicableRules } from '@/lib/signage/run'
 import { assessPhoto } from '@/lib/signage/vision-assess'
 import { validateSignageAssessment } from '@/lib/signage/validate-verdicts'
 import { composeReport } from '@/lib/signage/compose-report'
-import type { RuleVerdict } from '@/lib/signage/types'
+import {
+  observedFromEvidence,
+  runKbSupplement,
+  supplementOverall,
+} from '@/lib/signage/kb-supplement'
+import { loadKbConfigFromEnv } from '@/lib/admin-loader/mt-filestore-kb'
+import type { RuleVerdict, ShotSlot } from '@/lib/signage/types'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -56,6 +62,7 @@ export async function POST(req: Request) {
 
   // Assess each photo in-memory (no storage needed for an instant audit).
   const modelVerdicts: RuleVerdict[] = []
+  const evidenceByShot = new Map<ShotSlot, string[]>()
   for (const p of pending) {
     const base64 = Buffer.from(await p.file.arrayBuffer()).toString('base64')
     const verdicts = await assessPhoto({
@@ -66,16 +73,42 @@ export async function POST(req: Request) {
       shotLabel: shotLabel(p.slot, brand.shots),
     })
     modelVerdicts.push(...verdicts)
+    const ev = evidenceByShot.get(p.slot) ?? []
+    ev.push(...verdicts.map((v) => v.evidence).filter((e): e is string => !!e && e.trim() !== ''))
+    evidenceByShot.set(p.slot, ev)
   }
 
   const { verdicts, overall, counts } = validateSignageAssessment(scoped, modelVerdicts)
+
+  // Brand-scoped Gemini file-search supplement (opt-in via SIGNAGE_KB_SUPPLEMENT).
+  // Supplements the report; only ever raises caution. Best-effort, never throws.
+  let finalOverall = overall
+  let kb: unknown = undefined
+  if (process.env.SIGNAGE_KB_SUPPLEMENT === '1') {
+    try {
+      const kbConfig = loadKbConfigFromEnv()
+      const shotsForKb = submittedShots.map((slot) => ({
+        slot,
+        label: shotLabel(slot, brand.shots),
+        observed: observedFromEvidence(evidenceByShot.get(slot) ?? []),
+      }))
+      const supplement = await runKbSupplement(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
+      const merged = supplementOverall(overall, supplement)
+      finalOverall = merged.overall
+      kb = { stores: supplement.stores, shots: supplement.shots, concerns: merged.concerns }
+    } catch {
+      // leave the structured result untouched
+    }
+  }
+
   const report = composeReport(scoped, verdicts, brand.hq_name)
 
   return Response.json({
     ok: true,
     brand: { name: brand.name, hq_name: brand.hq_name },
-    overall,
+    overall: finalOverall,
     counts,
     report,
+    ...(kb ? { kb } : {}),
   })
 }

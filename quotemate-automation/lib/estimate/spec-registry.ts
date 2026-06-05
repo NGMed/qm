@@ -44,6 +44,19 @@ export function canonicalise(
       if (/^\d{1,3}$/.test(raw)) return `${parseInt(raw, 10)}A`
       return null
     }
+    case 'wattage': {
+      // A number IMMEDIATELY before w / watt(s) ("9w", "9 W", "9-watt",
+      // "60 watts") → "<n>W". The digit must touch the unit so a SERIES
+      // number in a product name ("Brilliant Halo 90 9W LED downlight")
+      // yields 9W, not 90W. Without this case the default passthrough
+      // returned the whole product name, so a 9W product false-mismatched a
+      // "9W" request at the WP9 spec-guard lock point.
+      const m = raw.match(/(\d{1,4})[\s-]*(?:w\b|watt)/)
+      if (m) return `${parseInt(m[1], 10)}W`
+      // A bare integer (e.g. properties.wattage stored as 9 or "9").
+      if (/^\d{1,4}$/.test(raw)) return `${parseInt(raw, 10)}W`
+      return null
+    }
     case 'phase': {
       if (raw === 'single') return 'single-phase'
       if (/\b(single|1)\b/.test(raw) && raw.includes('phase')) return 'single-phase'
@@ -90,6 +103,7 @@ export function canonicalise(
 const SPEC_DEFS: Record<string, Record<string, SpecDef[]>> = {
   electrical: {
     gpo: [{ key: 'amperage' }],
+    downlight: [{ key: 'wattage' }],
     outdoor_light: [{ key: 'ip_rating' }],
   },
   plumbing: {

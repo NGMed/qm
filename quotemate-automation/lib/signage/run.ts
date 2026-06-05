@@ -17,8 +17,24 @@ import { coerceShots, shotLabel } from './shots'
 import { brandForOrg } from './brand'
 import { assessPhoto } from './vision-assess'
 import { validateSignageAssessment } from './validate-verdicts'
+import {
+  observedFromEvidence,
+  runKbSupplement,
+  supplementOverall,
+  type KbConcern,
+  type KbSupplementResult,
+} from './kb-supplement'
+import { loadKbConfigFromEnv } from '../admin-loader/mt-filestore-kb'
 
 const BUCKET = 'intake-photos'
+
+/** Gemini file-search SUPPLEMENT is opt-in: it only runs when this flag is
+ *  set, which also gates writing the `signage_assessments.kb_supplement`
+ *  column — so the running system is unaffected until migration 094 is
+ *  applied and the flag is turned on. */
+function kbSupplementEnabled(): boolean {
+  return process.env.SIGNAGE_KB_SUPPLEMENT === '1'
+}
 
 /** Map a signage_rules DB row to the typed SignageRule. */
 export function mapRuleRow(row: Record<string, unknown>): SignageRule {
@@ -128,8 +144,10 @@ export async function runAssessment(
   const scoped = applicableRules(allRules, requestedShots)
 
   // 4. Assess each submitted photo against the scoped rules, framed for
-  //    this brand (persona + the brand's label for the shot).
+  //    this brand (persona + the brand's label for the shot). Keep each
+  //    shot's evidence so the KB supplement can describe the observed scene.
   const modelVerdicts: RuleVerdict[] = []
+  const evidenceByShot = new Map<ShotSlot, string[]>()
   for (const s of subs ?? []) {
     const slot = s.shot_slot as ShotSlot
     const photo = await downloadBase64(supabase, s.storage_path as string)
@@ -142,29 +160,60 @@ export async function runAssessment(
       shotLabel: shotLabel(slot, brand.shots),
     })
     modelVerdicts.push(...verdicts)
+    const ev = evidenceByShot.get(slot) ?? []
+    ev.push(...verdicts.map((v) => v.evidence).filter((e): e is string => !!e && e.trim() !== ''))
+    evidenceByShot.set(slot, ev)
   }
 
   // 5. Grounding backstop over the full scoped rule set.
   const { verdicts, overall, counts } = validateSignageAssessment(scoped, modelVerdicts)
 
+  // 5b. Brand-scoped Gemini file-search SUPPLEMENT (opt-in). Queries the
+  //     brand's store(s) for the guideline wording behind each shot and may
+  //     only RAISE caution — flipping an otherwise-clean pass to needs_review.
+  //     Supabase verdicts stay authoritative. Best-effort: never throws.
+  let finalOverall = overall
+  let kbSupplement: KbSupplementResult | null = null
+  let kbConcerns: KbConcern[] = []
+  if (kbSupplementEnabled()) {
+    try {
+      const kbConfig = loadKbConfigFromEnv()
+      const submittedSlots = Array.from(new Set((subs ?? []).map((s) => s.shot_slot as ShotSlot)))
+      const shotsForKb = submittedSlots.map((slot) => ({
+        slot,
+        label: shotLabel(slot, brand.shots),
+        observed: observedFromEvidence(evidenceByShot.get(slot) ?? []),
+      }))
+      kbSupplement = await runKbSupplement(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
+      const merged = supplementOverall(overall, kbSupplement)
+      finalOverall = merged.overall
+      kbConcerns = merged.concerns
+    } catch {
+      // KB config missing / network down — leave the Supabase verdict as-is.
+    }
+  }
+
   // 6. Persist the assessment (upsert on request_id) + advance the request.
-  const status = overall === 'pass' ? 'report_ready' : 'hq_review'
+  const status = finalOverall === 'pass' ? 'report_ready' : 'hq_review'
+  const payload: Record<string, unknown> = {
+    request_id: requestId,
+    studio_id: reqRow.studio_id,
+    org_id: reqRow.org_id,
+    rule_set_version: ruleSetVersion,
+    status,
+    overall: finalOverall,
+    verdicts,
+    counts,
+    updated_at: new Date().toISOString(),
+  }
+  // Only reference the kb_supplement column when the flag is on (i.e.
+  // migration 094 has been applied) so older DBs never see an unknown column.
+  if (kbSupplement) {
+    payload.kb_supplement = { stores: kbSupplement.stores, shots: kbSupplement.shots, concerns: kbConcerns }
+  }
   const { data: saved, error: saveErr } = await supabase
     .from('signage_assessments')
-    .upsert(
-      {
-        request_id: requestId,
-        studio_id: reqRow.studio_id,
-        org_id: reqRow.org_id,
-        rule_set_version: ruleSetVersion,
-        status,
-        overall,
-        verdicts,
-        counts,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'request_id' },
-    )
+    .upsert(payload, { onConflict: 'request_id' })
     .select('id')
     .single()
 
@@ -178,5 +227,5 @@ export async function runAssessment(
     })
     .eq('id', requestId)
 
-  return { ok: true, assessmentId: saved.id as string, overall, counts }
+  return { ok: true, assessmentId: saved.id as string, overall: finalOverall, counts }
 }

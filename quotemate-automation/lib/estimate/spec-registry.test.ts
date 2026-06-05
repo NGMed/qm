@@ -27,6 +27,35 @@ describe('canonicalise — amperage', () => {
   })
 })
 
+describe('canonicalise — wattage', () => {
+  it('normalises sloppy watt phrasings to "<n>W"', () => {
+    expect(canonicalise('wattage', '9W')).toBe('9W')
+    expect(canonicalise('wattage', '9w')).toBe('9W')
+    expect(canonicalise('wattage', '9 W')).toBe('9W')
+    expect(canonicalise('wattage', '60 watt')).toBe('60W')
+    expect(canonicalise('wattage', '60watts')).toBe('60W')
+    expect(canonicalise('wattage', '12-watt')).toBe('12W')
+  })
+
+  it('accepts a bare integer (e.g. properties stored as a number)', () => {
+    expect(canonicalise('wattage', 9)).toBe('9W')
+    expect(canonicalise('wattage', '9')).toBe('9W')
+  })
+
+  it('extracts the wattage from a product name, not the series number', () => {
+    // Regression: the WP9 spec-guard false-mismatch — a 9W product must
+    // canonicalise to 9W (matching a "9W" request), not the whole name.
+    // The series "Halo 90" must NOT be read as 90W.
+    expect(canonicalise('wattage', 'Brilliant Halo 90 9W LED downlight')).toBe('9W')
+  })
+
+  it('returns null for non-wattage values', () => {
+    expect(canonicalise('wattage', 'warm white')).toBeNull()
+    expect(canonicalise('wattage', '')).toBeNull()
+    expect(canonicalise('wattage', null)).toBeNull()
+  })
+})
+
 describe('canonicalise — ip_rating / energy_source / litres', () => {
   it('normalises IP codes', () => {
     expect(canonicalise('ip_rating', 'IP56')).toBe('IP56')
@@ -83,6 +112,7 @@ describe('canonicalise — phase / poles / unknown key', () => {
 describe('getSpecDefs', () => {
   it('returns the seeded keys for known (trade, category)', () => {
     expect(getSpecDefs('electrical', 'gpo').map((d) => d.key)).toEqual(['amperage'])
+    expect(getSpecDefs('electrical', 'downlight').map((d) => d.key)).toEqual(['wattage'])
     expect(getSpecDefs('electrical', 'outdoor_light').map((d) => d.key)).toEqual(['ip_rating'])
     expect(getSpecDefs('plumbing', 'hot_water').map((d) => d.key)).toEqual([
       'energy_source',

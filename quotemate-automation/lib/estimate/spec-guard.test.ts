@@ -103,6 +103,26 @@ describe('evaluateSpecGuard', () => {
     expect(d.block).toBe(false)
   })
 
+  it('downlight: a 9W product MATCHES a 9W request via the name (regression)', () => {
+    // Live incident (intake 0cdc2905, Atomic): requested_specs carried
+    // {product, wattage:"9W"} and the chosen product had empty properties.
+    // Before the wattage canonicaliser + (electrical,downlight) SpecDef,
+    // the guard parsed nothing from the name → compared "9w" against the
+    // whole product name → false 'mismatch' that would have BLOCKED in
+    // enforce. It must reconcile to 'match'.
+    const d = evaluateSpecGuard({
+      requested: { product: 'Brilliant Halo 90 9W LED downlight', wattage: '9W' },
+      properties: {},
+      name: 'Brilliant Halo 90 9W LED downlight',
+      trade: 'electrical',
+      category: 'downlight',
+      mode: 'enforce',
+    })
+    expect(d.verdict).toBe('match')
+    expect(d.block).toBe(false)
+    expect(d.conflicts).toEqual([])
+  })
+
   it('enforce: unknown (no spec data anywhere) never blocks', () => {
     const d = evaluateSpecGuard({
       requested: REQ,

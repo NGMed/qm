@@ -51,6 +51,10 @@ export type BrandConfig = {
   /** How the AI is framed: "F45 fitness studios". */
   vision_persona: string
   shots: ShotDef[]
+  /** Brand's Gemini File Search store(s) for the rule SUPPLEMENT pass
+   *  (migration 094 `brands.kb_store_ids`). Optional + data-driven; when
+   *  absent the per-brand default map in `kb-supplement.ts` is used. */
+  kb_store_ids?: string[]
 }
 
 export type Confidence = 'high' | 'medium' | 'low'
