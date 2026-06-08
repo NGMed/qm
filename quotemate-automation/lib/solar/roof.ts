@@ -39,9 +39,11 @@ export function normaliseSolarRoofFacts(
   const planes: SolarRoofPlane[] = insights.segments.map((s) => ({
     pitch_degrees: round1(s.pitchDegrees),
     azimuth_degrees: s.azimuthDegrees,
-    // Store the raw area per plane — do NOT round individual areas here.
-    // usable_area_m2 sums the raws and applies a single round1() to avoid
-    // accumulated rounding error (quality issue #1).
+    // Each plane's area_m2 is rounded for display only. The usable_area_m2
+    // total is computed by summing raw segment areas FIRST (see below) and
+    // applying a single round1() there — avoiding accumulated per-plane
+    // rounding error (quality issue #1). The per-plane round1 here is purely
+    // for human-readable output and does NOT feed into the area total.
     area_m2: round1(s.areaMeters2),
     orientation: azimuthToOrientation(s.azimuthDegrees, s.pitchDegrees),
   }))
@@ -67,11 +69,16 @@ export function normaliseSolarRoofFacts(
   // Prefer config.default_panel_capacity_watts for reproducibility (quality issue #3).
   const configDefault =
     config?.default_panel_capacity_watts != null &&
-    Number.isFinite(config.default_panel_capacity_watts)
+    config.default_panel_capacity_watts > 0
       ? config.default_panel_capacity_watts
       : DEFAULT_PANEL_CAPACITY_WATTS
 
-  const panel_capacity_watts = numberOr(sp.panelCapacityWatts, configDefault)
+  // Guard: an API panelCapacityWatts that is <= 0 or non-finite (NaN/Infinity)
+  // is unusable — it would produce a zero-kW system silently. Fall back to
+  // configDefault (which is itself guarded above) so a bad API value never
+  // propagates into the estimate (quality issue #5).
+  const rawCapacity = numberOr(sp.panelCapacityWatts, configDefault)
+  const panel_capacity_watts = rawCapacity > 0 ? rawCapacity : configDefault
 
   const panel_configs: SolarPanelConfig[] = Array.isArray(sp.solarPanelConfigs)
     ? sp.solarPanelConfigs

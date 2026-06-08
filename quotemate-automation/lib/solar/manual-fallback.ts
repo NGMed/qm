@@ -22,6 +22,11 @@ import type {
   SolarConfig,
 } from './types'
 
+type ManualFallbackConfig = Pick<
+  SolarConfig,
+  'default_panel_capacity_watts' | 'manual_benchmark_kwh_per_kw' | 'area_per_panel_m2'
+>
+
 /** Declared size bucket → usable (panel-placeable) roof area, m².
  *  Already discounted for obstructions/setbacks — these are NET areas. */
 export const MANUAL_AREA_M2: Record<SolarManualRoofInput['roof_size'], number> = {
@@ -39,23 +44,34 @@ const MANUAL_BENCHMARK_KWH_PER_KW = 1400
 
 export function buildManualRoofFacts(
   input: SolarManualRoofInput,
-  config?: Pick<SolarConfig, 'default_panel_capacity_watts' | 'manual_benchmark_kwh_per_kw'>,
+  config?: ManualFallbackConfig,
 ): SolarRoofFacts {
   const usable_area_m2 = MANUAL_AREA_M2[input.roof_size]
 
+  // Guard: a 0 or non-finite panel capacity would produce a zero-kW system
+  // silently — fall back to the module default so the estimate is always valid.
   const panel_capacity_watts =
     config?.default_panel_capacity_watts != null &&
-    Number.isFinite(config.default_panel_capacity_watts)
+    config.default_panel_capacity_watts > 0
       ? config.default_panel_capacity_watts
       : MANUAL_PANEL_CAPACITY_WATTS
 
+  // Guard: a 0 or non-finite benchmark would produce 0 kWh/yr silently —
+  // fall back to the module default so the estimate is always valid.
   const benchmark_kwh_per_kw =
     config?.manual_benchmark_kwh_per_kw != null &&
-    Number.isFinite(config.manual_benchmark_kwh_per_kw)
+    config.manual_benchmark_kwh_per_kw > 0
       ? config.manual_benchmark_kwh_per_kw
       : MANUAL_BENCHMARK_KWH_PER_KW
 
-  const max_panels_count = Math.max(0, Math.floor(usable_area_m2 / AREA_PER_PANEL_M2))
+  // Read area_per_panel_m2 from config so a panel-size model-year change is
+  // config-driven; fall back to the module constant when absent or invalid.
+  const area_per_panel_m2 =
+    config?.area_per_panel_m2 != null && config.area_per_panel_m2 > 0
+      ? config.area_per_panel_m2
+      : AREA_PER_PANEL_M2
+
+  const max_panels_count = Math.max(0, Math.floor(usable_area_m2 / area_per_panel_m2))
   const system_kw_dc = (max_panels_count * panel_capacity_watts) / 1000
 
   const panel_configs: SolarPanelConfig[] =

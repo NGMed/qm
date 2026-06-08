@@ -233,6 +233,98 @@ describe('normaliseSolarRoofFacts — malformed solarPanelConfigs', () => {
   })
 })
 
+describe('normaliseSolarRoofFacts — panel-capacity guard (new)', () => {
+  it('API panelCapacityWatts = 0 falls back to config default', () => {
+    const body = {
+      imageryQuality: 'HIGH',
+      imageryDate: { year: 2024, month: 3, day: 12 },
+      solarPotential: {
+        maxArrayPanelsCount: 30,
+        panelCapacityWatts: 0,
+        panelHeightMeters: 1.879,
+        panelWidthMeters: 1.045,
+        roofSegmentStats: [
+          { pitchDegrees: 20, azimuthDegrees: 0, stats: { areaMeters2: 70 } },
+        ],
+        solarPanelConfigs: [],
+      },
+    }
+    const insight = parseBuildingInsights(body)
+    if (!insight) throw new Error('fixture failed to parse')
+    const f = normaliseSolarRoofFacts(
+      { ...insight, raw: body },
+      COVERAGE,
+      { default_panel_capacity_watts: 415 },
+    )
+    expect(f.panel_capacity_watts).toBe(415)
+  })
+
+  it('API panelCapacityWatts negative falls back to config default', () => {
+    const body = {
+      imageryQuality: 'HIGH',
+      imageryDate: { year: 2024, month: 3, day: 12 },
+      solarPotential: {
+        maxArrayPanelsCount: 30,
+        panelCapacityWatts: -100,
+        panelHeightMeters: 1.879,
+        panelWidthMeters: 1.045,
+        roofSegmentStats: [
+          { pitchDegrees: 20, azimuthDegrees: 0, stats: { areaMeters2: 70 } },
+        ],
+        solarPanelConfigs: [],
+      },
+    }
+    const insight = parseBuildingInsights(body)
+    if (!insight) throw new Error('fixture failed to parse')
+    const f = normaliseSolarRoofFacts(
+      { ...insight, raw: body },
+      COVERAGE,
+      { default_panel_capacity_watts: 415 },
+    )
+    expect(f.panel_capacity_watts).toBe(415)
+  })
+
+  it('API panelCapacityWatts NaN falls back to module default (400) when no config supplied', () => {
+    const body = {
+      imageryQuality: 'HIGH',
+      imageryDate: { year: 2024, month: 3, day: 12 },
+      solarPotential: {
+        maxArrayPanelsCount: 30,
+        panelCapacityWatts: NaN,
+        panelHeightMeters: 1.879,
+        panelWidthMeters: 1.045,
+        roofSegmentStats: [
+          { pitchDegrees: 20, azimuthDegrees: 0, stats: { areaMeters2: 70 } },
+        ],
+        solarPanelConfigs: [],
+      },
+    }
+    const insight = parseBuildingInsights(body)
+    if (!insight) throw new Error('fixture failed to parse')
+    const f = normaliseSolarRoofFacts({ ...insight, raw: body }, COVERAGE)
+    // NaN → numberOr falls back to configDefault → configDefault = DEFAULT_PANEL_CAPACITY_WATTS = 400
+    expect(f.panel_capacity_watts).toBe(400)
+  })
+
+  it('all-empty-segments insight yields planes=[], usable_area_m2=0, primary_orientation=unknown', () => {
+    // Synthesise an insight with segments array empty (simulates an API response
+    // that has no usable segments after filtering). We cannot use
+    // parseBuildingInsights for this because it returns null on zero-area bodies —
+    // instead we inject a synthetic SolarRoofInsight directly.
+    const syntheticInsight = {
+      ...COVERED_INSIGHT,
+      segments: [] as typeof COVERED_INSIGHT.segments,
+      segmentCount: 0,
+      weightedMeanPitchDegrees: NaN,
+      raw: { solarPotential: { maxArrayPanelsCount: 0, panelCapacityWatts: 400, solarPanelConfigs: [] } },
+    }
+    const f = normaliseSolarRoofFacts(syntheticInsight, COVERAGE)
+    expect(f.planes).toEqual([])
+    expect(f.usable_area_m2).toBe(0)
+    expect(f.primary_orientation).toBe('unknown')
+  })
+})
+
 describe('azimuthToOrientation — edge cases', () => {
   it('flat roof (pitch < 5°) returns flat regardless of azimuth', () => {
     expect(azimuthToOrientation(0, 4)).toBe('flat')
