@@ -19,6 +19,7 @@ import type {
   SolarManualRoofInput,
   SolarRoofFacts,
   SolarPanelConfig,
+  SolarConfig,
 } from './types'
 
 /** Declared size bucket → usable (panel-placeable) roof area, m².
@@ -36,18 +37,33 @@ const MANUAL_PANEL_CAPACITY_WATTS = 400
 /** Conservative DC specific yield, kWh per kW DC per year. */
 const MANUAL_BENCHMARK_KWH_PER_KW = 1400
 
-export function buildManualRoofFacts(input: SolarManualRoofInput): SolarRoofFacts {
+export function buildManualRoofFacts(
+  input: SolarManualRoofInput,
+  config?: Pick<SolarConfig, 'default_panel_capacity_watts' | 'manual_benchmark_kwh_per_kw'>,
+): SolarRoofFacts {
   const usable_area_m2 = MANUAL_AREA_M2[input.roof_size]
 
+  const panel_capacity_watts =
+    config?.default_panel_capacity_watts != null &&
+    Number.isFinite(config.default_panel_capacity_watts)
+      ? config.default_panel_capacity_watts
+      : MANUAL_PANEL_CAPACITY_WATTS
+
+  const benchmark_kwh_per_kw =
+    config?.manual_benchmark_kwh_per_kw != null &&
+    Number.isFinite(config.manual_benchmark_kwh_per_kw)
+      ? config.manual_benchmark_kwh_per_kw
+      : MANUAL_BENCHMARK_KWH_PER_KW
+
   const max_panels_count = Math.max(0, Math.floor(usable_area_m2 / AREA_PER_PANEL_M2))
-  const system_kw_dc = (max_panels_count * MANUAL_PANEL_CAPACITY_WATTS) / 1000
+  const system_kw_dc = (max_panels_count * panel_capacity_watts) / 1000
 
   const panel_configs: SolarPanelConfig[] =
     max_panels_count > 0
       ? [
           {
             panels_count: max_panels_count,
-            yearly_energy_dc_kwh: round1(system_kw_dc * MANUAL_BENCHMARK_KWH_PER_KW),
+            yearly_energy_dc_kwh: round1(system_kw_dc * benchmark_kwh_per_kw),
           },
         ]
       : []
@@ -60,7 +76,7 @@ export function buildManualRoofFacts(input: SolarManualRoofInput): SolarRoofFact
     primary_orientation: input.orientation,
     mean_pitch_degrees: null,
     max_panels_count,
-    panel_capacity_watts: MANUAL_PANEL_CAPACITY_WATTS,
+    panel_capacity_watts,
     panel_configs,
     storeys: input.storeys,
     polygon_geojson: null,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildManualRoofFacts, MANUAL_AREA_M2 } from './manual-fallback'
+import { buildManualRoofFacts, MANUAL_AREA_M2, __test_only__ } from './manual-fallback'
 import type { SolarManualRoofInput } from './types'
 
 describe('buildManualRoofFacts', () => {
@@ -23,21 +23,21 @@ describe('buildManualRoofFacts', () => {
   })
 
   it('synthesises max_panels_count from usable area (1.95 m² per panel)', () => {
-    // 90 m² / 1.95 ≈ 46.1 → floor 46
-    expect(facts.max_panels_count).toBe(Math.floor(MANUAL_AREA_M2.medium / 1.95))
+    // 90 m² / AREA_PER_PANEL_M2 ≈ 46.1 → floor 46
+    expect(facts.max_panels_count).toBe(Math.floor(MANUAL_AREA_M2.medium / __test_only__.AREA_PER_PANEL_M2))
   })
 
   it('defaults panel capacity to 400 W', () => {
-    expect(facts.panel_capacity_watts).toBe(400)
+    expect(facts.panel_capacity_watts).toBe(__test_only__.MANUAL_PANEL_CAPACITY_WATTS)
   })
 
   it('synthesises one panel config at the roof max with a benchmark DC yield', () => {
     expect(facts.panel_configs.length).toBe(1)
     const cfg = facts.panel_configs[0]
     expect(cfg.panels_count).toBe(facts.max_panels_count)
-    // kW = panels × 400 / 1000; DC = kW × 1400 kWh/kW/yr benchmark
-    const kw = (cfg.panels_count * 400) / 1000
-    expect(cfg.yearly_energy_dc_kwh).toBe(Math.round(kw * 1400 * 10) / 10)
+    // kW = panels × MANUAL_PANEL_CAPACITY_WATTS / 1000; DC = kW × MANUAL_BENCHMARK_KWH_PER_KW
+    const kw = (cfg.panels_count * __test_only__.MANUAL_PANEL_CAPACITY_WATTS) / 1000
+    expect(cfg.yearly_energy_dc_kwh).toBe(Math.round(kw * __test_only__.MANUAL_BENCHMARK_KWH_PER_KW * 10) / 10)
   })
 
   it('carries the declared storeys and has no polygon / imagery', () => {

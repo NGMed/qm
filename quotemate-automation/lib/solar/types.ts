@@ -415,6 +415,21 @@ export type SolarConfig = {
    * is tracked alongside STC prices and deeming schedules (spec §5).
    */
   default_panel_capacity_watts?: number
+  /**
+   * Conservative DC specific yield used on the manual-fallback path
+   * (kWh per kW DC per year). Absent from the Google path, which uses the
+   * API's own per-config yearly_energy_dc_kwh. Versioned here so a
+   * per-city benchmark upgrade (e.g. 1400 AU-wide → city-specific) is
+   * tracked alongside deeming schedules rather than buried in code.
+   *
+   * NOTE: The manual path produces a single AU-wide benchmark figure that
+   * will be ±15% vs Melbourne (~1200) or Brisbane (~1500). The Google
+   * path uses the API's real per-config DC estimate, so the two paths
+   * are structurally inconsistent by ≤±15% on production figures for the
+   * same roof. The manual path always carries confidence_band='wide' to
+   * reflect this uncertainty downstream.
+   */
+  manual_benchmark_kwh_per_kw?: number
 }
 
 /** Result of validating config freshness before a publish (spec §5, §7). */
