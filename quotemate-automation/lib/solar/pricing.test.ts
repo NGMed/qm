@@ -4,7 +4,7 @@ import { DEFAULT_SOLAR_CONFIG } from './config'
 import { normaliseSolarRoofFacts } from './roof'
 import { sizeSolarSystem } from './sizing'
 import { COVERED_INSIGHT, COVERED_RAW_BODY } from './__fixtures__/building-insights'
-import type { SolarCoverageResult, SolarEstimateContext } from './types'
+import type { SolarCoverageResult, SolarEstimateContext, SolarSizingResult } from './types'
 
 const COVERAGE = {
   covered: true,
@@ -72,6 +72,14 @@ describe('calculateSolarPrice', () => {
     expect(t.net_inc_gst).toBe(Math.round(t.net_ex_gst * 1.10 * 100) / 100)
   })
 
+  it('GST component (inc − ex) equals roundTo(ex × 0.10, 2) for AU tax invoice correctness', () => {
+    const t = price.tiers[0]
+    const grossGst = Math.round(t.gross_ex_gst * 0.10 * 100) / 100
+    const netGst = Math.round(t.net_ex_gst * 0.10 * 100) / 100
+    expect(+(t.gross_inc_gst - t.gross_ex_gst).toFixed(2)).toBe(grossGst)
+    expect(+(t.net_inc_gst - t.net_ex_gst).toFixed(2)).toBe(netGst)
+  })
+
   it('uses premium $/kW when the panel type is premium', () => {
     const premiumSizing = sizeSolarSystem({
       roof: ROOF,
@@ -134,5 +142,84 @@ describe('calculateSolarPrice', () => {
     expect(p.tiers[0].stc.zone_rating).toBe(0)
     expect(p.tiers[0].stc.certificates).toBe(0)
     expect(p.tiers[0].net_ex_gst).toBe(p.tiers[0].gross_ex_gst)
+  })
+
+  // ── Issue guards ────────────────────────────────────────────────────
+
+  it('call_out_minimum_applied is always present (false when floor not triggered)', () => {
+    // Normal sizing — floor should not be triggered.
+    expect(typeof price.call_out_minimum_applied).toBe('boolean')
+    expect(price.call_out_minimum_applied).toBe(false)
+  })
+
+  it('DEFAULT_SOLAR_RATE_CARD is the same object as DEFAULT_SOLAR_CONFIG.default_rate_card (no duplicate)', () => {
+    expect(DEFAULT_SOLAR_RATE_CARD).toBe(DEFAULT_SOLAR_CONFIG.default_rate_card)
+  })
+
+  it('throws when sizing has empty tiers (inspection_required path)', () => {
+    const inspectionSizing: SolarSizingResult = {
+      tiers: [],
+      roof_capacity_kw_dc: 0,
+      export_limit_kw_ac: 5,
+      routing: { decision: 'inspection_required', reason: 'No usable roof area.' },
+    }
+    expect(() =>
+      calculateSolarPrice({
+        sizing: inspectionSizing,
+        roof: ROOF,
+        context: CONTEXT,
+        config: DEFAULT_SOLAR_CONFIG,
+      }),
+    ).toThrow('inspection_required')
+  })
+
+  it('throws when panel_type is unknown and system_kw_dc > 0 (no $0 quote slips through)', () => {
+    // Build a sizing result with panel_type='unknown' so baseRate resolves to 0.
+    const unknownSizing: SolarSizingResult = {
+      ...SIZING,
+      tiers: SIZING.tiers.map((t) => ({ ...t, panel_type: 'unknown' as const })),
+    }
+    expect(() =>
+      calculateSolarPrice({
+        sizing: unknownSizing,
+        roof: ROOF,
+        context: CONTEXT,
+        config: DEFAULT_SOLAR_CONFIG,
+      }),
+    ).toThrow("no install rate for panel_type 'unknown'")
+  })
+
+  it('stcBreakdown deeming_years=0 (install_year 2031): certificates=0, net equals gross', () => {
+    // SRES has ended — deeming_years entry is 0 for 2031 in DEFAULT_SOLAR_CONFIG.
+    const ctx2031: SolarEstimateContext = { ...CONTEXT, install_year: 2031 }
+    const p = calculateSolarPrice({
+      sizing: SIZING,
+      roof: ROOF,
+      context: ctx2031,
+      config: DEFAULT_SOLAR_CONFIG,
+    })
+    const t = p.tiers[0]
+    expect(t.stc.deeming_years).toBe(0)
+    expect(t.stc.certificates).toBe(0)
+    expect(t.stc.rebate_aud).toBe(0)
+    // Net equals gross when there is no rebate.
+    expect(t.net_ex_gst).toBe(t.gross_ex_gst)
+  })
+
+  it('unknown postcode AND deeming_years=0 combined: certificates=0, net equals gross', () => {
+    // Both guard conditions in the stcBreakdown guard expression are false
+    // simultaneously: zone_rating=0 (unknown postcode) and deeming_years=0 (2031).
+    const ctx = { ...CONTEXT, postcode: '9999', install_year: 2031 }
+    const p = calculateSolarPrice({
+      sizing: SIZING,
+      roof: ROOF,
+      context: ctx,
+      config: DEFAULT_SOLAR_CONFIG,
+    })
+    const t = p.tiers[0]
+    expect(t.stc.zone_rating).toBe(0)
+    expect(t.stc.deeming_years).toBe(0)
+    expect(t.stc.certificates).toBe(0)
+    expect(t.net_ex_gst).toBe(t.gross_ex_gst)
   })
 })

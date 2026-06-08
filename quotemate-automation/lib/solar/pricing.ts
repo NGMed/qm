@@ -8,8 +8,9 @@
 // Deterministic — no LLM on the money path. The STC subtraction lives
 // HERE (not in the caller) because it needs the context's postcode/year
 // and the dated config; the customer page renders gross → STC → net as a
-// transparent three-line breakdown. GST factor 1.10, call-out floor after
-// the multiplication — identical to lib/roofing/pricing.ts.
+// transparent three-line breakdown. GST computed as ex_gst + roundTo(ex_gst
+// × 0.10, 2) so the displayed GST component equals a legal invoice line.
+// Call-out floor after the multiplication — identical to lib/roofing/pricing.ts.
 //
 // PURE — no I/O, fully unit-testable.
 // ════════════════════════════════════════════════════════════════════
@@ -24,19 +25,14 @@ import type {
   SolarStcBreakdown,
   SolarQuotePrice,
 } from './types'
+import { DEFAULT_SOLAR_CONFIG } from './config'
 
-// ── Default rate card (mirrors DEFAULT_SOLAR_CONFIG.default_rate_card) ──
-export const DEFAULT_SOLAR_RATE_CARD: SolarRateCard = {
-  install_rate_per_kw: {
-    standard_panels: 1100,
-    premium_panels: 1450,
-    unknown: 0,
-  },
-  multi_storey_loading_pct: 0.15,
-  complex_roof_loading_pct: 0.10,
-  gst_registered: true,
-  call_out_minimum_ex_gst: 3500,
-}
+// ── Default rate card re-exported from config (single source of truth) ──
+// Callers that need a fallback rate card should import this rather than
+// hard-coding numbers; it mirrors DEFAULT_SOLAR_CONFIG.default_rate_card
+// exactly so a config.ts update is reflected here automatically.
+export const DEFAULT_SOLAR_RATE_CARD: SolarRateCard =
+  DEFAULT_SOLAR_CONFIG.default_rate_card
 
 // ── Loadings ────────────────────────────────────────────────────────
 type Loading = {
@@ -73,7 +69,8 @@ export function applicableLoadings(
 // ── STC breakdown ────────────────────────────────────────────────────
 /** PURE — STC certificates + dollar rebate for a system size. Postcodes
  *  not in the zone table yield zone 0 → 0 certificates → 0 rebate (we
- *  never state-default; spec §5). */
+ *  never state-default; spec §5). deeming_years=0 (SRES ended) also yields
+ *  0 certificates → net equals gross. */
 export function stcBreakdown(args: {
   system_kw: number
   context: SolarEstimateContext
@@ -105,13 +102,21 @@ export function calculateSolarPrice(args: {
   config: SolarConfig
   rateCard?: SolarRateCard
 }): SolarQuotePrice {
-  const rateCard = args.rateCard ?? args.config.default_rate_card ?? DEFAULT_SOLAR_RATE_CARD
   const { sizing, roof, context, config } = args
+  // Guard: inspection_required path produces tiers=[]; callers cannot price it.
+  if (sizing.tiers.length === 0) {
+    throw new Error(
+      'calculateSolarPrice called with an inspection_required sizing result (tiers=[]).' +
+        ' Route to inspection before pricing.',
+    )
+  }
+
+  // Use config's default_rate_card as the fallback — single source of truth.
+  const rateCard = args.rateCard ?? config.default_rate_card
 
   const loadings = applicableLoadings(roof, rateCard)
   const loadingMultiplier = loadings.reduce((acc, l) => acc * (1 + l.pct), 1)
 
-  const gstFactor = rateCard.gst_registered ? 1.10 : 1.0
   const floor = rateCard.call_out_minimum_ex_gst ?? 0
   const applyFloor = (n: number) => (floor > 0 && n > 0 ? Math.max(n, floor) : n)
 
@@ -123,6 +128,17 @@ export function calculateSolarPrice(args: {
 
   const tiers: SolarPriceTier[] = sizing.tiers.map((t) => {
     const baseRate = rateCard.install_rate_per_kw[t.panel_type] ?? 0
+
+    // Guard: unknown panel type (baseRate=0) for a real kW system is a config
+    // error — a $0 gross quote must never slip through undetected.
+    if (baseRate === 0 && t.system_kw_dc > 0) {
+      throw new Error(
+        `calculateSolarPrice: no install rate for panel_type '${t.panel_type}' on a ` +
+          `${t.system_kw_dc} kW system. Update the rate card or resolve the panel type ` +
+          `before pricing.`,
+      )
+    }
+
     const grossRaw = t.system_kw_dc * baseRate * loadingMultiplier
     const grossFloored = applyFloor(grossRaw)
     if (floor > 0 && grossRaw > 0 && grossRaw < floor) callOutMinimumApplied = true
@@ -131,15 +147,20 @@ export function calculateSolarPrice(args: {
     const stc = stcBreakdown({ system_kw: t.system_kw_dc, context, config })
     const net_ex_gst = roundTo(Math.max(0, gross_ex_gst - stc.rebate_aud), 2)
 
+    // GST: compute the tax component separately so the displayed line
+    // (inc_gst − ex_gst) equals roundTo(ex_gst × 0.10, 2) on AU tax invoices.
+    const gross_gst = roundTo(gross_ex_gst * 0.10, 2)
+    const net_gst = roundTo(net_ex_gst * 0.10, 2)
+
     return {
       tier: t.tier,
       label: t.label,
       system_kw_dc: t.system_kw_dc,
       gross_ex_gst,
-      gross_inc_gst: roundTo(gross_ex_gst * gstFactor, 2),
+      gross_inc_gst: roundTo(gross_ex_gst + gross_gst, 2),
       stc,
       net_ex_gst,
-      net_inc_gst: roundTo(net_ex_gst * gstFactor, 2),
+      net_inc_gst: roundTo(net_ex_gst + net_gst, 2),
       scope: `${t.system_kw_dc.toFixed(1)} kW solar install (${t.panels_count} ${t.panel_type.replace('_', ' ')}), supply and install by an accredited installer.`,
     }
   })

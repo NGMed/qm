@@ -320,7 +320,8 @@ export type SolarQuotePrice = {
     detail: string
   }>
   routing: SolarRoutingDecision
-  call_out_minimum_applied?: boolean
+  /** Always present — false when the floor was not triggered. */
+  call_out_minimum_applied: boolean
 }
 
 // ╔══════════════════════════════════════════════════════════════════╗
