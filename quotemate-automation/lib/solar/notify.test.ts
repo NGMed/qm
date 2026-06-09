@@ -80,4 +80,17 @@ describe('notifySolarEstimate', () => {
     })
     expect(r.notified).toBe(false)
   })
+
+  it('reports not-notified when dispatch resolves with ok: false', async () => {
+    const r = await notifySolarEstimate({
+      tenant: { owner_mobile: '+61400000111', owner_first_name: 'Sam', twilio_sms_number: null },
+      customerName: 'Mia',
+      systemKw: 6.6,
+      netIncGst: 8019,
+      shareToken: 'TOKEN123',
+      appUrl: 'https://app',
+      dispatch: async () => ({ ok: false as const }),
+    })
+    expect(r.notified).toBe(false)
+  })
 })
