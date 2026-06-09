@@ -45,8 +45,13 @@ export async function syncDirtyTables(deps: SyncDeps): Promise<SyncSummary> {
   const upload = deps.uploadDocument ?? kbUploadDocument
   const del = deps.deleteDocument ?? kbDeleteDocument
 
+  // bumped_at is read AS TEXT and the race guard compares it AS TEXT below.
+  // A timestamptz keeps microsecond precision in Postgres, but a JS Date only
+  // keeps milliseconds — so comparing the column against a JS Date parameter is
+  // never equal, which would leave `dirty` permanently true. Text equality at
+  // full precision avoids that.
   const { rows } = await deps.db.query(
-    `select table_name, bumped_at, content_hash, kb_document_name
+    `select table_name, bumped_at::text as bumped_at, content_hash, kb_document_name
        from kb_sync_state
       where dirty = true
       order by bumped_at asc
@@ -66,7 +71,7 @@ export async function syncDirtyTables(deps: SyncDeps): Promise<SyncSummary> {
       if (hash === row.content_hash) {
         await deps.db.query(
           `update kb_sync_state
-              set dirty = (bumped_at <> $2), last_synced_at = now(),
+              set dirty = (bumped_at::text <> $2), last_synced_at = now(),
                   row_count = $3, last_error = null
             where table_name = $1`,
           [row.table_name, seq, rowCount],
@@ -99,7 +104,7 @@ export async function syncDirtyTables(deps: SyncDeps): Promise<SyncSummary> {
         `update kb_sync_state
             set content_hash = $2, kb_document_name = $3, row_count = $4,
                 last_synced_at = now(), last_error = null,
-                dirty = (bumped_at <> $5)
+                dirty = (bumped_at::text <> $5)
           where table_name = $1`,
         [row.table_name, hash, doc?.name ?? null, rowCount, seq],
       )
