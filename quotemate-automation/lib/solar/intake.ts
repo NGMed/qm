@@ -29,6 +29,7 @@ import { estimateSolarProduction } from './production'
 import { calculateSolarPrice } from './pricing'
 import { calculateSolarEconomics } from './economics'
 import { validateSolarConfig } from './config'
+import { runSolarGuardrails } from './guardrails'
 import type {
   SolarAddressInput,
   SolarManualRoofInput,
@@ -42,6 +43,29 @@ import type {
   SolarConfidenceBand,
   SolarRoutingDecision,
 } from './types'
+
+/**
+ * PURE — stamp deterministic-output flags on a drafted estimate and
+ * force tradie_review whenever any flag fired (spec §7: out-of-bounds →
+ * flag for tradie, never publish silently). A clean estimate keeps its
+ * incoming routing if already tradie-review, else is normalised to it
+ * (solar never auto-sends — inherits roofing's high-ticket rule).
+ */
+export function finaliseSolarEstimate(estimate: SolarEstimate): SolarEstimate {
+  const flags = runSolarGuardrails(estimate)
+  const routing: SolarRoutingDecision =
+    flags.length > 0
+      ? {
+          decision: 'tradie_review',
+          reason: `${flags.length} estimate checks need your review before this can be sent.`,
+        }
+      : {
+          decision: 'tradie_review',
+          reason:
+            'Quote auto-calculated from roof data. Every solar quote requires tradie sign-off before customer send.',
+        }
+  return { ...estimate, guardrail_flags: flags, routing }
+}
 
 /** Deterministic-output guardrail bounds (spec §7). */
 const GROSS_PER_KW_MIN = 700
