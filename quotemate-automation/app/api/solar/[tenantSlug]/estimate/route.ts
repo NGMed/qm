@@ -23,6 +23,8 @@ import { notifySolarEstimate } from '@/lib/solar/notify'
 import { runSolarEstimate } from '@/lib/solar/intake'
 import { loadSolarConfig } from '@/lib/solar/config'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { geocodeAddress } from '@/lib/solar/geocode'
+import { resolveNetworkFromPostcode } from '@/lib/solar/network-lookup'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -66,6 +68,10 @@ export async function POST(
 
   // ── Run the deterministic engine. ────────────────────────────────
   const config = await loadSolarConfig(supabase)
+  // Derive DNSP/network from the postcode (for feed-in tariff + export
+  // limit). Falls back to 'default' when no exact match is found, which
+  // routes through config.feed_in.default_aud_per_kwh — always safe.
+  const resolvedNetwork = resolveNetworkFromPostcode(address.postcode)
   let estimate
   try {
     estimate = await runSolarEstimate({
@@ -73,6 +79,17 @@ export async function POST(
       manual,
       panelType: panel_type,
       config,
+      opts: {
+        geocode: async (input) => {
+          const r = await geocodeAddress(
+            input.address + ', ' + input.state,
+            { apiKey: process.env.GOOGLE_GEOCODE_API_KEY },
+          )
+          if (!r.ok) throw new Error(r.detail)
+          return r.location
+        },
+        network: resolvedNetwork,
+      },
     })
   } catch (e) {
     return Response.json(
