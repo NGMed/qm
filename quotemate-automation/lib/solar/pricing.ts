@@ -185,4 +185,4 @@ export function calculateSolarPrice(args: {
   }
 }
 
-export const __test_only__ = { applicableLoadings }
+export const __test_only__ = { applicableLoadings, stcBreakdown }
