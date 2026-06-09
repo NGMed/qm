@@ -47,8 +47,8 @@ export function checkGrossPerKwBounds(tier: SolarPriceTier): string[] {
   const perKw = tier.gross_ex_gst / tier.system_kw_dc
   if (perKw < GROSS_PER_KW_MIN_AUD || perKw > GROSS_PER_KW_MAX_AUD) {
     return [
-      `${tier.tier}: gross price is $${perKw.toFixed(0)}/kW, outside the ` +
-        `$${GROSS_PER_KW_MIN_AUD}–$${GROSS_PER_KW_MAX_AUD}/kW sanity band.`,
+      `${tier.tier}: gross price is $${perKw.toFixed(0)}/kW DC, outside the ` +
+        `$${GROSS_PER_KW_MIN_AUD}–$${GROSS_PER_KW_MAX_AUD} $/kW sanity band.`,
     ]
   }
   return []
@@ -89,4 +89,29 @@ export function checkCecBenchmark(prod: SolarProductionResult): string[] {
     ]
   }
   return []
+}
+
+import type { SolarEstimate } from './types'
+
+/**
+ * PURE — run every deterministic output check across an entire
+ * SolarEstimate and return the flat list of human-readable breaches
+ * (spec §7). An empty array means the estimate is clean and may publish
+ * once the tradie confirms; a non-empty array MUST block silent publish
+ * and surface to the tradie. This is the value written to
+ * SolarEstimate.guardrail_flags.
+ */
+export function runSolarGuardrails(estimate: SolarEstimate): string[] {
+  const flags: string[] = []
+  for (const tier of estimate.price.tiers) {
+    flags.push(...checkNetIdentity(tier))
+    flags.push(...checkGrossPerKwBounds(tier))
+  }
+  for (const econ of estimate.economics.tiers) {
+    flags.push(...checkPaybackBounds(econ))
+  }
+  for (const prod of estimate.production) {
+    flags.push(...checkCecBenchmark(prod))
+  }
+  return flags
 }

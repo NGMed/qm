@@ -120,3 +120,77 @@ describe('checkCecBenchmark', () => {
     expect(checkCecBenchmark(prod({ annual_kwh_ac: 5000 }))).toHaveLength(1) // ≈758 vs 1400 (−46%)
   })
 })
+
+import { runSolarGuardrails } from './guardrails'
+import type { SolarEstimate } from './types'
+
+function estimate(): SolarEstimate {
+  return {
+    token: 'tok_demo_123456',
+    context: { postcode: '2000', state: 'NSW', install_year: 2026, network: 'Ausgrid' },
+    coverage_source: 'google',
+    roof: {
+      source: 'google',
+      usable_area_m2: 60,
+      planes: [],
+      segment_count: 2,
+      primary_orientation: 'north',
+      mean_pitch_degrees: 22,
+      max_panels_count: 18,
+      panel_capacity_watts: 400,
+      panel_configs: [],
+      storeys: 1,
+      polygon_geojson: null,
+      imagery_quality: 'HIGH',
+      imagery_date: '2025-11-01',
+    },
+    sizing: {
+      tiers: [],
+      roof_capacity_kw_dc: 7.2,
+      export_limit_kw_ac: 5,
+      routing: { decision: 'tradie_review', reason: 'auto-calculated' },
+    },
+    production: [prod()],
+    price: {
+      tiers: [tier()],
+      effective_rate_per_kw: 1212,
+      loadings_applied: [],
+      routing: { decision: 'tradie_review', reason: 'auto-calculated' },
+      call_out_minimum_applied: false,
+    },
+    economics: {
+      tiers: [econ()],
+      assumptions: {
+        self_consumption_pct: 0.4,
+        retail_rate_aud_per_kwh: 0.3,
+        feed_in_tariff_aud_per_kwh: 0.05,
+        feed_in_network: 'Ausgrid',
+      },
+    },
+    confidence_band: 'tight',
+    satellite_image_url: null,
+    routing: { decision: 'tradie_review', reason: 'auto-calculated' },
+    guardrail_flags: [],
+    config_version: '2026-06-01',
+  }
+}
+
+describe('runSolarGuardrails', () => {
+  it('returns an empty array for a clean estimate', () => {
+    expect(runSolarGuardrails(estimate())).toEqual([])
+  })
+
+  it('aggregates flags from every check across every tier', () => {
+    const e = estimate()
+    e.price.tiers = [tier({ net_ex_gst: 1 }), tier({ tier: 'best', gross_ex_gst: 4000 })]
+    e.economics.tiers = [econ({ payback_years_high: 99 })]
+    e.production = [prod({ annual_kwh_ac: 99000 })]
+    const flags = runSolarGuardrails(e)
+    // net-identity (1) + gross/kW (1) + payback (1) + CEC (1) ≥ 4 distinct flags
+    expect(flags.length).toBeGreaterThanOrEqual(4)
+    expect(flags.some((f) => /net price/i.test(f))).toBe(true)
+    expect(flags.some((f) => /\$\/kW/.test(f))).toBe(true)
+    expect(flags.some((f) => /payback/i.test(f))).toBe(true)
+    expect(flags.some((f) => /CEC benchmark/i.test(f))).toBe(true)
+  })
+})
