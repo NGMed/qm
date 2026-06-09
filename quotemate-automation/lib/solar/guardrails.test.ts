@@ -121,6 +121,34 @@ describe('checkCecBenchmark', () => {
   })
 })
 
+import { apiFailureFallback } from './guardrails'
+import type { SolarCoverageFailureCode } from './types'
+
+describe('apiFailureFallback', () => {
+  it('routes provider quota exhaustion to the manual path with a quota note', () => {
+    const r = apiFailureFallback('provider_quota_exhausted')
+    expect(r.useManualFallback).toBe(true)
+    expect(r.customerMessage).toMatch(/estimate shortly/i)
+    expect(r.quotaNote).toMatch(/daily/i)
+  })
+
+  it('routes rate-limited and unavailable to the manual path (no quota note)', () => {
+    for (const code of ['provider_rate_limited', 'provider_unavailable'] as SolarCoverageFailureCode[]) {
+      const r = apiFailureFallback(code)
+      expect(r.useManualFallback).toBe(true)
+      expect(r.quotaNote).toBeNull()
+    }
+  })
+
+  it('does NOT trigger the API-failure fallback for a genuine no-building/outside-coverage result', () => {
+    // These are coverage outcomes, not API failures — the manual ask is
+    // the normal uncovered branch, not the "estimate shortly" error path.
+    const r = apiFailureFallback('no_building_at_address')
+    expect(r.useManualFallback).toBe(false)
+    expect(r.customerMessage).toBeNull()
+  })
+})
+
 import { runSolarGuardrails } from './guardrails'
 import type { SolarEstimate } from './types'
 

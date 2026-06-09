@@ -91,7 +91,7 @@ export function checkCecBenchmark(prod: SolarProductionResult): string[] {
   return []
 }
 
-import type { SolarEstimate } from './types'
+import type { SolarEstimate, SolarCoverageFailureCode } from './types'
 
 /**
  * PURE — run every deterministic output check across an entire
@@ -114,4 +114,50 @@ export function runSolarGuardrails(estimate: SolarEstimate): string[] {
     flags.push(...checkCecBenchmark(prod))
   }
   return flags
+}
+
+/** The set of failure codes that are TRANSIENT API/quota problems (not
+ *  genuine coverage outcomes). Only these trigger the "estimate shortly"
+ *  fallback rather than the normal uncovered → manual-ask branch. */
+const API_FAILURE_CODES: ReadonlySet<SolarCoverageFailureCode> = new Set([
+  'provider_unavailable',
+  'provider_rate_limited',
+  'provider_quota_exhausted',
+  'provider_invalid_response',
+])
+
+export type ApiFailureFallback = {
+  /** True when we should branch to the manual-roof path despite a covered
+   *  address (because the provider, not the roof, failed). */
+  useManualFallback: boolean
+  /** Customer-facing reassurance; null when not an API failure. */
+  customerMessage: string | null
+  /** Admin/ops note for quota exhaustion (spec §7 daily-quota cap); null
+   *  for non-quota failures. */
+  quotaNote: string | null
+}
+
+/**
+ * PURE — map a coverage failure code to the API-failure fallback
+ * decision (spec §7). Provider/quota failures → manual path + a graceful
+ * "estimate shortly" message; quota exhaustion additionally surfaces a
+ * daily-quota note so ops knows the GCP cap bound (cost guardrail).
+ * Genuine coverage outcomes (no building, outside coverage) return
+ * useManualFallback:false — they take the normal uncovered branch.
+ */
+export function apiFailureFallback(
+  code: SolarCoverageFailureCode,
+): ApiFailureFallback {
+  if (!API_FAILURE_CODES.has(code)) {
+    return { useManualFallback: false, customerMessage: null, quotaNote: null }
+  }
+  return {
+    useManualFallback: true,
+    customerMessage:
+      'We could not reach our roof-imagery provider just now — we will have your estimate shortly. Answer a couple of quick questions to get an instant indicative figure.',
+    quotaNote:
+      code === 'provider_quota_exhausted'
+        ? 'Solar API daily quota exhausted — requests are capped to cap GCP spend; resets at the daily boundary.'
+        : null,
+  }
 }

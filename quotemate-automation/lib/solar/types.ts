@@ -166,15 +166,18 @@ export type SolarRoofFacts = {
  * The upstream `fetchBuildingInsights` collapses all non-404 HTTP errors
  * (including 429) into `http_error → provider_unavailable`, so
  * rate-limit / quota codes cannot be surfaced without extending the
- * upstream client. Removed unreachable codes (outside_coverage,
- * address_not_resolved, provider_rate_limited, provider_quota_exhausted)
- * to keep the exhaustive-switch contract honest.
+ * upstream client. The provider_rate_limited and provider_quota_exhausted
+ * codes are reserved for future upstream client extensions that surface
+ * 429 / quota errors distinctly; they are handled by apiFailureFallback
+ * (spec §7) even before the coverage gate can emit them.
  */
 export type SolarCoverageFailureCode =
   | 'no_building_at_address'
   | 'imagery_below_floor'      // imageryQuality < MEDIUM
   | 'provider_unavailable'
   | 'provider_invalid_response'
+  | 'provider_rate_limited'
+  | 'provider_quota_exhausted'
 
 /**
  * Coverage outcome. `covered` carries the resolved coordinate + imagery
