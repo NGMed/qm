@@ -237,3 +237,16 @@ export function validateSolarConfig(
 }
 
 export const __test_only__ = { DEEMING_SCHEDULE, ZONE_TABLE, DEFAULT_RATE_CARD }
+
+// ── DB-backed config loader ──────────────────────────────────────────────────
+// The route calls loadSolarConfig(supabase) to retrieve the active config.
+// v1: returns DEFAULT_SOLAR_CONFIG (a future migration will add a
+// solar_config table; the loader switches transparently). The supabase
+// client arg is accepted for forward-compatibility so the route signature
+// does not need to change when the DB-backed path ships.
+export async function loadSolarConfig(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _supabase: any,
+): Promise<SolarConfig> {
+  return DEFAULT_SOLAR_CONFIG
+}
