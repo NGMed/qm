@@ -1,6 +1,6 @@
-// QuoteMate · run migration 097
+// QuoteMate · run migration 100
 // (solar trade Phase 1 — solar trade row + solar_estimates + solar_config)
-// Usage: node --env-file=.env.local scripts/run-migration-097.mjs
+// Usage: node --env-file=.env.local scripts/run-migration-100.mjs
 
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +9,7 @@ import pg from 'pg'
 
 const { Client } = pg
 const here = dirname(fileURLToPath(import.meta.url))
-const sqlPath = join(here, '..', 'sql', 'migrations', '097_solar_trade_phase1.sql')
+const sqlPath = join(here, '..', 'sql', 'migrations', '100_solar_trade_phase1.sql')
 
 const dbUrl = process.env.SUPABASE_DB_URL
 if (!dbUrl) {
@@ -57,7 +57,7 @@ try {
   console.log(`  before · solar_estimates table         ${beforeEst}`)
   console.log(`  before · solar_config table            ${beforeCfg}`)
 
-  console.log('\n─── executing migration 097 ──')
+  console.log('\n─── executing migration 100 ──')
   await c.query(sql)
   console.log('  migration committed.')
 
@@ -88,7 +88,7 @@ try {
     process.exit(2)
   }
 
-  console.log('\nMigration 097 complete.')
+  console.log('\nMigration 100 complete.')
 } catch (e) {
   console.error('MIGRATION FAILED:', e.message)
   process.exitCode = 1

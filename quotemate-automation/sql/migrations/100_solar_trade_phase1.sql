@@ -1,4 +1,4 @@
--- Migration 097 · Solar trade — Phase 1 foundation
+-- Migration 100 · Solar trade — Phase 1 foundation
 --
 -- Context: a self-serve solar PV estimate trade alongside electrical /
 -- plumbing / roofing / painting. Like roofing (mig 080) and painting
@@ -25,7 +25,7 @@
 --
 -- Idempotent: create table if not exists + on-conflict / where-not-exists
 -- guards so re-runs are no-ops. Apply with:
---   node --env-file=.env.local scripts/run-migration-097.mjs
+--   node --env-file=.env.local scripts/run-migration-100.mjs
 
 -- ── 1. Register the solar trade row (trades registry, mig 046) ──────
 insert into public.trades (name, display_name, is_job_based, active)
@@ -179,6 +179,6 @@ begin
      where table_schema = 'public' and table_name = 'solar_config'
   ) into has_cfg;
   select count(*) into cfg_count from public.solar_config;
-  raise notice 'Migration 097: solar trade=%, solar_estimates=%, solar_config=%, config rows=%',
+  raise notice 'Migration 100: solar trade=%, solar_estimates=%, solar_config=%, config rows=%',
     has_trade, has_est, has_cfg, cfg_count;
 end $$;
