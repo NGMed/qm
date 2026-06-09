@@ -106,19 +106,19 @@ export async function runSolarEstimate(args: {
     // coverage gate already proved the call succeeds; fetch once more
     // through the same injected client and parse.
     const raw = await fetchRawInsights(location, opts.solarOpts)
-    roof = normaliseSolarRoofFacts(raw, coverage)
+    roof = normaliseSolarRoofFacts(raw, coverage, config)
     coverage_source = 'google'
     satellite_image_url = opts.satelliteImageUrl
       ? await opts.satelliteImageUrl(location)
       : null
   } else if (args.manual) {
-    roof = buildManualRoofFacts(args.manual)
+    roof = buildManualRoofFacts(args.manual, config)
     coverage_source = 'manual'
   } else {
     // Uncovered and no manual input — return an inspection-routed empty
     // estimate from a synthetic empty manual roof. The customer page will
     // collect the manual answers and re-run.
-    roof = buildManualRoofFacts({ orientation: 'unknown', roof_size: 'small', storeys: 1 })
+    roof = buildManualRoofFacts({ orientation: 'unknown', roof_size: 'small', storeys: 1 }, config)
     roof = { ...roof, max_panels_count: 0, panel_configs: [] }
     coverage_source = 'manual'
   }

@@ -20,11 +20,23 @@ function fakeFetch(status: number, body: unknown) {
 
 const geocodeOk = async () => ({ lat: -33.8688, lng: 151.2093 })
 
+// COVERED_RAW_BODY has 30 panels × 400 W with Ausgrid's 5 kW/phase export limit:
+// all three candidate sizes (17/24/30 panels) exceed the DC ceiling (~15 panels)
+// and collapse to one size → inspection_required. Use a relaxed export limit so
+// distinct tiers survive the ceiling cap (same pattern as sizing.test.ts:159-174).
+const RELAXED_CONFIG = {
+  ...DEFAULT_SOLAR_CONFIG,
+  export_limits: {
+    ...DEFAULT_SOLAR_CONFIG.export_limits,
+    by_network: { ...DEFAULT_SOLAR_CONFIG.export_limits.by_network, Ausgrid: 100 },
+  },
+}
+
 describe('runSolarEstimate — covered path', () => {
   it('produces a complete SolarEstimate from Google imagery', async () => {
     const est = await runSolarEstimate({
       input: ADDRESS,
-      config: DEFAULT_SOLAR_CONFIG,
+      config: RELAXED_CONFIG,
       opts: {
         geocode: geocodeOk,
         solarOpts: { apiKey: 'k', fetchImpl: fakeFetch(200, COVERED_RAW_BODY) },
@@ -49,7 +61,7 @@ describe('runSolarEstimate — covered path', () => {
     let persisted: unknown = null
     await runSolarEstimate({
       input: ADDRESS,
-      config: DEFAULT_SOLAR_CONFIG,
+      config: RELAXED_CONFIG,
       opts: {
         geocode: geocodeOk,
         solarOpts: { apiKey: 'k', fetchImpl: fakeFetch(200, COVERED_RAW_BODY) },
@@ -71,7 +83,7 @@ describe('runSolarEstimate — manual fallback path', () => {
     const est = await runSolarEstimate({
       input: ADDRESS,
       manual,
-      config: DEFAULT_SOLAR_CONFIG,
+      config: RELAXED_CONFIG,
       opts: {
         geocode: geocodeOk,
         solarOpts: { apiKey: 'k', fetchImpl: fakeFetch(404, { error: {} }) },
@@ -106,10 +118,12 @@ describe('runSolarEstimate — manual fallback path', () => {
 describe('runSolarEstimate — guardrails', () => {
   it('flags out-of-band tiers in guardrail_flags', async () => {
     // Force an absurd $/kW via a rate-card override embedded in config.
+    // Also relax the export limit so tiers are produced (COVERED_RAW_BODY with
+    // Ausgrid 5 kW collapses all tiers → inspection_required → no flags).
     const badConfig = {
-      ...DEFAULT_SOLAR_CONFIG,
+      ...RELAXED_CONFIG,
       default_rate_card: {
-        ...DEFAULT_SOLAR_CONFIG.default_rate_card,
+        ...RELAXED_CONFIG.default_rate_card,
         install_rate_per_kw: { standard_panels: 9000, premium_panels: 9000, unknown: 0 },
       },
     }
