@@ -104,7 +104,20 @@ const truth = loadJson(gtPath, 'Ground-truth')
 const aliases = aliasPath ? { ...DEFAULT_ALIASES, ...loadJson(aliasPath, 'Aliases') } : DEFAULT_ALIASES
 
 const ai = indexItems(extraction.items, aliases)
-const gt = indexItems(truth.items, aliases)
+
+// A ground-truth item only scores once it has a real "count". Unfilled rows
+// (count null/blank — e.g. a scaffold still awaiting the estimator's numbers)
+// are skipped, so a PARTIAL human fill scores honestly instead of counting
+// blanks as zero.
+const allTruth = Array.isArray(truth.items) ? truth.items : []
+const filledTruth = allTruth.filter((it) => it && it.count !== null && it.count !== undefined && it.count !== '')
+const unfilledTruth = allTruth.length - filledTruth.length
+if (filledTruth.length === 0) {
+  console.error(`\n✗ Ground-truth has no filled counts yet — ${allTruth.length} item(s) awaiting real numbers.`)
+  console.error(`Fill the "count" on each line in ${gtPath} with the estimator's actual take-off, then re-run.`)
+  process.exit(1)
+}
+const gt = indexItems(filledTruth, aliases)
 
 let sumTruth = 0
 let sumAbsErr = 0
@@ -147,6 +160,7 @@ if (extras.length) {
 console.log('\n──────── SCORECARD ────────')
 console.log(`COUNT ACCURACY : ${(countAccuracy * 100).toFixed(1)}%   (1 − Σ|err|/Σtruth = 1 − ${sumAbsErr}/${sumTruth})`)
 console.log(`COVERAGE       : ${(coverage * 100).toFixed(0)}% of truth line-items found (${matched}/${gt.size}); AI extras: ${extras.length}`)
+if (unfilledTruth > 0) console.log(`UNFILLED       : ${unfilledTruth} ground-truth line(s) not yet counted — scored on the ${filledTruth.length} filled.`)
 if (hasPrice) {
   const varPct = truthValue > 0 ? (aiValue / truthValue - 1) * 100 : 0
   console.log(`$ VARIANCE     : AI $${aiValue.toLocaleString()} vs truth $${truthValue.toLocaleString()}  (${varPct >= 0 ? '+' : ''}${varPct.toFixed(1)}%)`)

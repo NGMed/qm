@@ -1,0 +1,140 @@
+{
+  "plan": "citycave",
+  "_instructions": "Fill each item's \"count\" with the estimator's real take-off (and \"unit_price\" in AUD ex-GST if you want $ variance). Rows are pre-filled with the AI's detected item types — correct any wording, delete items that do not exist, add ones it missed. Unfilled (null) counts are skipped by the eval, so a partial fill still scores.",
+  "_source": "Scaffold generated from estimation-output/citycave.extraction.json — counts intentionally blank.",
+  "manual_hours": 40,
+  "items": [
+    {
+      "type": "Double GPO (standard)",
+      "symbol": "▲▲",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Single GPO",
+      "symbol": "▲",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Double GPO/USB",
+      "symbol": "▲U",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Double GPO for Cleaning",
+      "symbol": "▲C",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "1500H Recessed GPO",
+      "symbol": "▲",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Hardwired Power",
+      "symbol": "▲",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Waterproof Double GPO 10A",
+      "symbol": "WP ▲▲",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "15-amp dedicated circuit",
+      "symbol": "15 amp",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Double Data outlet",
+      "symbol": "◈ D",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Comer Point (Data)",
+      "symbol": "⊙ C",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L1 Track Light / Recessed Downlight",
+      "symbol": "L1",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L2 Recessed Downlight white IP44",
+      "symbol": "L2",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L3 Recessed Downlight tri-colour",
+      "symbol": "L3",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L5 Zip LED Up/Down Wall Light",
+      "symbol": "L5",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L6 Feature Pendant Light",
+      "symbol": "L6",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L7 Surface Mounted Linear Fitting",
+      "symbol": "L7",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "L9 Retail Wall Washer Downlight",
+      "symbol": "L9",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Emergency Light",
+      "symbol": "EM",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Emergency Exit Sign",
+      "symbol": "EXIT",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "EDB (Electrical Distribution Board)",
+      "symbol": "EDB",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Hot Water Unit (HWU)",
+      "symbol": "HWU",
+      "count": null,
+      "unit_price": null
+    },
+    {
+      "type": "Exhaust Fan (E2)",
+      "symbol": "E2",
+      "count": null,
+      "unit_price": null
+    }
+  ]
+}
