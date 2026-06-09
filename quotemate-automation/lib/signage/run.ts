@@ -12,28 +12,22 @@
 // ════════════════════════════════════════════════════════════════════
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { RuleVerdict, SignageRule, ShotSlot } from './types'
+import type { RuleVerdict, SignageRule, ShotSlot, TwoStageDetail } from './types'
 import { coerceShots, shotLabel } from './shots'
 import { brandForOrg, loadBrand } from './brand'
 import { assessPhoto } from './vision-assess'
 import { validateSignageAssessment } from './validate-verdicts'
-import {
-  observedFromEvidence,
-  runKbSupplement,
-  supplementOverall,
-  type KbConcern,
-  type KbSupplementResult,
-} from './kb-supplement'
+import { runKbStage, type KbStageResult } from './kb-assess'
+import { mergeRuleVerdicts } from './merge'
 import { loadKbConfigFromEnv } from '../admin-loader/mt-filestore-kb'
 
 const BUCKET = 'intake-photos'
 
-/** Gemini file-search SUPPLEMENT is opt-in: it only runs when this flag is
- *  set, which also gates writing the `signage_assessments.kb_supplement`
- *  column — so the running system is unaffected until migration 094 is
- *  applied and the flag is turned on. */
-function kbSupplementEnabled(): boolean {
-  return process.env.SIGNAGE_KB_SUPPLEMENT === '1'
+/** The Step-2 brand file-store cross-check runs by DEFAULT (it's a core part
+ *  of the two-stage assessment). Set `SIGNAGE_TWO_STAGE=0` to kill-switch it
+ *  back to a Step-1-only assessment (e.g. during a KB outage). */
+function twoStageEnabled(): boolean {
+  return process.env.SIGNAGE_TWO_STAGE !== '0'
 }
 
 /** Map a signage_rules DB row to the typed SignageRule. */
@@ -149,58 +143,73 @@ export async function runAssessment(
 
   const scoped = applicableRules(allRules, requestedShots)
 
-  // 4. Assess each submitted photo against the scoped rules, framed for
-  //    this brand (persona + the brand's label for the shot). Keep each
-  //    shot's evidence so the KB supplement can describe the observed scene.
-  const modelVerdicts: RuleVerdict[] = []
-  const evidenceByShot = new Map<ShotSlot, string[]>()
-  for (const s of subs ?? []) {
-    const slot = s.shot_slot as ShotSlot
-    const photo = await downloadBase64(supabase, s.storage_path as string)
-    if (!photo) continue // missing photo → its rules stay cannot_determine via backstop
-    const verdicts = await assessPhoto({
-      photo,
-      shotSlot: slot,
-      rules: scoped,
-      persona: brand.vision_persona,
-      shotLabel: shotLabel(slot, brand.shots),
-    })
-    modelVerdicts.push(...verdicts)
-    const ev = evidenceByShot.get(slot) ?? []
-    ev.push(...verdicts.map((v) => v.evidence).filter((e): e is string => !!e && e.trim() !== ''))
-    evidenceByShot.set(slot, ev)
-  }
+  // 4. Download every submitted photo (in parallel), keeping one representative
+  //    photo per shot so Step 2 can re-look at the actual image.
+  const downloaded = await Promise.all(
+    (subs ?? []).map(async (s) => {
+      const slot = s.shot_slot as ShotSlot
+      const photo = await downloadBase64(supabase, s.storage_path as string)
+      return photo ? { slot, photo } : null // missing photo → backstop routes its rules to review
+    }),
+  )
+  const submissions = downloaded.filter(
+    (d): d is { slot: ShotSlot; photo: { base64: string; mime: string } } => d !== null,
+  )
+  const photoByShot = new Map<ShotSlot, { base64: string; mime: string }>()
+  for (const { slot, photo } of submissions) if (!photoByShot.has(slot)) photoByShot.set(slot, photo)
+  const shotsForKb = Array.from(photoByShot, ([slot, photo]) => ({
+    slot,
+    label: shotLabel(slot, brand.shots),
+    photo,
+  }))
 
-  // 5. Grounding backstop over the full scoped rule set.
-  const { verdicts, overall, counts } = validateSignageAssessment(scoped, modelVerdicts)
-
-  // 5b. Brand-scoped Gemini file-search SUPPLEMENT (opt-in). Queries the
-  //     brand's store(s) for the guideline wording behind each shot and may
-  //     only RAISE caution — flipping an otherwise-clean pass to needs_review.
-  //     Supabase verdicts stay authoritative. Best-effort: never throws.
-  let finalOverall = overall
-  let kbSupplement: KbSupplementResult | null = null
-  let kbConcerns: KbConcern[] = []
-  if (kbSupplementEnabled()) {
+  // 5. Step 1 (vision vs DB rules) and Step 2 (brand file-store cross-check)
+  //    run CONCURRENTLY — Step 2 re-looks at the photo independently, so it
+  //    doesn't depend on Step 1's output. Each is internally chunked across
+  //    many small vision calls, all bounded by the shared vision limiter.
+  const step2Promise: Promise<KbStageResult | null> = (async () => {
+    if (!twoStageEnabled()) return null
     try {
       const kbConfig = loadKbConfigFromEnv()
-      const submittedSlots = Array.from(new Set((subs ?? []).map((s) => s.shot_slot as ShotSlot)))
-      const shotsForKb = submittedSlots.map((slot) => ({
-        slot,
-        label: shotLabel(slot, brand.shots),
-        observed: observedFromEvidence(evidenceByShot.get(slot) ?? []),
-      }))
-      kbSupplement = await runKbSupplement(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
-      const merged = supplementOverall(overall, kbSupplement)
-      finalOverall = merged.overall
-      kbConcerns = merged.concerns
+      return await runKbStage(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
     } catch {
-      // KB config missing / network down — leave the Supabase verdict as-is.
+      return null // KB not configured / outage → Step-1-only
+    }
+  })()
+  const [modelVerdicts, stage] = await Promise.all([
+    Promise.all(
+      submissions.map((s) =>
+        assessPhoto({
+          photo: s.photo,
+          shotSlot: s.slot,
+          rules: scoped,
+          persona: brand.vision_persona,
+          shotLabel: shotLabel(s.slot, brand.shots),
+        }),
+      ),
+    ).then((r) => r.flat()),
+    step2Promise,
+  ])
+
+  // 6. Step 1 grounding backstop, then the deterministic merge with Step 2.
+  //    The merge keeps the liability shield (any disagreement → HQ review; no
+  //    solo machine pass). With an empty Step 2 it is the identity over Step 1.
+  const step1 = validateSignageAssessment(scoped, modelVerdicts)
+  const merged = mergeRuleVerdicts(scoped, step1.verdicts, stage?.kbVerdicts ?? [], stage?.advisory ?? [])
+  let twoStage: TwoStageDetail | null = null
+  if (stage && stage.stores.length > 0) {
+    twoStage = {
+      step1: step1.verdicts,
+      kb: stage.kbVerdicts,
+      provenance: merged.provenance,
+      advisory: merged.advisory,
+      stores: stage.stores,
+      kb_degraded: stage.degraded,
     }
   }
 
-  // 6. Persist the assessment (upsert on request_id) + advance the request.
-  const status = finalOverall === 'pass' ? 'report_ready' : 'hq_review'
+  // 7. Persist the assessment (upsert on request_id) + advance the request.
+  const status = merged.overall === 'pass' ? 'report_ready' : 'hq_review'
   const payload: Record<string, unknown> = {
     request_id: requestId,
     studio_id: reqRow.studio_id,
@@ -208,16 +217,13 @@ export async function runAssessment(
     brand_slug: brand.slug,
     rule_set_version: ruleSetVersion,
     status,
-    overall: finalOverall,
-    verdicts,
-    counts,
+    overall: merged.overall,
+    verdicts: merged.verdicts,
+    counts: merged.counts,
     updated_at: new Date().toISOString(),
   }
-  // Only reference the kb_supplement column when the flag is on (i.e.
-  // migration 094 has been applied) so older DBs never see an unknown column.
-  if (kbSupplement) {
-    payload.kb_supplement = { stores: kbSupplement.stores, shots: kbSupplement.shots, concerns: kbConcerns }
-  }
+  // Only reference the two_stage column when Step 2 ran (migration 096).
+  if (twoStage) payload.two_stage = twoStage
   const { data: saved, error: saveErr } = await supabase
     .from('signage_assessments')
     .upsert(payload, { onConflict: 'request_id' })
@@ -234,5 +240,5 @@ export async function runAssessment(
     })
     .eq('id', requestId)
 
-  return { ok: true, assessmentId: saved.id as string, overall: finalOverall, counts }
+  return { ok: true, assessmentId: saved.id as string, overall: merged.overall, counts: merged.counts }
 }

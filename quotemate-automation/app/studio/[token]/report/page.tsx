@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 
-type ReportItem = { rule_key: string; rule_text: string; state: 'compliant' | 'fix' | 'review'; detail: string; source_citation: string | null }
+type ReportItem = { rule_key: string; rule_text: string; state: 'compliant' | 'fix' | 'review'; detail: string; source_citation: string | null; note: string | null; kb_citation: string | null }
 type ReportGroup = { group: string; items: ReportItem[] }
 type Report = {
   counts: { compliant: number; fix: number; review: number }
@@ -52,7 +52,9 @@ export default function StudioReportPage() {
       const done = await poll().catch(() => false)
       if (cancelled) return
       tries.current += 1
-      if (!done && tries.current < 30) timer = setTimeout(tick, 4000)
+      // Up to ~4 min: a multi-shot brand with a large rule set runs many
+      // chunked Step-1 + Step-2 vision calls (bounded by the vision limiter).
+      if (!done && tries.current < 60) timer = setTimeout(tick, 4000)
     }
     void tick()
     return () => {
@@ -110,6 +112,12 @@ export default function StudioReportPage() {
                           <StateIcon state={it.state} />
                           <div className="min-w-0">
                             <p className="text-sm text-text-pri">{it.detail}</p>
+                            {it.note && (
+                              <p className="mt-1.5 font-mono text-[0.62rem] uppercase tracking-[0.1em] text-accent">
+                                ◇ {it.note}
+                                {it.kb_citation && <span className="text-text-dim"> · {it.kb_citation}</span>}
+                              </p>
+                            )}
                             {it.source_citation && (
                               <p className="mt-1 font-mono text-[0.62rem] uppercase tracking-[0.1em] text-text-dim">{it.source_citation}</p>
                             )}

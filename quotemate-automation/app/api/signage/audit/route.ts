@@ -11,13 +11,16 @@ import { loadActiveRules, applicableRules } from '@/lib/signage/run'
 import { assessPhoto } from '@/lib/signage/vision-assess'
 import { validateSignageAssessment } from '@/lib/signage/validate-verdicts'
 import { composeReport } from '@/lib/signage/compose-report'
-import {
-  observedFromEvidence,
-  runKbSupplement,
-  supplementOverall,
-} from '@/lib/signage/kb-supplement'
+import { runKbStage, type KbStageResult } from '@/lib/signage/kb-assess'
+import { mergeRuleVerdicts } from '@/lib/signage/merge'
 import { loadKbConfigFromEnv } from '@/lib/admin-loader/mt-filestore-kb'
-import type { RuleVerdict, ShotSlot } from '@/lib/signage/types'
+import type { ShotSlot } from '@/lib/signage/types'
+
+/** Step-2 brand file-store cross-check runs by default; kill-switch with
+ *  SIGNAGE_TWO_STAGE=0 (mirrors lib/signage/run.ts). */
+function twoStageEnabled(): boolean {
+  return process.env.SIGNAGE_TWO_STAGE !== '0'
+}
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -60,54 +63,62 @@ export async function POST(req: Request) {
   const allRules = await loadActiveRules(supabase, brand.slug, 1)
   const scoped = applicableRules(allRules, submittedShots)
 
-  // Assess each photo in-memory (no storage needed for an instant audit).
-  const modelVerdicts: RuleVerdict[] = []
-  const evidenceByShot = new Map<ShotSlot, string[]>()
-  for (const p of pending) {
-    const base64 = Buffer.from(await p.file.arrayBuffer()).toString('base64')
-    const verdicts = await assessPhoto({
-      photo: { base64, mime: p.file.type },
-      shotSlot: p.slot,
-      rules: scoped,
-      persona: brand.vision_persona,
-      shotLabel: shotLabel(p.slot, brand.shots),
-    })
-    modelVerdicts.push(...verdicts)
-    const ev = evidenceByShot.get(p.slot) ?? []
-    ev.push(...verdicts.map((v) => v.evidence).filter((e): e is string => !!e && e.trim() !== ''))
-    evidenceByShot.set(p.slot, ev)
-  }
+  // Read all photos into memory (no storage for an instant audit); keep one
+  // representative photo per shot for the Step-2 re-look.
+  const photos = await Promise.all(
+    pending.map(async (p) => ({
+      slot: p.slot,
+      photo: { base64: Buffer.from(await p.file.arrayBuffer()).toString('base64'), mime: p.file.type },
+    })),
+  )
+  const photoByShot = new Map<ShotSlot, { base64: string; mime: string }>()
+  for (const { slot, photo } of photos) if (!photoByShot.has(slot)) photoByShot.set(slot, photo)
+  const shotsForKb = Array.from(photoByShot, ([slot, photo]) => ({
+    slot,
+    label: shotLabel(slot, brand.shots),
+    photo,
+  }))
 
-  const { verdicts, overall, counts } = validateSignageAssessment(scoped, modelVerdicts)
-
-  // Brand-scoped Gemini file-search supplement (opt-in via SIGNAGE_KB_SUPPLEMENT).
-  // Supplements the report; only ever raises caution. Best-effort, never throws.
-  let finalOverall = overall
-  let kb: unknown = undefined
-  if (process.env.SIGNAGE_KB_SUPPLEMENT === '1') {
+  // Step 1 (vision vs DB rules) ∥ Step 2 (brand file-store cross-check) run
+  // concurrently; each is internally chunked + bounded by the vision limiter.
+  const step2Promise: Promise<KbStageResult | null> = (async () => {
+    if (!twoStageEnabled()) return null
     try {
       const kbConfig = loadKbConfigFromEnv()
-      const shotsForKb = submittedShots.map((slot) => ({
-        slot,
-        label: shotLabel(slot, brand.shots),
-        observed: observedFromEvidence(evidenceByShot.get(slot) ?? []),
-      }))
-      const supplement = await runKbSupplement(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
-      const merged = supplementOverall(overall, supplement)
-      finalOverall = merged.overall
-      kb = { stores: supplement.stores, shots: supplement.shots, concerns: merged.concerns }
+      return await runKbStage(kbConfig, { brand, shots: shotsForKb, scopedRules: scoped })
     } catch {
-      // leave the structured result untouched
+      return null
     }
-  }
+  })()
+  const [modelVerdicts, stage] = await Promise.all([
+    Promise.all(
+      photos.map((p) =>
+        assessPhoto({
+          photo: p.photo,
+          shotSlot: p.slot,
+          rules: scoped,
+          persona: brand.vision_persona,
+          shotLabel: shotLabel(p.slot, brand.shots),
+        }),
+      ),
+    ).then((r) => r.flat()),
+    step2Promise,
+  ])
 
-  const report = composeReport(scoped, verdicts, brand.hq_name)
+  const step1 = validateSignageAssessment(scoped, modelVerdicts)
+  const merged = mergeRuleVerdicts(scoped, step1.verdicts, stage?.kbVerdicts ?? [], stage?.advisory ?? [])
+  const kb = stage && stage.stores.length > 0 ? { stores: stage.stores, kb_degraded: stage.degraded } : undefined
+
+  const report = composeReport(scoped, merged.verdicts, brand.hq_name, {
+    provenance: merged.provenance,
+    advisory: merged.advisory,
+  })
 
   return Response.json({
     ok: true,
     brand: { name: brand.name, hq_name: brand.hq_name },
-    overall: finalOverall,
-    counts,
+    overall: merged.overall,
+    counts: merged.counts,
     report,
     ...(kb ? { kb } : {}),
   })
