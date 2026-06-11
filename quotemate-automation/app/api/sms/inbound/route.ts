@@ -32,6 +32,7 @@ import {
   composeConfirmMessage,
   narrowQuoteToStructures,
 } from '@/lib/sms/roofing-compose'
+import { ensureRoofQuotePdf, roofQuotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { measureAndPriceRoofs } from '@/lib/roofing/measure'
 import { generateRoofAfterImage } from '@/lib/roofing/roof-after'
 import type { MultiRoofQuote } from '@/lib/roofing/types'
@@ -441,7 +442,28 @@ async function handleRoofingTurn(args: {
           confirmed_structure: indices && indices.length === 1 ? indices[0] : null,
         })
         .eq('public_token', pending.token)
-      await sendReply(buildRoofingReplyMessage({ quote: finalQuote, address: pending.address, quoteUrl: servedUrl, firstName }))
+      // Migration 105 — Gotenberg quote PDF for the priced roofing
+      // estimate. Best-effort (never blocks the SMS); regenerated here so
+      // a narrowed structure-subset quote renders the narrowed numbers.
+      // The PDF link goes in the body; the document itself rides along as
+      // a best-effort MMS (dispatch falls back to plain SMS on rejection).
+      let roofPdfUrl: string | null = null
+      let roofPdfMedia: string | undefined
+      if (finalQuote.routing.decision !== 'inspection_required') {
+        const roofPdfPath = await ensureRoofQuotePdf(pending.token, { quote: finalQuote })
+        if (roofPdfPath) {
+          roofPdfUrl = roofQuotePdfUrl(pending.token)
+          try {
+            roofPdfMedia = await signQuotePdfUrl(roofPdfPath, 60 * 60)
+          } catch {
+            roofPdfMedia = undefined
+          }
+        }
+      }
+      await sendReply(
+        buildRoofingReplyMessage({ quote: finalQuote, address: pending.address, quoteUrl: servedUrl, firstName, pdfUrl: roofPdfUrl }),
+        roofPdfMedia,
+      )
       // Quote delivered → WARM 'quoted' state (status stays 'open', token
       // preserved): a follow-up like "give me 2 and 3" / "the others" re-
       // serves the SAVED measurement instead of falling to the electrical

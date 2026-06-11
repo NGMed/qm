@@ -88,6 +88,10 @@ export function buildQuoteUpdatedSms(intake: Intake, quote: Quote, options?: Quo
   lines.push('')
   if (quote.quote_view_url) {
     lines.push(`View full quote: ${quote.quote_view_url}`)
+    if (quote.pdf_url) lines.push(`PDF copy: ${quote.pdf_url}`)
+    lines.push('')
+  } else if (quote.pdf_url) {
+    lines.push(`PDF copy: ${quote.pdf_url}`)
     lines.push('')
   }
 
@@ -724,6 +728,11 @@ type Quote = {
    *  templates render a "View full quote" line near the top so the customer
    *  can see scope, line items, risks, and CTAs in one place. */
   quote_view_url?: string | null
+  /** Migration 105 — stable download URL for the Gotenberg quote PDF
+   *  (`${APP_URL}/api/q/${share_token}/pdf`). Rendered as a "PDF copy"
+   *  line under the view link. Priced quotes only — inspection-routed
+   *  quotes never set this (no committable prices to put in a document). */
+  pdf_url?: string | null
   /** WP6 — ISO timestamp the quoted price is held until. When present the
    *  SMS adds a "Price held until <date>" urgency line. Absent on legacy
    *  quotes and on the parity fixture, so this field is purely additive. */
@@ -853,6 +862,10 @@ export function buildQuoteSms(intake: Intake, quote: Quote, options?: QuoteSmsOp
   lines.push('')
   if (quote.quote_view_url) {
     lines.push(`View full quote: ${quote.quote_view_url}`)
+    if (quote.pdf_url) lines.push(`PDF copy: ${quote.pdf_url}`)
+    lines.push('')
+  } else if (quote.pdf_url) {
+    lines.push(`PDF copy: ${quote.pdf_url}`)
     lines.push('')
   }
   // Count actual non-null tiers — don't say "3 OPTIONS" if BEST dropped

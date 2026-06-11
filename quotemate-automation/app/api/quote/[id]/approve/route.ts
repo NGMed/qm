@@ -24,6 +24,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import {
   buildQuoteSms,
   buildQuoteUpdatedSms,
@@ -165,6 +166,12 @@ export async function POST(
         ? parseFloat(quote.deposit_pct)
         : 30
 
+  // Migration 105 — Gotenberg quote PDF. Held quotes skipped PDF
+  // generation at draft time (the customer SMS was held), so this is
+  // usually the first render. Best-effort: a failure never blocks the
+  // approve-and-send.
+  const quotePdfPath = quote.needs_inspection ? null : await ensureQuotePdf(quote.id as string)
+
   const quoteForSms = {
     ...quote,
     pay_links: payLinks,
@@ -172,6 +179,7 @@ export async function POST(
     needs_inspection: !!quote.needs_inspection,
     inspection_reason: quote.inspection_reason as string | null,
     quote_view_url: `${appUrl}/q/${quote.share_token as string}`,
+    pdf_url: quotePdfPath ? quotePdfUrl(quote.share_token as string) : null,
   }
   const intakeForSms = {
     job_type: (intake?.job_type as string) ?? 'other',
@@ -181,10 +189,21 @@ export async function POST(
 
   const body = buildQuoteSms(intakeForSms, quoteForSms, { displayMode: asQuoteDisplayMode(displayMode) })
   const fromNumber = tenant.twilio_sms_number ?? process.env.TWILIO_SMS_NUMBER ?? undefined
+  // Best-effort MMS attach of the PDF — dispatch auto-falls back to a
+  // plain SMS when the carrier rejects media; the body has the link.
+  let pdfMediaUrl: string | undefined
+  if (quotePdfPath) {
+    try {
+      pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
+    } catch {
+      pdfMediaUrl = undefined
+    }
+  }
   const dispatch = await dispatchQuoteMessage({
     to: callerNumber,
     text: body,
     from: fromNumber,
+    ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
   })
 
   if (!dispatch.ok) {

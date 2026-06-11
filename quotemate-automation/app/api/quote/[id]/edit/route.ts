@@ -31,6 +31,7 @@ import {
   createCheckoutSessionForTier,
 } from '@/lib/stripe/checkout'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { buildQuoteUpdatedSms } from '@/lib/sms/templates'
 import { resolveQuoteDisplayMode } from '@/lib/quote/display'
 import { loadCandidatePrices } from '@/lib/estimate/run'
@@ -585,6 +586,13 @@ export async function POST(
         }
         const fromNumber = tenantSmsNumber ?? process.env.TWILIO_SMS_NUMBER ?? undefined
 
+        // Migration 105 — the tiers just changed, so REGENERATE the quote
+        // PDF before the re-send (a stale document contradicting the SMS
+        // would be worse than none). Best-effort; never blocks the SMS.
+        const quotePdfPath = quote.needs_inspection
+          ? null
+          : await ensureQuotePdf(quoteId, { regenerate: true })
+
         // Build the full updated-quote SMS — same shape as the original
         // buildQuoteSms output (three tier breakdown with prices + pay
         // links) but with an "updated" preamble so the customer sees the
@@ -618,6 +626,7 @@ export async function POST(
             ) as Partial<Record<'good' | 'better' | 'best' | 'inspection', string>>,
             deposit_pct: 30,
             quote_view_url: `${appUrl}/q/${quote.share_token as string}`,
+            pdf_url: quotePdfPath ? quotePdfUrl(quote.share_token as string) : null,
             scope_of_works: null,
             scope_short: null,
             assumptions: null,
@@ -634,10 +643,20 @@ export async function POST(
             }),
           },
         )
+        // Best-effort MMS attach of the refreshed PDF.
+        let pdfMediaUrl: string | undefined
+        if (quotePdfPath) {
+          try {
+            pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
+          } catch {
+            pdfMediaUrl = undefined
+          }
+        }
         const result = await dispatchQuoteMessage({
           to: callerNumber,
           text,
           from: fromNumber,
+          ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
         })
         if (result.ok) {
           console.log('[quote/edit] customer notify sent', {

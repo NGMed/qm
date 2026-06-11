@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { after } from 'next/server'
 import { runEstimation } from '@/lib/estimate/run'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { sendWhatsApp } from '@/lib/sms/twilio'
 import {
   buildQuoteSms,
@@ -596,6 +597,16 @@ export async function POST(req: Request) {
       } else {
       try {
         dispatch.step('building quote message body')
+        // Migration 105 — Gotenberg quote PDF. Best-effort: a render or
+        // storage failure never blocks the SMS (the /api/q/[token]/pdf
+        // route lazy-generates later anyway). Inspection-routed quotes
+        // skip it — no committable prices to put in a document.
+        let quotePdfPath: string | null = null
+        if (!(draft.needs_inspection ?? false)) {
+          quotePdfPath = await ensureQuotePdf(quote!.id)
+          if (quotePdfPath) dispatch.ok('quote PDF generated', { path: quotePdfPath })
+          else dispatch.ok('quote PDF skipped/unavailable (non-fatal)')
+        }
         const quoteForSms = {
           ...quote!,
           scope_short: draft.scope_short ?? null,
@@ -604,6 +615,7 @@ export async function POST(req: Request) {
           needs_inspection: draft.needs_inspection ?? false,
           inspection_reason: draft.inspection_reason ?? null,
           quote_view_url: `${appUrl}/q/${shareToken}`,
+          pdf_url: quotePdfPath ? quotePdfUrl(shareToken) : null,
         }
         // Phase A — thread the tenant's display preference through to the
         // SMS so summary-mode tradies don't get "- N items + Yhr labour"
@@ -633,7 +645,23 @@ export async function POST(req: Request) {
           to: callerNumber,
           from: fromNumber ?? '(default TWILIO_PHONE_NUMBER)',
         })
-        const result = await dispatchQuoteMessage({ to: callerNumber, text: body, from: fromNumber })
+        // Best-effort MMS attachment of the quote PDF — dispatch retries
+        // as a plain SMS automatically when the carrier rejects media,
+        // and the body always carries the download link.
+        let pdfMediaUrl: string | undefined
+        if (quotePdfPath) {
+          try {
+            pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
+          } catch {
+            pdfMediaUrl = undefined
+          }
+        }
+        const result = await dispatchQuoteMessage({
+          to: callerNumber,
+          text: body,
+          from: fromNumber,
+          ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
+        })
 
         if (result.ok) {
           if (result.channel === 'sms') {

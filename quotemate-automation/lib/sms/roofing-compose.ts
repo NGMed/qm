@@ -23,6 +23,10 @@ export type RoofingReplyContext = {
   quoteUrl: string
   /** Customer first name, when known. */
   firstName?: string | null
+  /** Migration 105 — stable download URL for the Gotenberg quote PDF.
+   *  Rendered on the priced estimate message only (never the inspection
+   *  or confirm messages — no committed numbers to put in a document). */
+  pdfUrl?: string | null
 }
 
 /** One best-effort MMS roof photo: a public image URL + a short caption. */
@@ -98,6 +102,7 @@ export function composeEstimateMessage(ctx: RoofingReplyContext): string {
     ...lines,
     `Full breakdown + your roof image: ${ctx.quoteUrl}`,
   ]
+  if (ctx.pdfUrl) out.push(`PDF copy: ${ctx.pdfUrl}`)
   if (flagged.length > 0) {
     out.push(
       `Note: ${flagged.join(', ')} need${flagged.length === 1 ? 's' : ''} a quick look on site, so we'll sort ${flagged.length === 1 ? 'that' : 'those'} separately.`,
