@@ -102,6 +102,12 @@ export default async function SolarQuotePage({
   const chipBorder = chip.tone === 'warning' ? 'border-l-warning' : 'border-l-accent'
   const chipText = chip.tone === 'warning' ? 'text-warning' : 'text-accent'
 
+  // AI "panels installed" concept: confirmed Google-coverage estimates
+  // only. The proxy lazily renders + caches it post-confirm; manual roofs
+  // have no trustworthy aerial to edit, so the block is simply omitted.
+  const showAiConcept =
+    view.confirmed && estimate.coverage_source === 'google' && view.headlineTier != null
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-ink-deep text-text-pri">
       {/* Topographic background — signature Maintain motif. */}
@@ -144,31 +150,54 @@ export default async function SolarQuotePage({
           <p className="mt-2 text-sm text-text-dim">{chip.caption}</p>
         </div>
 
-        {/* Hero: real satellite roof photo + stats overlay */}
-        <div className={`mt-8 overflow-hidden border border-ink-line bg-ink-card ${reveal(240)}`}>
-          <div className="relative">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={`/api/solar/q/${token}/static-map`}
-              alt={`Satellite view of the roof at ${row.address ?? 'the property'}`}
-              className="h-112 w-full object-cover sm:h-128"
-            />
-            <div className="absolute inset-x-0 bottom-0 grid grid-cols-2 gap-px bg-ink-line/60 sm:grid-cols-4">
-              {overlay.stats.map((s) => (
-                <div key={s.label} className="bg-ink-deep/85 px-4 py-3">
-                  <div className="font-mono text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-text-dim">
-                    {s.label}
+        {/* Hero: real satellite roof photo + stats overlay, with the
+            clearly-labelled AI concept render beside it once confirmed. */}
+        <div className={`mt-8 grid gap-5 ${showAiConcept ? 'lg:grid-cols-2' : ''} ${reveal(240)}`}>
+          <div className="overflow-hidden border border-ink-line bg-ink-card">
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`/api/solar/q/${token}/static-map`}
+                alt={`Satellite view of the roof at ${row.address ?? 'the property'}`}
+                className="h-112 w-full object-cover sm:h-128"
+              />
+              <div className="absolute inset-x-0 bottom-0 grid grid-cols-2 gap-px bg-ink-line/60 sm:grid-cols-4">
+                {overlay.stats.map((s) => (
+                  <div key={s.label} className="bg-ink-deep/85 px-4 py-3">
+                    <div className="font-mono text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-text-dim">
+                      {s.label}
+                    </div>
+                    <div className="mt-1 font-mono text-base font-bold tabular-nums text-accent">
+                      {s.value}
+                    </div>
                   </div>
-                  <div className="mt-1 font-mono text-base font-bold tabular-nums text-accent">
-                    {s.value}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            </div>
+            <div className="px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-text-dim">
+              {overlay.caption}
             </div>
           </div>
-          <div className="px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-text-dim">
-            {overlay.caption}
-          </div>
+
+          {showAiConcept && (
+            <div className="overflow-hidden border border-ink-line bg-ink-card">
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/solar/q/${token}/panels-after`}
+                  alt={`AI-generated concept of ${view.headlineTier?.panels_count ?? ''} solar panels installed on the roof at ${row.address ?? 'the property'}`}
+                  className="h-112 w-full object-cover sm:h-128"
+                />
+                <span className="absolute left-3 top-3 border border-ink-line bg-ink-deep/85 px-3 py-1.5 font-mono text-[0.64rem] font-semibold uppercase tracking-[0.14em] text-accent">
+                  AI-generated concept
+                </span>
+              </div>
+              <div className="px-5 py-3 font-mono text-xs uppercase tracking-[0.16em] text-text-dim">
+                How {view.headlineTier?.panels_count} panels could sit on this roof —
+                illustrative only, not a design document.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* The numbers, explained — expandable "why?" per hero stat. */}
