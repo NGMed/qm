@@ -61,9 +61,9 @@ export default async function SolarEntryPage({
         <path d="M0,110 Q300,230 600,150 T1240,190 T1920,120" stroke="var(--teal-glow)" strokeWidth="1" fill="none" opacity="0.2" />
       </svg>
 
-      <div className="relative z-10 mx-auto grid max-w-6xl gap-12 px-6 py-16 sm:px-10 md:py-24 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
-        {/* ── Left: headline + trust points ────────────────────── */}
-        <div>
+      <div className="relative z-10 mx-auto grid max-w-6xl gap-12 px-6 py-16 sm:px-10 md:py-24 lg:grid-cols-[1.1fr_1fr] lg:grid-rows-[auto_1fr] lg:gap-x-16 lg:gap-y-10">
+        {/* ── Headline (col 1, row 1 on lg) ─────────────────────── */}
+        <div className="motion-safe:animate-[fade-up_260ms_ease-out_both]">
           <span className="font-mono text-[0.72rem] uppercase tracking-[0.18em] text-text-dim">
             {business}
           </span>
@@ -75,26 +75,10 @@ export default async function SolarEntryPage({
             system size, annual production, and your net price after the STC
             rebate. Indicative until {business} confirms it.
           </p>
-
-          <div className="mt-10 hidden flex-col gap-px bg-ink-line lg:flex">
-            {TRUST_POINTS.map(([num, title, copy]) => (
-              <article key={num} className="flex items-start gap-5 bg-ink-card px-6 py-5">
-                <span className="font-mono text-3xl font-bold leading-none text-accent">
-                  {num}
-                </span>
-                <div>
-                  <h2 className="text-sm font-extrabold uppercase tracking-tight text-text-pri">
-                    {title}
-                  </h2>
-                  <p className="mt-1 text-sm leading-relaxed text-text-sec">{copy}</p>
-                </div>
-              </article>
-            ))}
-          </div>
         </div>
 
-        {/* ── Right: the form panel ─────────────────────────────── */}
-        <div>
+        {/* ── Form panel (col 2, spans both rows on lg; second on mobile) ── */}
+        <div className="motion-safe:animate-[fade-up_260ms_ease-out_both] [animation-delay:90ms] lg:row-span-2">
           <div className="border border-ink-line bg-ink-card p-6 sm:p-8">
             <div className="mb-6 flex items-center justify-between gap-4">
               <span className="font-mono text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-text-dim">
@@ -114,6 +98,23 @@ export default async function SolarEntryPage({
             Council–approved components. STC rebate subject to eligibility &amp;
             install date. Estimate, not a contract.
           </p>
+        </div>
+
+        {/* ── Trust points (col 1, row 2 on lg; after the form on mobile) ── */}
+        <div className="flex flex-col gap-px self-start bg-ink-line motion-safe:animate-[fade-up_260ms_ease-out_both] [animation-delay:180ms] lg:col-start-1">
+          {TRUST_POINTS.map(([num, title, copy]) => (
+            <article key={num} className="flex items-start gap-5 bg-ink-card px-6 py-5">
+              <span className="font-mono text-3xl font-bold leading-none text-accent">
+                {num}
+              </span>
+              <div>
+                <h2 className="text-sm font-extrabold uppercase tracking-tight text-text-pri">
+                  {title}
+                </h2>
+                <p className="mt-1 text-sm leading-relaxed text-text-sec">{copy}</p>
+              </div>
+            </article>
+          ))}
         </div>
       </div>
 

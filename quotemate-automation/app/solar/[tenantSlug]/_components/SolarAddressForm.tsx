@@ -29,6 +29,15 @@ const PANEL_GRADES = [
 const SUGGEST_DEBOUNCE_MS = 250
 const SUGGEST_MIN_CHARS = 4
 
+/** Rotating submit-progress copy — the engine really does these steps. */
+const BUSY_STEPS = [
+  'Reading your roof…',
+  'Measuring panel area…',
+  'Checking sun exposure…',
+  'Pricing your system…',
+] as const
+const BUSY_STEP_MS = 2600
+
 const inputClass =
   'w-full border border-ink-line bg-ink-deep px-4 py-3 text-[0.95rem] text-text-pri ' +
   'placeholder:text-text-dim outline-none transition-colors ' +
@@ -48,7 +57,20 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
   const [panelType, setPanelType] =
     useState<'standard_panels' | 'premium_panels' | 'unknown'>('standard_panels')
   const [busy, setBusy] = useState(false)
+  const [busyStep, setBusyStep] = useState(0)
   const [error, setError] = useState<string | null>(null)
+
+  // While submitting, walk the progress copy through the engine's real
+  // stages so the wait reads as work, not a stall. The step counter is
+  // reset in onSubmit (not here) — all setState happens inside the timer
+  // callback (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    if (!busy) return
+    const timer = setInterval(() => {
+      setBusyStep((i) => Math.min(i + 1, BUSY_STEPS.length - 1))
+    }, BUSY_STEP_MS)
+    return () => clearInterval(timer)
+  }, [busy])
 
   // ── Typeahead state ─────────────────────────────────────────────
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
@@ -156,6 +178,7 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
+    setBusyStep(0)
     setError(null)
     try {
       const payload = buildSolarFormPayload({
@@ -276,6 +299,9 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
             onChange={(e) => setPostcode(e.target.value)}
             required
             inputMode="numeric"
+            pattern="[0-9]{4}"
+            maxLength={4}
+            title="Australian postcodes are 4 digits"
             placeholder="0000"
             className={inputClass}
           />
@@ -330,7 +356,10 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
       </button>
 
       {manualOpen && (
-        <div className="flex flex-col gap-4 border-l-2 border-l-accent bg-ink/40 p-4" data-testid="solar-manual-block">
+        <div
+          className="flex flex-col gap-4 border-l-2 border-l-accent bg-ink/40 p-4 motion-safe:animate-[fade-up_200ms_ease-out_both]"
+          data-testid="solar-manual-block"
+        >
           <div className="flex flex-col gap-1.5">
             <label htmlFor="solar-orientation-input" className={labelClass}>
               Main roof direction
@@ -400,17 +429,20 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
         type="submit"
         data-testid="solar-submit"
         disabled={busy}
-        className="mt-1 inline-flex items-center justify-center gap-2.5 bg-accent px-5 py-4 font-mono text-sm font-bold uppercase tracking-[0.14em] text-ink-deep transition-colors hover:bg-accent-press disabled:opacity-60"
+        className="group mt-1 inline-flex items-center justify-center gap-2.5 bg-accent px-5 py-4 font-mono text-sm font-bold uppercase tracking-[0.14em] text-ink-deep transition-colors hover:bg-accent-press active:bg-accent-press disabled:opacity-60"
       >
         {busy ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-            Reading your roof…
+            <span aria-live="polite">{BUSY_STEPS[busyStep]}</span>
           </>
         ) : (
           <>
             Get my solar estimate
-            <ArrowRight className="h-4 w-4" aria-hidden />
+            <ArrowRight
+              className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1"
+              aria-hidden
+            />
           </>
         )}
       </button>
