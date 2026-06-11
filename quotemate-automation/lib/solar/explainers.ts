@@ -336,7 +336,7 @@ function buildYearlyOutputExplainer(estimate: SolarEstimate): SolarStatExplainer
   const modelStep =
     roof.source === 'google'
       ? `Google’s sun-and-shade model for your actual roof estimates ≈ ${kwh(dcApprox)} kWh of raw DC energy a year for this layout.`
-      : `A conservative yield benchmark for declared roofs puts this layout at ≈ ${kwh(dcApprox)} kWh of raw DC energy a year.`
+      : `A conservative yield benchmark for ${estimate.context.state}, adjusted for the ${orientationLabel(roof.primary_orientation).toLowerCase()} roof direction you declared, puts this layout at ≈ ${kwh(dcApprox)} kWh of raw DC energy a year.`
 
   const steps: string[] = [
     modelStep,

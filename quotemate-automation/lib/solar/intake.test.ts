@@ -98,6 +98,30 @@ describe('runSolarEstimate — manual fallback path', () => {
     expect(est.sizing.tiers.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('manual tiers each carry their own honestly-sized energy (linear ladder, not roof-max)', async () => {
+    // Regression: a single max-roof panel config used to hand every manual
+    // tier the FULL roof's DC energy, blowing the CEC ±35% cross-check on
+    // all but the top tier. With the linear ladder, each tier's implied
+    // AC/kW must be uniform and within the CEC band, with no guardrails.
+    const est = await runSolarEstimate({
+      input: ADDRESS,
+      // South-facing is the worst-case orientation factor (0.80).
+      manual: { orientation: 'south', roof_size: 'medium', storeys: 1 },
+      config: DEFAULT_SOLAR_CONFIG, // real Ausgrid 5 kW export limit
+      opts: {
+        geocode: geocodeOk,
+        solarOpts: { apiKey: 'k', fetchImpl: fakeFetch(404, { error: {} }) },
+        installYear: 2026,
+        network: 'Ausgrid',
+      },
+    })
+    expect(est.sizing.tiers.length).toBeGreaterThanOrEqual(2)
+    for (const p of est.production) {
+      expect(p.within_cec_benchmark).toBe(true)
+    }
+    expect(est.guardrail_flags).toEqual([])
+  })
+
   it('branches to manual when uncovered and no manual input was supplied (empty estimate, inspection routed)', async () => {
     const est = await runSolarEstimate({
       input: ADDRESS,

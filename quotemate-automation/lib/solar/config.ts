@@ -93,6 +93,35 @@ export const DEFAULT_SOLAR_CONFIG: SolarConfig = {
   area_per_panel_m2: 1.95,                    // was AREA_PER_PANEL_M2
   degradation_pct_per_year: 0.005,            // was DEGRADATION_PCT_PER_YEAR
   complex_roof_min_segments: 6,               // was the literal 6 in pricing.ts applicableLoadings
+  // Manual-path volumetric grounding. State DC yields are CEC AC benchmark
+  // × 0.95 (conservatism margin) ÷ derate 0.81, so a manual estimate's
+  // implied AC/kW sits at 0.95×CEC before the orientation factor and at
+  // worst 0.76×CEC (south, 0.80) — always inside the ±35% CEC guardrail.
+  manual_benchmark_by_state: {
+    NSW: 1621,
+    VIC: 1499,
+    QLD: 1670,
+    SA: 1747,
+    WA: 1784,
+    TAS: 1325,
+    ACT: 1621,
+    NT: 1901,
+  },
+  // Southern-hemisphere declared-orientation yield factors. Flat roofs are
+  // tilt-framed by the installer, so they carry no penalty; unknown is a
+  // conservative middle until the installer confirms on site.
+  manual_orientation_yield_factors: {
+    north: 1.0,
+    north_east: 0.97,
+    north_west: 0.97,
+    east: 0.92,
+    west: 0.92,
+    south_east: 0.85,
+    south_west: 0.85,
+    south: 0.80,
+    flat: 1.0,
+    unknown: 0.90,
+  },
 }
 
 export function validateSolarConfig(

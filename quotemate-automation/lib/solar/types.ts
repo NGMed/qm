@@ -498,6 +498,23 @@ export type SolarConfig = {
    */
   area_per_panel_m2?: number
   /**
+   * State-specific DC specific yield for the manual-fallback path,
+   * kWh per kW DC per year. Overrides the flat manual_benchmark_kwh_per_kw
+   * when the customer's state is present, so a declared Hobart roof is no
+   * longer modelled like a Darwin one. Values are deliberately set a few
+   * percent under the CEC per-state AC benchmarks (divided by the derate)
+   * so every manual tier passes the ±35% CEC cross-check by construction.
+   */
+  manual_benchmark_by_state?: Partial<Record<AuState, number>>
+  /**
+   * Declared-orientation yield factors for the manual-fallback path
+   * (0 < factor ≤ 1.2; 1.0 = no adjustment). Southern-hemisphere reality:
+   * north collects the most sun, south the least. The Google path never
+   * uses these — its per-config DC estimates already embed real plane
+   * orientation from the flux model. Absent key or invalid value → 1.0.
+   */
+  manual_orientation_yield_factors?: Partial<Record<SolarOrientation, number>>
+  /**
    * Annual linear degradation fraction applied in production.ts (e.g. 0.005
    * = 0.5%/yr). Passed through as metadata to the economics layer for
    * year-by-year calculations. Versioned here so a manufacturer-spec update

@@ -174,13 +174,17 @@ export async function runSolarEstimate(args: {
       }
     }
   } else if (args.manual) {
-    roof = buildManualRoofFacts(args.manual, config)
+    roof = buildManualRoofFacts(args.manual, config, context.state)
     coverage_source = 'manual'
   } else {
     // Uncovered and no manual input — return an inspection-routed empty
     // estimate from a synthetic empty manual roof. The customer page will
     // collect the manual answers and re-run.
-    roof = buildManualRoofFacts({ orientation: 'unknown', roof_size: 'small', storeys: 1 }, config)
+    roof = buildManualRoofFacts(
+      { orientation: 'unknown', roof_size: 'small', storeys: 1 },
+      config,
+      context.state,
+    )
     roof = { ...roof, max_panels_count: 0, panel_configs: [] }
     coverage_source = 'manual'
   }

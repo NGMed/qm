@@ -9,13 +9,24 @@
 //
 // The area→panels heuristic is deliberately conservative: ~1.95 m² of
 // roof per panel (a 1.879 × 1.045 m panel + setbacks/obstruction discount
-// baked into the size buckets). DC yield is a flat CEC-ish 1400 kWh/kW/yr
-// benchmark so sizing/production have a real config to pick from.
+// baked into the size buckets).
+//
+// VOLUMETRIC GROUNDING: the DC yield is no longer one flat AU-wide
+// number. The benchmark resolves state-first (config.manual_benchmark_by_
+// state — Hobart ≠ Darwin), then flat manual_benchmark_kwh_per_kw, then
+// the module default; the declared orientation applies a yield factor
+// (config.manual_orientation_yield_factors — north 1.0 … south 0.80).
+// And the synthetic panel_configs are a LINEAR LADDER (1..max panels),
+// not a single max-roof config: sizing.ts picks the nearest config per
+// tier, so a 55%-of-roof tier must find a 55%-sized config — a single
+// max config would hand every tier the full roof's energy and blow the
+// CEC ±35% cross-check on anything but the top tier.
 //
 // PURE — no I/O, fully unit-testable.
 // ════════════════════════════════════════════════════════════════════
 
 import type {
+  AuState,
   SolarManualRoofInput,
   SolarRoofFacts,
   SolarPanelConfig,
@@ -24,7 +35,11 @@ import type {
 
 type ManualFallbackConfig = Pick<
   SolarConfig,
-  'default_panel_capacity_watts' | 'manual_benchmark_kwh_per_kw' | 'area_per_panel_m2'
+  | 'default_panel_capacity_watts'
+  | 'manual_benchmark_kwh_per_kw'
+  | 'area_per_panel_m2'
+  | 'manual_benchmark_by_state'
+  | 'manual_orientation_yield_factors'
 >
 
 /** Declared size bucket → usable (panel-placeable) roof area, m².
@@ -41,10 +56,15 @@ const AREA_PER_PANEL_M2 = 1.95
 const MANUAL_PANEL_CAPACITY_WATTS = 400
 /** Conservative DC specific yield, kWh per kW DC per year. */
 const MANUAL_BENCHMARK_KWH_PER_KW = 1400
+/** Orientation factor used when the config carries none (no adjustment). */
+const DEFAULT_ORIENTATION_FACTOR = 1.0
+/** Sanity ceiling on a configured orientation factor. */
+const MAX_ORIENTATION_FACTOR = 1.2
 
 export function buildManualRoofFacts(
   input: SolarManualRoofInput,
   config?: ManualFallbackConfig,
+  state?: AuState,
 ): SolarRoofFacts {
   const usable_area_m2 = MANUAL_AREA_M2[input.roof_size]
 
@@ -56,13 +76,29 @@ export function buildManualRoofFacts(
       ? config.default_panel_capacity_watts
       : MANUAL_PANEL_CAPACITY_WATTS
 
-  // Guard: a 0 or non-finite benchmark would produce 0 kWh/yr silently —
-  // fall back to the module default so the estimate is always valid.
+  // Benchmark resolution, most-specific first: per-state → flat config →
+  // module default. Each step guards 0/NaN the same way so a corrupt entry
+  // degrades to the next tier instead of zeroing the estimate.
+  const stateBenchmark =
+    state != null ? config?.manual_benchmark_by_state?.[state] : undefined
+  const flatBenchmark = config?.manual_benchmark_kwh_per_kw
   const benchmark_kwh_per_kw =
-    config?.manual_benchmark_kwh_per_kw != null &&
-    config.manual_benchmark_kwh_per_kw > 0
-      ? config.manual_benchmark_kwh_per_kw
-      : MANUAL_BENCHMARK_KWH_PER_KW
+    stateBenchmark != null && stateBenchmark > 0
+      ? stateBenchmark
+      : flatBenchmark != null && flatBenchmark > 0
+        ? flatBenchmark
+        : MANUAL_BENCHMARK_KWH_PER_KW
+
+  // Declared-orientation yield factor (north 1.0 … south ~0.80). Invalid or
+  // missing entries mean "no adjustment", never a zeroed estimate.
+  const configuredFactor = config?.manual_orientation_yield_factors?.[input.orientation]
+  const orientation_factor =
+    configuredFactor != null &&
+    Number.isFinite(configuredFactor) &&
+    configuredFactor > 0 &&
+    configuredFactor <= MAX_ORIENTATION_FACTOR
+      ? configuredFactor
+      : DEFAULT_ORIENTATION_FACTOR
 
   // Read area_per_panel_m2 from config so a panel-size model-year change is
   // config-driven; fall back to the module constant when absent or invalid.
@@ -72,17 +108,19 @@ export function buildManualRoofFacts(
       : AREA_PER_PANEL_M2
 
   const max_panels_count = Math.max(0, Math.floor(usable_area_m2 / area_per_panel_m2))
-  const system_kw_dc = (max_panels_count * panel_capacity_watts) / 1000
 
-  const panel_configs: SolarPanelConfig[] =
-    max_panels_count > 0
-      ? [
-          {
-            panels_count: max_panels_count,
-            yearly_energy_dc_kwh: round1(system_kw_dc * benchmark_kwh_per_kw),
-          },
-        ]
-      : []
+  // Linear config ladder 1..max: yearly DC energy is proportional to the
+  // panel count, so whichever count sizing.ts clamps a tier to (export
+  // limit, roof fraction), nearestConfig finds an honestly-sized config.
+  const kwhPerPanel =
+    (panel_capacity_watts / 1000) * benchmark_kwh_per_kw * orientation_factor
+  const panel_configs: SolarPanelConfig[] = Array.from(
+    { length: max_panels_count },
+    (_, i) => ({
+      panels_count: i + 1,
+      yearly_energy_dc_kwh: round1((i + 1) * kwhPerPanel),
+    }),
+  )
 
   return {
     source: 'manual',
@@ -110,4 +148,6 @@ export const __test_only__ = {
   AREA_PER_PANEL_M2,
   MANUAL_PANEL_CAPACITY_WATTS,
   MANUAL_BENCHMARK_KWH_PER_KW,
+  DEFAULT_ORIENTATION_FACTOR,
+  MAX_ORIENTATION_FACTOR,
 }
