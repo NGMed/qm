@@ -10,3 +10,27 @@ INCONSISTENT: PP7 gas connection $99 this round vs auto-quote round1 (non-determ
 PICKER SUBSTITUTION: kitchen mixer->garden tap, dimmable->Black Fireflies, premium-DC->AC (standard/LLM path often corrects; recipe catalogue too thin per category).
 MIS-DEFAULT UPSELL persists: repair requests (washer, cistern) default selected_tier to full-replacement tier.
 ROOT FIX for the FAILS = catalogue the common sundries (tempering valve, pan connector, isolation valve) OR don't fail the WHOLE quote when only a minor sundry line is ungroundable (drop/soften it). Diagnostic needs its $165 flat-fee/0hr to satisfy min-labour.
+
+================================================================================
+RALPH RUN 2026-06-11 — Solar Estimate Premium (branch ralph/estimator-premium)
+All 7 stories DONE. Gates: vitest 2609/2609 pass, next build pass, tsc at the
+pre-existing 9-error baseline (admin-loader/agents/spec-guard/cron-kb-sync test
+files, untouched), eslint clean on every touched file (877 project-wide errors
+all pre-exist in dashboard/estimate/cesium).
+Commits: 98ab3c5 S1 explainers, 932f4f8 S2 assumptions-view, 47ae142 S3 page,
+7887aad S4 form, 8016870 S5 manual volumetric, 83cb53b S6 AI panels image.
+LEARNINGS:
+- manual-fallback synthesised ONE max-roof panel_config; sizing.nearestConfig
+  gave every tier the full roof's DC energy -> CEC +/-35% blowups on real
+  export limits. Fixed with a linear 1..max config ladder (S5).
+- A literal file named 'nul' in quotemate-automation/ (Windows reserved name)
+  makes Turbopack panic while Tailwind scans sources: 'Failed to write app
+  endpoint ... reading file ...(nul)'. Remove it via the Win32 device-path
+  prefix from cmd, AND clear .next (the panic poisons the persisted cache).
+- .env.development.local points dev at Supabase avzrgqjzivtukydfzpof (NOT the
+  prod bobvihqwhtcbxneelfns from .env.local). Migrations must be applied to
+  BOTH; dev project had no 'intake-photos' bucket (created 2026-06-11).
+- Migration numbering: 102 was already taken by plan_extraction_pricing
+  (estimator work); solar panels preview became 103. Applied to prod + dev.
+- Gemini panels-after render verified live end-to-end: ~25-28s, 1200px jpg,
+  CAS retry from 'failed' worked after the bucket fix.
