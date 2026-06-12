@@ -165,25 +165,88 @@ export type SolarPanelsAfterBrief = {
    * (pre-premium estimates) the brief falls back to orientation-only.
    */
   layout?: SolarPanelsLayoutFact[]
-  /**
-   * True when a panel-marked reference image accompanies the request
-   * (the same aerial with every panel rectangle drawn at its exact
-   * position). The brief then anchors placement on the markers — the
-   * strongest grounding a generative model accepts.
-   */
-  hasMarkedReference?: boolean
 }
 
-/** Label attached to the panel-marked reference image part. Exported so
- *  the caller and tests use the identical wording. */
-export const MARKED_REFERENCE_LABEL =
-  'REFERENCE — PANEL PLACEMENT PLAN: this is the SAME aerial with every ' +
-  'panel position marked as an orange rectangle. Each orange rectangle ' +
-  'marks the exact footprint of ONE panel — its position, size, ' +
-  'orientation and tilt. Replace every orange rectangle with one ' +
-  'photorealistic solar panel in exactly that spot. Do not add panels ' +
-  'anywhere there is no rectangle. The final image must contain NO ' +
-  'orange markings of any kind.'
+/** Label for the CLEAN aerial attached as reference in box-replacement
+ *  mode (where the marked plan is the SOURCE being edited). */
+export const CLEAN_REFERENCE_LABEL =
+  'REFERENCE — ORIGINAL PHOTO: the same aerial without any markings. ' +
+  'Everywhere OUTSIDE the panel rectangles, the output must match this ' +
+  'original exactly — same roof colour and texture, same ground, trees, ' +
+  'driveway, vehicles and lighting.'
+
+/**
+ * PURE — the box-replacement brief: the SOURCE image Gemini edits IS the
+ * panel-marked plan (the Proposed Panel Layout frame), and the task is
+ * pure local replacement — turn every orange rectangle into one
+ * photorealistic panel of exactly that footprint, erase the markings,
+ * change nothing else. Direct replacement on visible pixels is the most
+ * compliant grounding an image editor accepts. `visionNotes` (the
+ * Claude vision pre-step's description of the plan) ride along when
+ * available; the deterministic layout facts are the fallback wording.
+ */
+export function buildSolarBoxReplacementPrompt(args: {
+  panelsCount: number
+  systemKwDc: number
+  layout?: SolarPanelsLayoutFact[]
+  visionNotes?: string | null
+}): { system: string; user: string } {
+  const count = Math.max(1, Math.round(args.panelsCount))
+
+  const system =
+    'You are a photo-editing specialist. The image you receive is a real ' +
+    'top-down satellite aerial of a property with an approved solar panel ' +
+    'placement plan drawn on the roof as orange rectangles. Your ONLY task ' +
+    'is local replacement: turn each orange rectangle into one ' +
+    'photorealistic solar panel occupying exactly that footprint, and ' +
+    'remove every trace of orange. Every other pixel stays faithful to ' +
+    'the original photo.'
+
+  // Placement wording: prefer the vision pre-step's pixel-grounded notes,
+  // else the deterministic per-plane facts.
+  let layoutNotes = ''
+  if (args.visionNotes && args.visionNotes.trim().length > 0) {
+    layoutNotes = `LAYOUT NOTES (from the plan): ${args.visionNotes.trim()} `
+  } else if (args.layout && args.layout.length > 0) {
+    const lines = args.layout.map((f, i) => {
+      const orient =
+        f.panel_orientation === 'mixed'
+          ? 'a mix of portrait and landscape'
+          : `${f.panel_orientation} orientation`
+      return (
+        `${i + 1}. ${f.plane_label}: ${f.panels_count} rectangle` +
+        `${f.panels_count === 1 ? '' : 's'} in ${f.rows} row` +
+        `${f.rows === 1 ? '' : 's'} (${orient}) on the ${f.region} part of the frame.`
+      )
+    })
+    layoutNotes = `LAYOUT NOTES (from the plan): ${lines.join(' ')} `
+  }
+
+  const user =
+    `This aerial photo carries the approved panel placement plan: exactly ` +
+    `${count} orange rectangles drawn on the roof (a ${args.systemKwDc.toFixed(1)} kW system). ` +
+    `Follow the Proposed Panel Layout exactly: replace EVERY orange rectangle ` +
+    'with one photorealistic dark monocrystalline solar panel that fills ' +
+    "exactly that rectangle's footprint — the same position, the same size, " +
+    'the same rotation and the same portrait/landscape orientation as the ' +
+    'rectangle it replaces. Panels must keep the rectangles\u2019 true relative ' +
+    'size against the roof — do not enlarge or shrink them. ' +
+    layoutNotes +
+    `Do NOT add panels anywhere there is no rectangle. TOTAL: exactly ${count} ` +
+    'panels — count them. Remove ALL orange markings: no orange outlines, ' +
+    'fills, or tint may remain anywhere in the output. ' +
+    'STRICT RULES: keep the exact same building footprint, roof shape, ' +
+    'ridges, valleys and number of structures; keep the ground, driveway, ' +
+    'trees, pool, fences, vehicles, neighbouring buildings and the camera ' +
+    'angle / zoom completely unchanged. Do NOT re-roof or recolour the ' +
+    'roof surface, do NOT add or remove buildings, do NOT rotate or ' +
+    're-frame, do NOT add text, labels, watermarks or people. ' +
+    'Photorealistic panels with consistent lighting and shadows matching ' +
+    'the original aerial. The result must read as the SAME property ' +
+    'photographed after the solar installation.'
+
+  return { system, user }
+}
 
 /**
  * PURE — the system+user brief for the "panels installed" render.
@@ -202,17 +265,10 @@ export function buildSolarPanelsAfterPrompt(
     'residential solar panels on the existing roof. Everything else stays ' +
     'pixel-faithful to the source photo.'
 
-  // Placement: the marked reference image is the primary anchor when it
-  // exists; the per-plane facts back it up in words; the legacy
-  // orientation-only sentence is the last resort.
-  const referenceBlock = brief.hasMarkedReference
-    ? 'A PANEL PLACEMENT PLAN image follows this aerial: the same photo ' +
-      'with every panel position drawn as an orange rectangle. Place one ' +
-      'photorealistic panel exactly where each orange rectangle sits — ' +
-      'same position, same size, same orientation — and nowhere else. ' +
-      'Render NO orange markings in the output. '
-    : ''
-
+  // Placement: per-plane engineering facts when geometry exists, else
+  // the legacy orientation-only sentence. (When per-panel geometry is
+  // available, callers should prefer buildSolarBoxReplacementPrompt —
+  // the marked-plan edit is the stronger grounding.)
   let placementBlock: string
   if (brief.layout && brief.layout.length > 0) {
     const lines = brief.layout.map((f, i) => {
@@ -247,7 +303,6 @@ export function buildSolarPanelsAfterPrompt(
     `Render this exact aerial with ${count} dark monocrystalline solar ` +
     `panels (about ${brief.systemKwDc.toFixed(1)} kW) ` +
     placementBlock +
-    referenceBlock +
     'STRICT RULES: keep the exact same building footprint, roof shape, ' +
     'ridges, valleys and number of structures; keep the ground, driveway, ' +
     'trees, pool, fences, vehicles, neighbouring buildings and the camera ' +

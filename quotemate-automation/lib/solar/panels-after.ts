@@ -25,10 +25,12 @@ import { buildStaticMapUrl } from '@/lib/roofing/google-maps'
 import { geminiProvider } from '@/lib/ig-engine/providers/gemini'
 import {
   buildSolarPanelsAfterPrompt,
+  buildSolarBoxReplacementPrompt,
   deriveSolarLayoutFacts,
-  MARKED_REFERENCE_LABEL,
+  CLEAN_REFERENCE_LABEL,
 } from './panels-after-prompt'
 import { buildPanelMarkupPaths } from './panel-marked-map'
+import { describePanelPlanWithClaude } from './panels-after-vision'
 import { resolveSolarOverlayCenter } from './static-map-center'
 import type { SolarEstimate } from './types'
 
@@ -131,12 +133,14 @@ export async function generateSolarPanelsImage(
         })
       : []
 
-    // PANEL-MARKED REFERENCE — the strongest grounding: the same aerial
-    // with every panel rectangle drawn at its exact geo position by
-    // Static Maps (identical shapes to the layout-overlay figure). The
-    // model copies positions from pixels far more reliably than from
-    // words. Best-effort: a fetch miss degrades to the text-only brief.
-    let markedReference: { base64: string; mime: string } | null = null
+    // PANEL-MARKED PLAN — the strongest grounding: the same aerial with
+    // every panel rectangle drawn at its exact geo position by Static
+    // Maps (identical shapes to the layout-overlay figure). In
+    // box-replacement mode this marked frame IS the source image Gemini
+    // edits — pure local replacement (rectangle → panel) is far more
+    // compliant than transferring positions across images. Best-effort:
+    // a fetch miss degrades to the legacy clean-photo + text brief.
+    let markedPlan: { base64: string; mime: string } | null = null
     const markupPaths = center
       ? buildPanelMarkupPaths({
           panels: estimate.roof.panels ?? [],
@@ -158,7 +162,7 @@ export async function generateSolarPanelsImage(
         )
         const markedRes = await fetch(markedUrl)
         if (markedRes.ok) {
-          markedReference = {
+          markedPlan = {
             base64: Buffer.from(await markedRes.arrayBuffer()).toString('base64'),
             mime: markedRes.headers.get('content-type') ?? 'image/png',
           }
@@ -173,27 +177,51 @@ export async function generateSolarPanelsImage(
       }
     }
 
-    const prompt = buildSolarPanelsAfterPrompt({
-      panelsCount: headlineTier.panels_count,
-      systemKwDc: headlineTier.system_kw_dc,
-      orientation: estimate.roof.primary_orientation,
-      layout,
-      hasMarkedReference: markedReference != null,
-    })
-    const out = await geminiProvider.renderImage({
-      system: prompt.system,
-      user: prompt.user,
-      sourceImage: { base64: satBytes.toString('base64'), mime: satMime },
-      ...(markedReference
-        ? {
-            reference: {
-              label: MARKED_REFERENCE_LABEL,
-              image: markedReference,
-            },
-          }
-        : {}),
-      aspectRatio: '4:3',
-    })
+    let out: { base64: string; mime: string }
+    if (markedPlan) {
+      // Vision pre-step: Claude looks at the marked plan and writes
+      // pixel-grounded instructions ("two rows of seven on the left
+      // roof section, rows parallel to the ridge…"). Best-effort —
+      // null falls back to the deterministic layout-facts wording.
+      const visionNotes = await describePanelPlanWithClaude({
+        marked: markedPlan,
+        expectedCount: headlineTier.panels_count,
+      })
+
+      const prompt = buildSolarBoxReplacementPrompt({
+        panelsCount: headlineTier.panels_count,
+        systemKwDc: headlineTier.system_kw_dc,
+        layout,
+        visionNotes,
+      })
+      out = await geminiProvider.renderImage({
+        system: prompt.system,
+        user: prompt.user,
+        // SOURCE = the marked plan (edit these pixels);
+        // REFERENCE = the clean photo (match it outside the panels).
+        sourceImage: markedPlan,
+        reference: {
+          label: CLEAN_REFERENCE_LABEL,
+          image: { base64: satBytes.toString('base64'), mime: satMime },
+        },
+        aspectRatio: '4:3',
+      })
+    } else {
+      // Legacy path (no geometry / marked frame unavailable): edit the
+      // clean photo with the text-grounded brief.
+      const prompt = buildSolarPanelsAfterPrompt({
+        panelsCount: headlineTier.panels_count,
+        systemKwDc: headlineTier.system_kw_dc,
+        orientation: estimate.roof.primary_orientation,
+        layout,
+      })
+      out = await geminiProvider.renderImage({
+        system: prompt.system,
+        user: prompt.user,
+        sourceImage: { base64: satBytes.toString('base64'), mime: satMime },
+        aspectRatio: '4:3',
+      })
+    }
 
     const ext = out.mime === 'image/jpeg' ? 'jpg' : 'png'
     const path = `solar/${row.id}/panels-after-${Date.now()}.${ext}`

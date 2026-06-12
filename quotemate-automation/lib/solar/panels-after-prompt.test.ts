@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildSolarPanelsAfterPrompt,
+  buildSolarBoxReplacementPrompt,
   deriveSolarLayoutFacts,
-  MARKED_REFERENCE_LABEL,
+  CLEAN_REFERENCE_LABEL,
 } from './panels-after-prompt'
 import type { SolarPanelPlacement, SolarRoofPlane } from './types'
 
@@ -221,39 +222,72 @@ describe('buildSolarPanelsAfterPrompt (layout-grounded)', () => {
   })
 })
 
-describe('buildSolarPanelsAfterPrompt (panel-marked reference image)', () => {
-  it('anchors placement on the marked plan when the reference ships', () => {
-    const p = buildSolarPanelsAfterPrompt({
-      panelsCount: 25,
-      systemKwDc: 10,
-      orientation: 'north',
-      layout: deriveSolarLayoutFacts({
-        panels: gridPanels({ rows: 2, cols: 7 }),
-        planes: PLANES,
-        center: SYD,
-        panel_size_m: PANEL_SIZE,
-      }),
-      hasMarkedReference: true,
-    })
-    expect(p.user).toContain('PANEL PLACEMENT PLAN image follows this aerial')
-    expect(p.user).toContain('exactly where each orange rectangle sits')
-    expect(p.user).toContain('Render NO orange markings in the output')
+describe('buildSolarBoxReplacementPrompt (marked plan as the SOURCE)', () => {
+  const layout = deriveSolarLayoutFacts({
+    panels: gridPanels({ rows: 2, cols: 7 }),
+    planes: PLANES,
+    center: SYD,
+    panel_size_m: PANEL_SIZE,
   })
 
-  it('no reference sentence when the marked image is unavailable', () => {
-    const p = buildSolarPanelsAfterPrompt({
-      panelsCount: 25,
-      systemKwDc: 10,
-      orientation: 'north',
-      hasMarkedReference: false,
+  it('frames the task as local replacement of the orange rectangles', () => {
+    const p = buildSolarBoxReplacementPrompt({
+      panelsCount: 14,
+      systemKwDc: 5.6,
+      layout,
     })
-    expect(p.user).not.toContain('PANEL PLACEMENT PLAN image')
+    expect(p.system).toContain('local replacement')
+    expect(p.user).toContain('Follow the Proposed Panel Layout exactly')
+    expect(p.user).toContain('replace EVERY orange rectangle')
+    expect(p.user).toContain("exactly that rectangle's footprint")
+    expect(p.user).toContain('do not enlarge or shrink')
   })
 
-  it('the reference label tells the model what the rectangles mean', () => {
-    expect(MARKED_REFERENCE_LABEL).toContain('PANEL PLACEMENT PLAN')
-    expect(MARKED_REFERENCE_LABEL).toContain('exact footprint of ONE panel')
-    expect(MARKED_REFERENCE_LABEL).toContain('Do not add panels')
-    expect(MARKED_REFERENCE_LABEL).toContain('NO orange markings')
+  it('pins the strict count and bans leftover orange', () => {
+    const p = buildSolarBoxReplacementPrompt({
+      panelsCount: 14,
+      systemKwDc: 5.6,
+      layout,
+    })
+    expect(p.user).toContain('exactly 14 orange rectangles')
+    expect(p.user).toContain('TOTAL: exactly 14 panels — count them')
+    expect(p.user).toContain('Remove ALL orange markings')
+    expect(p.user).toContain('Do NOT add panels anywhere there is no rectangle')
+  })
+
+  it('prefers the Claude vision notes over the deterministic facts', () => {
+    const p = buildSolarBoxReplacementPrompt({
+      panelsCount: 14,
+      systemKwDc: 5.6,
+      layout,
+      visionNotes:
+        'Two rows of seven rectangles on the left roof section, rows parallel to the ridge. Total: exactly 14 panels.',
+    })
+    expect(p.user).toContain('Two rows of seven rectangles on the left roof section')
+    expect(p.user).not.toContain('north-facing plane (pitch 22°): 14 rectangles')
+  })
+
+  it('falls back to the deterministic layout facts without vision notes', () => {
+    const p = buildSolarBoxReplacementPrompt({
+      panelsCount: 14,
+      systemKwDc: 5.6,
+      layout,
+      visionNotes: null,
+    })
+    expect(p.user).toContain('LAYOUT NOTES (from the plan)')
+    expect(p.user).toContain('north-facing plane (pitch 22°)')
+  })
+
+  it('keeps the strict do-not-change rules', () => {
+    const p = buildSolarBoxReplacementPrompt({ panelsCount: 14, systemKwDc: 5.6 })
+    expect(p.user).toContain('STRICT RULES')
+    expect(p.user).toContain('Do NOT re-roof')
+    expect(p.user).toMatch(/do NOT add text, labels, watermarks or people/i)
+  })
+
+  it('the clean-photo reference label demands fidelity outside the panels', () => {
+    expect(CLEAN_REFERENCE_LABEL).toContain('ORIGINAL PHOTO')
+    expect(CLEAN_REFERENCE_LABEL).toContain('OUTSIDE the panel rectangles')
+    expect(CLEAN_REFERENCE_LABEL).toContain('match this original exactly')
   })
 })
