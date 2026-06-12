@@ -158,15 +158,7 @@ export const EQUIPMENT_TRIGGER_HEIGHT_M = 3.4
 
 // ── IO wrapper ────────────────────────────────────────────────────────
 
-type SupabaseLike = {
-  from: (table: string) => {
-    select: (cols: string) => {
-      eq: (col: string, val: string) => {
-        or: (filter: string) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
-      }
-    }
-  }
-}
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
  * Load shared defaults + this tenant's overrides for commercial painting.
@@ -174,7 +166,7 @@ type SupabaseLike = {
  * pricing-context loader).
  */
 export async function loadPaintRates(
-  supabase: SupabaseLike,
+  supabase: SupabaseClient,
   tenantId: string,
 ): Promise<PaintRateRow[]> {
   const { data, error } = await supabase
