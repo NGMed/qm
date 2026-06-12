@@ -122,6 +122,14 @@ export const DEFAULT_SOLAR_CONFIG: SolarConfig = {
     flat: 1.0,
     unknown: 0.90,
   },
+  // ── Premium-quote constants (spec 2026-06-12 §4.3) — versioned here
+  //    like every other constant; consumers guard absent values. ──────
+  price_escalation_pct_per_year: 0.03, // AEMC long-run residential trend
+  discount_rate_pct: 0.05,             // conservative household discount rate
+  string_max_panels: 14,               // typical residential MPPT string cap
+  typical_household_kwh_per_year: 6000, // AER benchmark, 3-person AU home
+  co2_equiv_trees_per_tonne: 15,       // tree-years per tonne CO₂e (DCCEEW)
+  co2_equiv_km_driven_per_tonne: 4000, // km in an average AU petrol car/tonne
 }
 
 export function validateSolarConfig(

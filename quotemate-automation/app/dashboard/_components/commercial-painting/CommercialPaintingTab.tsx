@@ -202,31 +202,74 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
   )
 
   // ── Stage 1: documents ─────────────────────────────────────────────
+  // Three steps: sign (get direct-to-storage URLs), PUT each file
+  // straight to Supabase Storage (Vercel 413s any function body over
+  // ~4.5 MB, so files can't go through the API), then complete
+  // (classify + register).
   async function uploadFiles(files: FileList | File[]) {
     const list = [...files]
     if (list.length === 0) return
     setUploading(true)
     setErrMsg(null)
+    const fail = (body: { error?: string; detail?: string; filename?: string } | null, status?: number) => {
+      setErrMsg(
+        body?.error === 'file_too_large'
+          ? `${body.filename} is over 32 MB.`
+          : body?.error === 'unsupported_type'
+            ? `${body.filename} isn’t a PDF or image.`
+            : body?.detail
+              ? `Upload failed: ${body.detail}`
+              : body?.error
+                ? `Upload failed (${body.error}). Please try again.`
+                : `Upload failed (HTTP ${status ?? '?'}). Please try again.`,
+      )
+    }
     try {
-      const fd = new FormData()
-      for (const f of list) fd.append('files', f)
-      if (jobName.trim()) fd.append('job_name', jobName.trim())
-      if (siteAddress.trim()) fd.append('site_address', siteAddress.trim())
-      if (runId) fd.append('paint_run_id', runId)
-      const res = await fetch(`${API}/upload`, authed({ method: 'POST', body: fd }))
+      const signRes = await fetch(`${API}/upload/sign`, authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          files: list.map((f) => ({ name: f.name, size: f.size, type: f.type })),
+          ...(jobName.trim() ? { job_name: jobName.trim() } : {}),
+          ...(siteAddress.trim() ? { site_address: siteAddress.trim() } : {}),
+          ...(runId ? { paint_run_id: runId } : {}),
+        }),
+      }))
+      const signBody = await signRes.json().catch(() => null)
+      if (!signRes.ok || !signBody?.ok) {
+        fail(signBody, signRes.status)
+        return
+      }
+      const targets = signBody.uploads as Array<{ uploadId: string; signedUrl: string }>
+
+      for (let i = 0; i < list.length; i++) {
+        const put = await fetch(targets[i].signedUrl, {
+          method: 'PUT',
+          headers: { 'content-type': list[i].type, 'x-upsert': 'true' },
+          body: list[i],
+        })
+        if (!put.ok) {
+          setErrMsg(`Uploading ${list[i].name} failed (HTTP ${put.status}). Please try again.`)
+          return
+        }
+      }
+
+      const res = await fetch(`${API}/upload/complete`, authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          paintRunId: signBody.paintRunId,
+          files: list.map((f, i) => ({
+            uploadId: targets[i].uploadId,
+            name: f.name,
+            size: f.size,
+            type: f.type,
+          })),
+        }),
+      }))
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.ok) {
-        setErrMsg(
-          body?.error === 'file_too_large'
-            ? `${body.filename} is over 32 MB.`
-            : body?.error === 'unsupported_type'
-              ? `${body.filename} isn’t a PDF or image.`
-              : body?.detail
-                ? `Upload failed: ${body.detail}`
-                : body?.error
-                  ? `Upload failed (${body.error}). Please try again.`
-                  : `Upload failed (HTTP ${res.status}). Please try again.`,
-        )
+        fail(body, res.status)
         return
       }
       setRunId(body.paintRunId)
@@ -266,15 +309,26 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
     setViewerLoading(upload.id)
     setErrMsg(null)
     try {
+      // The API hands back a short-lived signed storage URL; the bytes
+      // come straight from Supabase (plan sets exceed Vercel's ~4.5 MB
+      // function-response cap).
       const res = await fetch(`${API}/upload/${upload.id}/file`, authed())
-      if (!res.ok) {
+      const meta = await res.json().catch(() => null)
+      if (!res.ok || !meta?.ok || !meta.url) {
         setErrMsg('Could not load that document. Please try again.')
         return
       }
-      const blob = await res.blob()
+      const fileRes = await fetch(meta.url as string)
+      if (!fileRes.ok) {
+        setErrMsg('Could not load that document. Please try again.')
+        return
+      }
+      const raw = await fileRes.blob()
+      const mime = (meta.mime as string) || raw.type
+      const blob = raw.type === mime ? raw : new Blob([raw], { type: mime })
       const entry =
-        blob.type === 'application/pdf'
-          ? ({ kind: 'pdf', file: new File([blob], upload.filename, { type: blob.type }) } as const)
+        mime === 'application/pdf'
+          ? ({ kind: 'pdf', file: new File([blob], upload.filename, { type: mime }) } as const)
           : ({ kind: 'image', objectUrl: URL.createObjectURL(blob) } as const)
       fileCache.current.set(upload.id, entry)
       setViewer({ uploadId: upload.id, filename: upload.filename, ...entry })

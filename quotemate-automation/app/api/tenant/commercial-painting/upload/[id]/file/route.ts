@@ -1,11 +1,12 @@
-// GET /api/tenant/commercial-painting/upload/[id]/file — stream a stored
-// run document back to its owning tenant (Bearer-auth, tenant-scoped).
-// Powers the in-tab plan viewer: the client fetches with an
-// Authorization header, turns the blob into a File and feeds the shared
-// PlanOverlay (PDFs) or an <img> (site photos).
+// GET /api/tenant/commercial-painting/upload/[id]/file — hand the owning
+// tenant a short-lived signed storage URL for a stored run document
+// (Bearer-auth, tenant-scoped). The bytes never pass through this
+// function: Vercel caps function responses at ~4.5 MB, which a plan set
+// routinely exceeds. The client fetches the signed URL directly and
+// feeds the shared PlanOverlay (PDFs) or an <img> (site photos).
 
 import { tenantFromBearer, estimatorSupabase } from '@/lib/estimation/auth'
-import { downloadPaintDoc } from '@/lib/commercial-painting/storage'
+import { createPaintDocSignedDownload } from '@/lib/commercial-painting/storage'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -31,24 +32,24 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     .maybeSingle()
   if (!upload?.pdf_path) return Response.json({ ok: false, error: 'not_found' }, { status: 404 })
 
-  let bytes: Buffer
+  let url: string
   try {
-    bytes = await downloadPaintDoc(upload.pdf_path as string)
+    url = await createPaintDocSignedDownload(upload.pdf_path as string)
   } catch (e) {
     return Response.json(
-      { ok: false, error: 'download_failed', detail: e instanceof Error ? e.message : String(e) },
+      { ok: false, error: 'sign_failed', detail: e instanceof Error ? e.message : String(e) },
       { status: 502 },
     )
   }
 
   const ext = (upload.pdf_path as string).split('.').pop()?.toLowerCase() ?? ''
-  const mime = MIME_BY_EXT[ext] ?? 'application/octet-stream'
-  return new Response(new Uint8Array(bytes), {
-    status: 200,
-    headers: {
-      'Content-Type': mime,
-      'Content-Disposition': `inline; filename="${encodeURIComponent(String(upload.filename ?? 'document'))}"`,
-      'Cache-Control': 'private, max-age=300',
+  return Response.json(
+    {
+      ok: true,
+      url,
+      filename: upload.filename ?? 'document',
+      mime: MIME_BY_EXT[ext] ?? 'application/octet-stream',
     },
-  })
+    { status: 200, headers: { 'Cache-Control': 'no-store' } },
+  )
 }

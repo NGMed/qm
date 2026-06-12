@@ -80,6 +80,9 @@ export async function POST(
       input: address,
       manual,
       panelType: panel_type,
+      // Optional quarterly bill (premium quote §4.1) — personalises the
+      // utility-cost section; intake.ts guards non-finite/non-positive.
+      quarterlyBillAud: energy?.quarterly_bill_aud ?? null,
       config,
       opts: {
         geocode: async (input) => {

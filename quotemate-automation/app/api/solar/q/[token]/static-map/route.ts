@@ -6,7 +6,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { buildStaticMapUrl } from '@/lib/roofing/google-maps'
-import { centerForSolarEstimate } from '@/lib/solar/static-map-center'
+import { resolveSolarOverlayCenter } from '@/lib/solar/static-map-center'
 import type { SolarEstimate } from '@/lib/solar/types'
 
 export const dynamic = 'force-dynamic'
@@ -41,10 +41,24 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
 
   const estimate = (row.estimate as SolarEstimate | null) ?? null
   const address = (row.address as string | null) ?? undefined
-  const center = estimate ? centerForSolarEstimate({ roof: estimate.roof }) : null
+  // The overlay centre: panel centroid → polygon → resolved geocode.
+  // The layout/string overlays (premium quote §4.2) project against this
+  // SAME coordinate, so map and overlays stay pixel-aligned by
+  // construction. Address-string centring is the last resort (overlays
+  // are omitted in that case — no deterministic pixel mapping exists).
+  const center = estimate
+    ? resolveSolarOverlayCenter({
+        roof: estimate.roof,
+        location: estimate.context.location ?? null,
+      })
+    : null
   if (!address && !center) {
     return Response.json({ ok: false, error: 'no_location' }, { status: 400 })
   }
+
+  // Marker only when no panel geometry will be drawn over the photo —
+  // a pin under the panel-layout overlay is noise.
+  const hasPanels = (estimate?.roof.panels?.length ?? 0) > 0
 
   let target: string
   try {
@@ -54,7 +68,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
         center: center ?? undefined,
         zoom: 20,
         size: { width: 640, height: 480 },
-        markers: center ? [{ lat: center.lat, lng: center.lng, color: 'orange' }] : undefined,
+        markers:
+          center && !hasPanels
+            ? [{ lat: center.lat, lng: center.lng, color: 'orange' }]
+            : undefined,
       },
       { apiKey },
     )

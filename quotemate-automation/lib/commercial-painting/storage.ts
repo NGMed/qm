@@ -28,6 +28,11 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/webp': 'webp',
 }
 
+// Shared intake limits for the sign + complete upload routes.
+export const MAX_FILE_BYTES = 32 * 1024 * 1024
+export const MAX_FILES = 12
+export const ACCEPTED_MIME = new Set(Object.keys(EXT_BY_MIME))
+
 export function paintDocPath(runId: string, uploadId: string, mime: string): string {
   const ext = EXT_BY_MIME[mime] ?? 'bin'
   return `paint/${runId}/${uploadId}.${ext}`
@@ -46,6 +51,40 @@ export async function uploadPaintDoc(opts: {
     .upload(path, opts.data, { contentType: opts.mime, upsert: true })
   if (error) throw new Error(`paint doc upload failed: ${error.message}`)
   return path
+}
+
+/**
+ * Mint a signed URL the browser can PUT a run document to directly.
+ * Vercel caps function request bodies at ~4.5 MB, so plan sets must
+ * bypass the API and go straight to Supabase Storage.
+ */
+export async function createPaintDocSignedUpload(opts: {
+  runId: string
+  uploadId: string
+  mime: string
+}): Promise<{ path: string; signedUrl: string; token: string }> {
+  const path = paintDocPath(opts.runId, opts.uploadId, opts.mime)
+  const { data, error } = await getClient()
+    .storage.from(BUCKET)
+    .createSignedUploadUrl(path, { upsert: true })
+  if (error || !data) {
+    throw new Error(`signed upload url failed: ${error?.message ?? 'no data'}`)
+  }
+  return { path, signedUrl: data.signedUrl, token: data.token }
+}
+
+/** Signed read URL for streaming a stored document straight from storage. */
+export async function createPaintDocSignedDownload(
+  path: string,
+  expiresInSeconds = 300,
+): Promise<string> {
+  const { data, error } = await getClient()
+    .storage.from(BUCKET)
+    .createSignedUrl(path, expiresInSeconds)
+  if (error || !data) {
+    throw new Error(`signed download url failed: ${error?.message ?? 'no data'}`)
+  }
+  return data.signedUrl
 }
 
 /** Read a stored run document back as a Buffer. */

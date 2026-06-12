@@ -7,7 +7,8 @@
 //   plan-pdfs/paint/<runId>/<uploadId>.<ext>
 // 32MB cap (Anthropic PDF ceiling), private — reads happen server-side or
 // via short-lived signed URLs. The MIME allowlist matches the painting
-// upload route (app/api/tenant/commercial-painting/upload): PDF + images.
+// upload routes (app/api/tenant/commercial-painting/upload/{sign,complete}
+// — browsers PUT files straight to storage via signed URLs): PDF + images.
 // Idempotent. Usage: node --env-file=.env.local scripts/create-plan-pdfs-bucket.mjs
 
 import { createClient } from '@supabase/supabase-js'
