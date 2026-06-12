@@ -15,6 +15,7 @@ import { after } from 'next/server'
 import { ensureSolarQuotePdf, solarQuotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { dispatchQuoteWithPdf } from '@/lib/sms/send-quote-pdf'
 import { buildSolarCustomerSms } from '@/lib/solar/notify'
+import { pylonLeadPushEnabled, pushPylonOpportunity } from '@/lib/pylon/client'
 import type { SolarEstimate } from '@/lib/solar/types'
 
 export const dynamic = 'force-dynamic'
@@ -119,6 +120,17 @@ export async function POST(
         routing: (row.routing as string | null) ?? null,
       }),
     )
+    // Pylon CRM lead push (premium quote §4.5) — first confirm only,
+    // behind PYLON_ENABLED + the per-tenant allowlist. Fire-and-forget;
+    // logged, never blocks confirm.
+    after(() =>
+      pushSolarLeadToPylon(supabase, {
+        tenantId: (row.tenant_id as string | null) ?? null,
+        publicToken: row.public_token as string,
+        intakeId: (row.intake_id as string | null) ?? null,
+        address: (row.address as string | null) ?? null,
+      }),
+    )
     return Response.json({ ok: true, confirmed_at: confirmedAt })
   }
 
@@ -191,6 +203,74 @@ async function sendCustomerSolarQuote(
   } catch (e) {
     console.error(
       '[solar/confirm] customer quote send failed (non-fatal)',
+      e instanceof Error ? e.message : e,
+    )
+  }
+}
+
+/**
+ * Best-effort Pylon CRM lead push on first confirm (premium quote §4.5).
+ * Gated by PYLON_ENABLED + PYLON_API_KEY + the PYLON_LEAD_PUSH_TENANTS
+ * allowlist. Sends name/phone/address/system summary; logged, never
+ * throws — the confirm flow must be bit-identical when Pylon is off.
+ */
+async function pushSolarLeadToPylon(
+  supabase: ReturnType<typeof getSupabase>,
+  row: {
+    tenantId: string | null
+    publicToken: string
+    intakeId: string | null
+    address: string | null
+  },
+): Promise<void> {
+  try {
+    if (
+      !pylonLeadPushEnabled(
+        {
+          PYLON_ENABLED: process.env.PYLON_ENABLED,
+          PYLON_API_KEY: process.env.PYLON_API_KEY,
+          PYLON_LEAD_PUSH_TENANTS: process.env.PYLON_LEAD_PUSH_TENANTS,
+        },
+        row.tenantId,
+      )
+    ) {
+      return
+    }
+
+    let caller: { name?: string; phone?: string } | null = null
+    if (row.intakeId) {
+      const { data: intake } = await supabase
+        .from('intakes')
+        .select('caller')
+        .eq('id', row.intakeId)
+        .maybeSingle()
+      caller = (intake?.caller as { name?: string; phone?: string } | null) ?? null
+    }
+
+    const { data: est } = await supabase
+      .from('solar_estimates')
+      .select('estimate')
+      .eq('public_token', row.publicToken)
+      .maybeSingle()
+    const estimate = (est?.estimate as SolarEstimate | null) ?? null
+    const headline = estimate
+      ? estimate.price.tiers[estimate.price.tiers.length - 1] ?? null
+      : null
+
+    const result = await pushPylonOpportunity({
+      name: caller?.name?.trim() || 'QuoteMate solar lead',
+      phone: caller?.phone?.trim() || null,
+      address: row.address,
+      summary: headline
+        ? `${headline.system_kw_dc} kW solar — confirmed QuoteMate estimate ($${Math.round(headline.net_inc_gst).toLocaleString('en-AU')} net inc GST)`
+        : 'Confirmed QuoteMate solar estimate',
+    })
+    if (!result.ok) {
+      console.warn(`[solar/confirm] Pylon lead push skipped (${result.code}): ${result.detail}`)
+    }
+  } catch (e) {
+    console.warn(
+      '[solar/confirm] Pylon lead push failed (non-fatal)',
       e instanceof Error ? e.message : e,
     )
   }

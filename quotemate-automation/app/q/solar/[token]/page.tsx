@@ -33,7 +33,17 @@ import { resolveSolarDepositCta } from '@/lib/solar/deposit-cta'
 import {
   SOLAR_COMPLIANCE_COPY,
   SOLAR_PRE_CONFIRM_COPY,
+  SOLAR_PROJECTION_COPY,
+  SOLAR_LAYOUT_COPY,
+  SOLAR_ENVIRONMENTAL_COPY,
 } from '@/lib/solar/compliance-copy'
+import {
+  buildSolarPremiumQuote,
+  solarPremiumQuoteEnabled,
+  type SolarPremiumQuote,
+} from '@/lib/solar/premium-quote'
+import { loadSolarConfig } from '@/lib/solar/config'
+import type { SolarChart } from '@/lib/solar/charts'
 import { money, kwh, kw, paybackBand } from '@/lib/solar/quote-page-format'
 
 export const dynamic = 'force-dynamic'
@@ -98,6 +108,15 @@ export default async function SolarQuotePage({
   })
   const explainers = buildSolarStatExplainers(estimate)
   const assumptions = buildSolarAssumptionsView(estimate)
+
+  // Premium proposal sections (spec 2026-06-12 §4.4), behind the
+  // SOLAR_PREMIUM_QUOTE flag. The view model degrades field-by-field
+  // (§4.6) — each null simply omits its section.
+  let premium: SolarPremiumQuote | null = null
+  if (solarPremiumQuoteEnabled(process.env.SOLAR_PREMIUM_QUOTE)) {
+    const config = await loadSolarConfig(supabase)
+    premium = buildSolarPremiumQuote({ estimate, config, theme: 'dark' })
+  }
 
   const chipBorder = chip.tone === 'warning' ? 'border-l-warning' : 'border-l-accent'
   const chipText = chip.tone === 'warning' ? 'text-warning' : 'text-accent'
@@ -200,6 +219,73 @@ export default async function SolarQuotePage({
           )}
         </div>
 
+        {/* §4.4-2 — Proposed panel layout (deterministic, pre-confirm OK).
+            The SVG projects the SAME Solar API panel geometry against the
+            SAME map centre the static-map route used — pixel-aligned by
+            construction. Omitted when no geometry exists (§4.6). */}
+        {premium?.layout && (
+          <div className={`mt-10 ${reveal(300)}`}>
+            <SectionHeading label="Proposed panel layout" />
+            <div className="mt-5 overflow-hidden border border-ink-line bg-ink-card">
+              <div className="relative aspect-[4/3] w-full">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/solar/q/${token}/static-map`}
+                  alt={`Satellite view of the roof at ${row.address ?? 'the property'} with the proposed panel layout drawn over it`}
+                  className="absolute inset-0 h-full w-full"
+                />
+                <div
+                  className="absolute inset-0 [&>svg]:h-full [&>svg]:w-full"
+                  dangerouslySetInnerHTML={{ __html: premium.layout.svg }}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-ink-line px-5 py-3">
+                {premium.layout.legend.map((l) => (
+                  <span key={l.segment_index} className="inline-flex items-center gap-2 font-mono text-[0.66rem] uppercase tracking-[0.14em] text-text-sec">
+                    <span className="inline-block h-2.5 w-2.5" style={{ backgroundColor: l.color }} aria-hidden />
+                    {l.plane_label} · {l.panels_count} panels
+                  </span>
+                ))}
+              </div>
+              <div className="border-t border-ink-line px-5 py-3 text-xs leading-relaxed text-text-dim">
+                {SOLAR_LAYOUT_COPY} {overlay.caption}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* §4.4-3 — Panel strings & component markings (indicative). */}
+        {premium?.strings && (
+          <div className={`mt-10 ${reveal(330)}`}>
+            <SectionHeading label="Panel strings & component markings" />
+            <div className="mt-5 overflow-hidden border border-ink-line bg-ink-card">
+              <div className="relative aspect-[4/3] w-full">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/solar/q/${token}/static-map`}
+                  alt={`Satellite view of the roof at ${row.address ?? 'the property'} with indicative panel string runs drawn over it`}
+                  className="absolute inset-0 h-full w-full opacity-80"
+                />
+                <div
+                  className="absolute inset-0 [&>svg]:h-full [&>svg]:w-full"
+                  dangerouslySetInnerHTML={{ __html: premium.strings.svg }}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-ink-line px-5 py-3">
+                {premium.strings.strings.map((s) => (
+                  <span key={s.string_number} className="inline-flex items-center gap-2 font-mono text-[0.66rem] uppercase tracking-[0.14em] text-text-sec">
+                    <span className="inline-block h-2.5 w-2.5" style={{ backgroundColor: s.color }} aria-hidden />
+                    S{s.string_number} · {s.panels_count} panels
+                  </span>
+                ))}
+              </div>
+              <div className="border-t border-ink-line px-5 py-3 text-xs leading-relaxed text-text-dim">
+                {premium.strings.caption}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* The numbers, explained — expandable "why?" per hero stat. */}
         <div className={`mt-10 ${reveal(300)}`}>
           <div className="flex items-center gap-4">
@@ -220,6 +306,32 @@ export default async function SolarQuotePage({
           </div>
         </div>
 
+        {/* §4.4-4 — System details: modelled monthly production + the
+            Pylon-style assumed-values table. No dollar figures, so this
+            renders pre-confirm. */}
+        {premium && (premium.charts.monthlyProduction || premium.assumed_values.length > 0) && (
+          <div className="mt-10">
+            <SectionHeading label="System details" />
+            {premium.charts.monthlyProduction && (
+              <ChartFigure chart={premium.charts.monthlyProduction} className="mt-5" />
+            )}
+            {premium.assumed_values.length > 0 && (
+              <div className="mt-5 grid gap-px overflow-hidden border border-ink-line bg-ink-line sm:grid-cols-3">
+                {premium.assumed_values.map((r) => (
+                  <div key={r.label} className="bg-ink-deep px-4 py-3">
+                    <div className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-text-dim">
+                      {r.label}
+                    </div>
+                    <div className="mt-1 font-mono text-sm font-bold tabular-nums text-text-pri">
+                      {r.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Pre-confirmation notice */}
         {!view.showPrices && (
           <div className="mt-8 border border-ink-line border-l-4 border-l-accent bg-ink-card px-6 py-5">
@@ -235,7 +347,94 @@ export default async function SolarQuotePage({
           </div>
         )}
 
-        {/* Tier cards — shown only once confirmed */}
+        {/* §4.4-5 — Utility costs (dollar figures → confirm-gated). */}
+        {view.showPrices && premium?.charts.utilityCosts && (
+          <div className="mt-10">
+            <SectionHeading label="Utility costs — before & with solar" />
+            <ChartFigure chart={premium.charts.utilityCosts} className="mt-5" />
+          </div>
+        )}
+
+        {/* §4.4-6 — 20-year financial summary (confirm-gated). */}
+        {view.showPrices && premium?.financial && (
+          <div className="mt-10">
+            <SectionHeading label="20-year financial summary" />
+            <div className="mt-5 grid gap-px overflow-hidden border border-ink-line bg-ink-line sm:grid-cols-2 lg:grid-cols-4">
+              <MiniStat
+                label="Net present value"
+                value={`$${money(premium.financial.npv_aud)}`}
+                hint={`Discounted at ${(premium.financial.assumptions.discount_rate_pct * 100).toFixed(1)}%`}
+              />
+              <MiniStat
+                label="Payback"
+                value={paybackBand(
+                  premium.financial.payback_years_low,
+                  premium.financial.payback_years_high,
+                )}
+                hint="Simple payback band"
+              />
+              <MiniStat
+                label="Total ROI (20 yr)"
+                value={`${premium.financial.total_roi_pct.toLocaleString('en-AU')}%`}
+                hint={`$${money(premium.financial.total_savings_20yr_aud)} cumulative`}
+              />
+              <MiniStat
+                label="IRR"
+                value={
+                  premium.financial.irr_pct != null
+                    ? `${premium.financial.irr_pct.toLocaleString('en-AU')}%`
+                    : 'See installer'
+                }
+                hint="Internal rate of return"
+              />
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-text-dim">{SOLAR_PROJECTION_COPY}</p>
+          </div>
+        )}
+
+        {/* §4.4-7 — Financial analysis charts (confirm-gated). */}
+        {view.showPrices &&
+          premium &&
+          (premium.charts.monthlyBill || premium.charts.cumulativeSavings) && (
+            <div className="mt-10">
+              <SectionHeading label="Financial analysis" />
+              {premium.charts.cumulativeSavings && (
+                <ChartFigure chart={premium.charts.cumulativeSavings} className="mt-5" />
+              )}
+              {premium.charts.monthlyBill && (
+                <ChartFigure chart={premium.charts.monthlyBill} className="mt-5" />
+              )}
+            </div>
+          )}
+
+        {/* §4.4-8 — Environmental analysis (no dollars → pre-confirm OK).
+            Omitted when the grid carbon factor is absent (§4.6). */}
+        {premium?.environmental && (
+          <div className="mt-10">
+            <SectionHeading label="Environmental analysis" />
+            <div className="mt-5 grid gap-px overflow-hidden border border-ink-line bg-ink-line sm:grid-cols-2 lg:grid-cols-4">
+              <MiniStat
+                label="CO₂e avoided / yr"
+                value={`${premium.environmental.tonnes_co2_per_year.toLocaleString('en-AU')} t`}
+              />
+              <MiniStat
+                label="CO₂e over 20 yrs"
+                value={`${premium.environmental.tonnes_co2_20yr.toLocaleString('en-AU')} t`}
+              />
+              <MiniStat
+                label="Like planting"
+                value={`${premium.environmental.trees_equiv_per_year.toLocaleString('en-AU')} trees/yr`}
+              />
+              <MiniStat
+                label="Like not driving"
+                value={`${premium.environmental.km_driven_equiv_per_year.toLocaleString('en-AU')} km/yr`}
+              />
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-text-dim">{SOLAR_ENVIRONMENTAL_COPY}</p>
+          </div>
+        )}
+
+        {/* §4.4-9 — Pricing & acceptance (tier cards, confirm-gated). */}
         {view.showPrices && (
           <div className="mt-10 space-y-6">
             <div className="flex items-center gap-4">
@@ -333,8 +532,12 @@ export default async function SolarQuotePage({
           <p className="mt-4 text-xs leading-relaxed text-text-dim">{assumptions.footnote}</p>
         </div>
 
-        {/* Mandatory SAA/CEC compliance copy */}
+        {/* Mandatory SAA/CEC compliance copy (+ projection disclaimer
+            whenever the premium financial sections rendered). */}
         <p className="mt-8 text-sm text-text-dim">{SOLAR_COMPLIANCE_COPY}</p>
+        {view.showPrices && premium?.financial && (
+          <p className="mt-3 text-xs leading-relaxed text-text-dim">{SOLAR_PROJECTION_COPY}</p>
+        )}
       </section>
 
       <div className="relative z-10 bg-accent px-6 py-5 text-center text-white">
@@ -343,6 +546,33 @@ export default async function SolarQuotePage({
         </span>
       </div>
     </main>
+  )
+}
+
+/** Eyebrow + rule — the section divider every premium section reuses. */
+function SectionHeading({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-4">
+      <span className="font-mono text-[0.8rem] font-semibold uppercase tracking-[0.18em] text-accent">
+        {label}
+      </span>
+      <span className="h-px flex-1 bg-ink-line" aria-hidden />
+    </div>
+  )
+}
+
+/** One pure-SVG chart (charts.ts) in a bordered card with its caption. */
+function ChartFigure({ chart, className }: { chart: SolarChart; className?: string }) {
+  return (
+    <figure className={`overflow-hidden border border-ink-line bg-ink-card ${className ?? ''}`}>
+      <div
+        className="p-4 [&>svg]:h-auto [&>svg]:w-full"
+        dangerouslySetInnerHTML={{ __html: chart.svg }}
+      />
+      <figcaption className="border-t border-ink-line px-5 py-3 text-xs leading-relaxed text-text-dim">
+        {chart.caption}
+      </figcaption>
+    </figure>
   )
 }
 

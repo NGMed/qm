@@ -10,6 +10,12 @@
 // unit-tested.
 
 import type { SolarEstimate, SolarPriceTier } from './types'
+import type { SolarPremiumQuote } from './premium-quote'
+import {
+  SOLAR_PROJECTION_COPY,
+  SOLAR_LAYOUT_COPY,
+  SOLAR_ENVIRONMENTAL_COPY,
+} from './compliance-copy'
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -27,6 +33,12 @@ export type SolarReportInput = {
   quoteViewUrl?: string | null
   licenceLine?: string | null
   generatedAt?: Date
+  /** Premium proposal artefacts (spec 2026-06-12 §4.4) — build with
+   *  theme 'light' for print. Null/absent → the legacy report layout. */
+  premium?: SolarPremiumQuote | null
+  /** Absolute URL of the satellite hero — the layout/string overlays
+   *  render over it. Absent → overlays draw on a dark panel instead. */
+  staticMapUrl?: string | null
 }
 
 /** Format a payback band as "4–6 yrs", or a graceful fallback. */
@@ -65,6 +77,168 @@ function tierSection(
         : ''
     }
   </section>`
+}
+
+/** Overlay figure: the deterministic SVG positioned over the satellite
+ *  photo (or a dark panel when no URL is available). */
+function overlayFigure(args: {
+  svg: string
+  staticMapUrl: string | null | undefined
+  heading: string
+  legendHtml: string
+  captionText: string
+}): string {
+  const img = args.staticMapUrl
+    ? `<img src="${esc(args.staticMapUrl)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;">`
+    : ''
+  return `
+  <h2>${esc(args.heading)}</h2>
+  <div class="figure">
+    <div class="overlay-frame">${img}<div class="overlay-svg">${args.svg}</div></div>
+    ${args.legendHtml ? `<div class="legend">${args.legendHtml}</div>` : ''}
+    <div class="fig-caption">${esc(args.captionText)}</div>
+  </div>`
+}
+
+function chartFigure(heading: string, chart: { svg: string; caption: string }): string {
+  return `
+  <h2>${esc(heading)}</h2>
+  <div class="figure">
+    <div class="chart">${chart.svg}</div>
+    <div class="fig-caption">${esc(chart.caption)}</div>
+  </div>`
+}
+
+function statGrid(rows: Array<{ label: string; value: string; hint?: string }>): string {
+  return (
+    '<div class="stats">' +
+    rows
+      .map(
+        (r) =>
+          `<div class="stat"><div class="stat-label">${esc(r.label)}</div>` +
+          `<div class="stat-value">${esc(r.value)}</div>` +
+          (r.hint ? `<div class="stat-hint">${esc(r.hint)}</div>` : '') +
+          '</div>',
+      )
+      .join('') +
+    '</div>'
+  )
+}
+
+/** Premium sections (spec §4.4 order). The PDF only ever generates for
+ *  confirmed, non-inspection estimates, so money sections are safe. */
+function premiumSections(input: SolarReportInput): string {
+  const p = input.premium
+  if (!p) return ''
+  const parts: string[] = []
+
+  // 2. Proposed panel layout.
+  if (p.layout) {
+    const legend = p.layout.legend
+      .map(
+        (l) =>
+          `<span class="legend-item"><span class="swatch" style="background:${l.color}"></span>` +
+          `${esc(l.plane_label)} · ${l.panels_count} panels</span>`,
+      )
+      .join('')
+    parts.push(
+      overlayFigure({
+        svg: p.layout.svg,
+        staticMapUrl: input.staticMapUrl,
+        heading: 'Proposed panel layout',
+        legendHtml: legend,
+        captionText: SOLAR_LAYOUT_COPY,
+      }),
+    )
+  }
+
+  // 3. Panel strings & component markings.
+  if (p.strings) {
+    const legend = p.strings.strings
+      .map(
+        (s) =>
+          `<span class="legend-item"><span class="swatch" style="background:${s.color}"></span>` +
+          `S${s.string_number} · ${s.panels_count} panels</span>`,
+      )
+      .join('')
+    parts.push(
+      overlayFigure({
+        svg: p.strings.svg,
+        staticMapUrl: input.staticMapUrl,
+        heading: 'Panel strings & component markings',
+        legendHtml: legend,
+        captionText: p.strings.caption,
+      }),
+    )
+  }
+
+  // 4. System details — production chart + assumed values.
+  if (p.charts.monthlyProduction) {
+    parts.push(chartFigure('Monthly production (modelled)', p.charts.monthlyProduction))
+  }
+  if (p.assumed_values.length > 0) {
+    parts.push('<h2>Assumed values</h2>' + statGrid(p.assumed_values))
+  }
+
+  // 5. Utility costs.
+  if (p.charts.utilityCosts) {
+    parts.push(chartFigure('Utility costs — before & with solar', p.charts.utilityCosts))
+  }
+
+  // 6. 20-year financial summary.
+  if (p.financial) {
+    const f = p.financial
+    const payback =
+      f.payback_years_low != null && f.payback_years_high != null
+        ? `${Math.round(f.payback_years_low)}–${Math.round(f.payback_years_high)} yrs`
+        : 'See installer'
+    parts.push(
+      '<h2>20-year financial summary</h2>' +
+        statGrid([
+          {
+            label: 'Net present value',
+            value: aud0(f.npv_aud),
+            hint: `Discounted at ${(f.assumptions.discount_rate_pct * 100).toFixed(1)}%`,
+          },
+          { label: 'Payback', value: payback },
+          {
+            label: 'Total ROI (20 yr)',
+            value: `${f.total_roi_pct.toLocaleString('en-AU')}%`,
+            hint: `${aud0(f.total_savings_20yr_aud)} cumulative`,
+          },
+          {
+            label: 'IRR',
+            value: f.irr_pct != null ? `${f.irr_pct.toLocaleString('en-AU')}%` : 'See installer',
+          },
+        ]) +
+        `<p class="note">${esc(SOLAR_PROJECTION_COPY)}</p>`,
+    )
+  }
+
+  // 7. Financial analysis charts.
+  if (p.charts.cumulativeSavings) {
+    parts.push(chartFigure('Cumulative savings (25-year projection)', p.charts.cumulativeSavings))
+  }
+  if (p.charts.monthlyBill) {
+    parts.push(chartFigure('Monthly bill comparison', p.charts.monthlyBill))
+  }
+
+  // 8. Environmental analysis.
+  if (p.environmental) {
+    const env = p.environmental
+    parts.push(
+      '<h2>Environmental analysis</h2>' +
+        statGrid([
+          { label: 'CO₂e avoided / yr', value: `${env.tonnes_co2_per_year.toLocaleString('en-AU')} t` },
+          { label: 'CO₂e over 20 yrs', value: `${env.tonnes_co2_20yr.toLocaleString('en-AU')} t` },
+          { label: 'Like planting', value: `${env.trees_equiv_per_year.toLocaleString('en-AU')} trees/yr` },
+          { label: 'Like not driving', value: `${env.km_driven_equiv_per_year.toLocaleString('en-AU')} km/yr` },
+        ]) +
+        `<p class="note">${esc(SOLAR_ENVIRONMENTAL_COPY)}</p>`,
+    )
+  }
+
+  return parts.join('\n')
 }
 
 export function buildSolarQuoteReportHtml(input: SolarReportInput): string {
@@ -128,6 +302,22 @@ export function buildSolarQuoteReportHtml(input: SolarReportInput): string {
   li { margin-bottom: 3px; }
   .note { color: #6b7683; font-size: 11px; }
   footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #dde3e9; font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.15em; text-transform: uppercase; color: #6b7683; }
+  /* ── Premium proposal sections (spec 2026-06-12 §4.4) ─────────── */
+  .figure { border: 1px solid #dde3e9; page-break-inside: avoid; }
+  .overlay-frame { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #16202b; overflow: hidden; }
+  .overlay-svg { position: absolute; inset: 0; }
+  .overlay-svg svg { width: 100%; height: 100%; }
+  .chart { padding: 8px; }
+  .chart svg { width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 6px 10px; border-top: 1px solid #dde3e9; }
+  .legend-item { font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #3a4654; display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { display: inline-block; width: 8px; height: 8px; }
+  .fig-caption { padding: 6px 10px; border-top: 1px solid #dde3e9; color: #6b7683; font-size: 9.5px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #dde3e9; border: 1px solid #dde3e9; page-break-inside: avoid; }
+  .stat { background: #f7f8fa; padding: 8px 10px; }
+  .stat-label { font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: #6b7683; }
+  .stat-value { font-size: 14px; font-weight: 800; margin-top: 2px; }
+  .stat-hint { font-size: 8.5px; color: #6b7683; margin-top: 1px; }
 </style>
 </head>
 <body>
@@ -143,6 +333,8 @@ export function buildSolarQuoteReportHtml(input: SolarReportInput): string {
     sized to your roof and capped to your network's export limit. Prices are net of the STC rebate
     and include GST.
   </div>
+
+  ${premiumSections(input)}
 
   <h2>Your options</h2>
   ${tiers}

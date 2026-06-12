@@ -617,6 +617,24 @@ export type SolarEstimateContext = {
    * charts fall back to config defaults labelled "modelled".
    */
   quarterly_bill_aud?: number | null
+  /**
+   * Pylon STC cross-check result (premium quote §4.5), stamped by the
+   * estimate route's after() when PYLON_ENABLED. Display-only ("STC
+   * count verified against Pylon ✓" in the assumed-values table) — the
+   * deterministic engine remains the source of every certificate count.
+   * Shape: lib/solar/stc-crosscheck.ts PylonStcCheck.
+   */
+  pylon_stc_check?: {
+    checked_at: string
+    verified: boolean
+    tiers: Array<{
+      tier: 'good' | 'better' | 'best'
+      our_certificates: number
+      pylon_stcs: number | null
+      delta: number | null
+      flag: string | null
+    }>
+  } | null
 }
 
 /**

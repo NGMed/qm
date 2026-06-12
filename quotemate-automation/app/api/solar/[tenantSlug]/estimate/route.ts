@@ -23,6 +23,7 @@ import { notifySolarEstimate } from '@/lib/solar/notify'
 import { runSolarEstimate } from '@/lib/solar/intake'
 import { loadSolarConfig } from '@/lib/solar/config'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { runPylonStcCrossCheck } from '@/lib/solar/stc-crosscheck'
 import { geocodeAddress } from '@/lib/solar/geocode'
 import { validateSolarAddress } from '@/lib/solar/address-validation'
 import { fetchSolarDataLayers } from '@/lib/solar/data-layers'
@@ -175,6 +176,38 @@ export async function POST(
   // here produced mismatched figures in pilot (SMS "4.8 kW" vs the
   // linked page's "6.0 kW").
   const headline = estimate.price.tiers[estimate.price.tiers.length - 1]
+
+  // ── Pylon STC cross-check (premium quote §4.5, behind PYLON_ENABLED).
+  // Compares our deterministic certificate counts against Pylon's
+  // official calculator. |Δ| > 1 cert appends a guardrail flag, which
+  // the confirm gate already turns into "cannot confirm until
+  // re-drafted clean". Pylon down ⇒ null ⇒ nothing changes. Runs in
+  // after() so the customer response is never blocked.
+  after(async () => {
+    try {
+      const result = await runPylonStcCrossCheck({ estimate })
+      if (!result) return
+      const mergedFlags = [...estimate.guardrail_flags, ...result.flags]
+      const updatedEstimate = {
+        ...estimate,
+        guardrail_flags: mergedFlags,
+        context: { ...estimate.context, pylon_stc_check: result.check },
+      }
+      await supabase
+        .from('solar_estimates')
+        .update({ guardrail_flags: mergedFlags, estimate: updatedEstimate })
+        .eq('public_token', estimate.token)
+      if (result.flags.length > 0) {
+        console.warn('[solar/estimate] Pylon STC mismatch flagged', result.flags)
+      }
+    } catch (e) {
+      console.warn(
+        '[solar/estimate] Pylon STC cross-check skipped (non-fatal)',
+        e instanceof Error ? e.message : e,
+      )
+    }
+  })
+
   after(async () => {
     await notifySolarEstimate({
       tenant: {

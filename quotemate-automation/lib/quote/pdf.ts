@@ -18,6 +18,12 @@ import { buildQuoteReportHtml, type QuoteReportTier } from './report-html'
 import { buildRoofQuoteReportHtml } from '@/lib/roofing/report-html'
 import type { MultiRoofQuote } from '@/lib/roofing/types'
 import { buildSolarQuoteReportHtml } from '@/lib/solar/report-html'
+import {
+  buildSolarPremiumQuote,
+  solarPremiumQuoteEnabled,
+  type SolarPremiumQuote,
+} from '@/lib/solar/premium-quote'
+import { loadSolarConfig } from '@/lib/solar/config'
 import type { SolarEstimate } from '@/lib/solar/types'
 
 const BUCKET = 'quote-pdfs'
@@ -249,11 +255,23 @@ export async function ensureSolarQuotePdf(
     if (!estimate) return null
     const businessName = await tenantBusinessName(row.tenant_id)
 
+    // Premium proposal sections (spec 2026-06-12 §4.4), behind the same
+    // SOLAR_PREMIUM_QUOTE flag the page uses. theme 'light' = print
+    // palette. The PDF only generates for confirmed, non-inspection
+    // estimates, so the money sections are safely renderable.
+    let premium: SolarPremiumQuote | null = null
+    if (solarPremiumQuoteEnabled(process.env.SOLAR_PREMIUM_QUOTE)) {
+      const config = await loadSolarConfig(supabase())
+      premium = buildSolarPremiumQuote({ estimate, config, theme: 'light' })
+    }
+
     const html = buildSolarQuoteReportHtml({
       businessName,
       address: row.address ?? '',
       estimate,
       quoteViewUrl: `${APP_URL}/q/solar/${publicToken}`,
+      premium,
+      staticMapUrl: `${APP_URL}/api/solar/q/${publicToken}/static-map`,
     })
     const pdf = await renderPdfFromHtml(html)
     const path = await storePdf(`solar/${publicToken}.pdf`, pdf)
