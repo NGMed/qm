@@ -313,7 +313,11 @@ export function applySolarInsight(
     pitch_degrees: deg,
     pitch_source: 'measured',
     roof_segment_count: insight.segmentCount,
-    imagery_quality: insight.imageryQuality,
+    // The roofing money path never opts into expanded coverage — BASE
+    // (satellite-derived) imagery degrades to LOW at this boundary so the
+    // existing roofing quality gates treat it as below-floor.
+    imagery_quality:
+      insight.imageryQuality === 'BASE' ? 'LOW' : insight.imageryQuality,
     imagery_date: insight.imageryDate,
   }
 

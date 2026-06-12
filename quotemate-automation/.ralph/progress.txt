@@ -11,3 +11,12 @@ Completion promise: "All tests pass"
 - Pre-existing uncommitted worktree changes (deleted pylon/opensolar tab files) must NOT be staged in story commits — stage explicitly.
 
 ## History
+- S1 (d9e2cf7): sunshineQuantiles/maxSunshineHours/maxArrayArea/panelLifetime into SolarRoofFacts + sun-score module. 94 tests green.
+- S2 (f03e3ff): geotiff dep; decodeSolarGeoTiff + raster-analysis (masked means, monthly weights, hourly-shade bitmask analysis, DSM height) + flux-render PNG. 29 tests green.
+- S3 (e1b3e1d): fetchSolarDataLayersWithUrls (URLs in-memory only) + applySolarSunAssets after()-job wired into estimate + redraft routes; context.sun merged into estimate jsonb.
+- S4 (641436f): sun-view model, Sun & shade section on /q/solar/[token] + PDF, /api/solar/q/[token]/flux-heatmap route, RGB composite heatmap, measured monthly production chart.
+- S5 (6637449): SOLAR_EXPANDED_COVERAGE flag — experiments=EXPANDED_COVERAGE param + BASE imagery admitted (wide band) behind the flag only. Roofing boundary coerces BASE→LOW.
+- S6: full gates — vitest 3070 passed/1 skipped (live test), eslint 0 errors in touched files (repo has 874 pre-existing errors elsewhere), next build green after BASE→LOW coercion fix.
+
+## Completion promise check
+"All tests pass" — npm test: 3070 passed, 0 failed (1 skipped = .live test requiring real API keys, skipped by design).

@@ -15,10 +15,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import {
-  fetchSolarDataLayersWithUrls,
-  type SolarDataLayersUrls,
-} from './data-layers'
+import { fetchSolarDataLayersWithUrls } from './data-layers'
 import { decodeSolarGeoTiff, type SolarRaster } from './geotiff'
 import {
   analyzeHourlyShade,
