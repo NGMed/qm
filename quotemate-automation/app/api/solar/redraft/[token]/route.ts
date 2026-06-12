@@ -23,6 +23,7 @@ import { loadSolarConfig } from '@/lib/solar/config'
 import { geocodeAddress } from '@/lib/solar/geocode'
 import { validateSolarAddress } from '@/lib/solar/address-validation'
 import { fetchSolarDataLayers } from '@/lib/solar/data-layers'
+import { applySolarSunAssets } from '@/lib/solar/sun-assets'
 import { resolveNetworkFromPostcode } from '@/lib/solar/network-lookup'
 import { redraftEligibility, reconstructSolarInputs } from '@/lib/solar/redraft'
 import { applyPylonStcCrossCheck } from '@/lib/solar/pylon-aftercheck'
@@ -199,6 +200,14 @@ export async function POST(
   // Re-run the OpenSolar supplements (hardware + pricing cross-check)
   // against the fresh numbers too — same after() semantics.
   after(() => applyOpenSolarSupplement(supabase, redrafted))
+
+  // Regenerate the sun & shade assets against the fresh estimate (the
+  // redraft wiped context.sun with the rest of the jsonb). Google path
+  // only; best-effort.
+  if (redrafted.coverage_source === 'google' && redrafted.context.location) {
+    const location = redrafted.context.location
+    after(() => applySolarSunAssets(supabase, { publicToken: row.public_token as string, location }))
+  }
 
   return Response.json({
     ok: true,

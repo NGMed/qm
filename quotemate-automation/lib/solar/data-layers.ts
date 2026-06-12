@@ -99,6 +99,87 @@ export async function fetchSolarDataLayers(
 }
 
 /**
+ * The signed, short-lived geoTiff:get URLs from a dataLayers response.
+ * IN-MEMORY ONLY — never persisted (they expire and would leak the
+ * response shape into jsonb). Used by sun-assets.ts immediately after
+ * the fetch to download + decode the rasters.
+ */
+export type SolarDataLayersUrls = {
+  dsm: string | null
+  rgb: string | null
+  mask: string | null
+  annual_flux: string | null
+  monthly_flux: string | null
+  hourly_shade: string[]
+}
+
+/** PURE — extract the GeoTIFF URLs from a dataLayers body. */
+export function parseDataLayersUrls(body: unknown): SolarDataLayersUrls {
+  const root = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
+  const url = (v: unknown): string | null =>
+    typeof v === 'string' && v.length > 0 ? v : null
+  return {
+    dsm: url(root.dsmUrl),
+    rgb: url(root.rgbUrl),
+    mask: url(root.maskUrl),
+    annual_flux: url(root.annualFluxUrl),
+    monthly_flux: url(root.monthlyFluxUrl),
+    hourly_shade: Array.isArray(root.hourlyShadeUrls)
+      ? root.hourlyShadeUrls.filter((u): u is string => typeof u === 'string' && u.length > 0)
+      : [],
+  }
+}
+
+/**
+ * Best-effort fetch returning BOTH the compact summary (persisted) and
+ * the signed GeoTIFF URLs (in-memory, for immediate download). Same
+ * never-throws contract as fetchSolarDataLayers.
+ */
+export async function fetchSolarDataLayersWithUrls(
+  location: LatLng,
+  opts: SolarDataLayersOpts,
+): Promise<{ summary: SolarDataLayersSummary; urls: SolarDataLayersUrls | null }> {
+  const radius = opts.radiusMeters ?? DEFAULT_RADIUS_METERS
+  const pixelSize = opts.pixelSizeMeters ?? DEFAULT_PIXEL_SIZE_METERS
+  const view = opts.view ?? DEFAULT_VIEW
+  const requiredQuality = opts.requiredQuality ?? DEFAULT_REQUIRED_QUALITY
+  const meta = { radius, pixelSize, view }
+
+  if (!opts.apiKey) {
+    return { summary: skipped(meta, 'Solar dataLayers API key is not configured.'), urls: null }
+  }
+
+  const base = opts.baseUrl ?? DEFAULT_BASE_URL
+  const url =
+    `${base}?location.latitude=${encodeURIComponent(location.lat.toFixed(7))}` +
+    `&location.longitude=${encodeURIComponent(location.lng.toFixed(7))}` +
+    `&radiusMeters=${encodeURIComponent(String(radius))}` +
+    `&view=${encodeURIComponent(view)}` +
+    `&requiredQuality=${encodeURIComponent(requiredQuality)}` +
+    `&pixelSizeMeters=${encodeURIComponent(String(pixelSize))}` +
+    `&key=${encodeURIComponent(opts.apiKey)}`
+  const fetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init))
+
+  let res: Response
+  try {
+    res = await fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json' } })
+  } catch (e) {
+    return { summary: unavailable(meta, e instanceof Error ? e.message : String(e)), urls: null }
+  }
+  if (!res.ok) {
+    return { summary: unavailable(meta, `Solar dataLayers API HTTP ${res.status}.`), urls: null }
+  }
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    return { summary: unavailable(meta, 'Solar dataLayers API returned non-JSON.'), urls: null }
+  }
+  const summary = parseDataLayersResponse(body, meta)
+  return { summary, urls: summary.status === 'available' ? parseDataLayersUrls(body) : null }
+}
+
+/**
  * PURE — map a dataLayers response body onto SolarDataLayersSummary. The
  * GeoTIFF URLs are reduced to booleans (present/absent); only imagery
  * metadata + layer availability are kept.

@@ -28,6 +28,7 @@ import { applyOpenSolarSupplement } from '@/lib/solar/opensolar-supplement'
 import { geocodeAddress } from '@/lib/solar/geocode'
 import { validateSolarAddress } from '@/lib/solar/address-validation'
 import { fetchSolarDataLayers } from '@/lib/solar/data-layers'
+import { applySolarSunAssets } from '@/lib/solar/sun-assets'
 import { resolveNetworkFromPostcode } from '@/lib/solar/network-lookup'
 
 export const dynamic = 'force-dynamic'
@@ -192,6 +193,16 @@ export async function POST(
   // a cross-check guardrail. Never changes a price; OpenSolar down ⇒
   // the row is bit-identical. Runs in after() like the Pylon checks.
   after(() => applyOpenSolarSupplement(supabase, estimate))
+
+  // ── Sun & shade assets (full-exploitation build 2026-06-13): download
+  // the dataLayers GeoTIFFs, render the roof irradiance heatmap, derive
+  // the shade-free window / monthly weights / building height, cache the
+  // PNG and merge context.sun into the persisted estimate. Google-covered
+  // estimates only (manual path has no imagery). Best-effort in after().
+  if (estimate.coverage_source === 'google' && estimate.context.location) {
+    const location = estimate.context.location
+    after(() => applySolarSunAssets(supabase, { publicToken: estimate.token, location }))
+  }
 
   after(async () => {
     await notifySolarEstimate({

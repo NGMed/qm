@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { fetchSolarDataLayers, parseDataLayersResponse } from './data-layers'
+import {
+  fetchSolarDataLayers,
+  fetchSolarDataLayersWithUrls,
+  parseDataLayersResponse,
+  parseDataLayersUrls,
+} from './data-layers'
 
 const META = { radius: 50, pixelSize: 0.5, view: 'FULL_LAYERS' }
 
@@ -105,5 +110,55 @@ describe('fetchSolarDataLayers', () => {
       { apiKey: 'KEY', fetchImpl },
     )
     expect(s.status).toBe('unavailable')
+  })
+})
+
+describe('parseDataLayersUrls', () => {
+  it('extracts every GeoTIFF URL from a full body', () => {
+    const u = parseDataLayersUrls(OK_BODY)
+    expect(u.dsm).toContain('id=dsm')
+    expect(u.rgb).toContain('id=rgb')
+    expect(u.mask).toContain('id=mask')
+    expect(u.annual_flux).toContain('id=annual')
+    expect(u.monthly_flux).toContain('id=monthly')
+    expect(u.hourly_shade.length).toBe(12)
+  })
+
+  it('nulls missing layers and tolerates junk', () => {
+    const u = parseDataLayersUrls({ maskUrl: '', hourlyShadeUrls: [1, null, 'https://ok'] })
+    expect(u.mask).toBeNull()
+    expect(u.dsm).toBeNull()
+    expect(u.hourly_shade).toEqual(['https://ok'])
+    expect(parseDataLayersUrls(null).annual_flux).toBeNull()
+  })
+})
+
+describe('fetchSolarDataLayersWithUrls', () => {
+  it('returns the summary AND the in-memory URLs on success', async () => {
+    const fetchImpl = async () => new Response(JSON.stringify(OK_BODY), { status: 200 })
+    const { summary, urls } = await fetchSolarDataLayersWithUrls(
+      { lat: -33.8688, lng: 151.2093 },
+      { apiKey: 'KEY', fetchImpl },
+    )
+    expect(summary.status).toBe('available')
+    expect(urls?.annual_flux).toContain('id=annual')
+    // The PERSISTED summary still never carries the signed URLs.
+    expect(JSON.stringify(summary)).not.toContain('geoTiff')
+  })
+
+  it('returns null URLs on skip / failure', async () => {
+    const noKey = await fetchSolarDataLayersWithUrls(
+      { lat: 1, lng: 2 },
+      { apiKey: undefined },
+    )
+    expect(noKey.summary.status).toBe('skipped')
+    expect(noKey.urls).toBeNull()
+
+    const failed = await fetchSolarDataLayersWithUrls(
+      { lat: 1, lng: 2 },
+      { apiKey: 'KEY', fetchImpl: async () => new Response('x', { status: 500 }) },
+    )
+    expect(failed.summary.status).toBe('unavailable')
+    expect(failed.urls).toBeNull()
   })
 })

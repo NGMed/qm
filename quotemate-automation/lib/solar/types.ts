@@ -742,6 +742,36 @@ export type SolarEstimateContext = {
       pushed_at: string
     } | null
   } | null
+  /**
+   * Sun & shade analysis derived from Google Solar dataLayers GeoTIFFs
+   * (full-exploitation build 2026-06-13). Stamped by the estimate route's
+   * after() via lib/solar/sun-assets.ts. Display/insight only — never an
+   * input to sizing or pricing. Null/absent when generation is off, the
+   * layers are unavailable, or the estimate predates the build.
+   */
+  sun?: {
+    generated_at: string
+    /** intake-photos storage path of the annual-flux roof heatmap PNG. */
+    flux_image_path: string | null
+    /** Normalisation bounds of the heatmap, kWh/kW/year. */
+    min_flux: number | null
+    max_flux: number | null
+    /** Monthly flux means normalised to weights summing to 1 (Jan–Dec).
+     *  Render-time: monthly_kwh = annual_kwh_ac × weight. */
+    monthly_production_weights: number[] | null
+    /** Hourly-shade analysis (raster-analysis.ts SolarShadeAnalysis). */
+    shade: {
+      hourly_sun_fraction: number[]
+      monthly_midday_sun_fraction: number[]
+      shade_free_start_hour: number | null
+      shade_free_end_hour: number | null
+      shade_free_hours: number
+    } | null
+    /** DSM-derived building height + storeys hint (informational). */
+    building_height: { height_m: number; storeys_hint: number } | null
+    /** Imagery date the layers were computed from (dataLayers metadata). */
+    imagery_date: string | null
+  } | null
 }
 
 /**
