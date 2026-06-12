@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { after } from 'next/server'
 import { runEstimation } from '@/lib/estimate/run'
 import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { dispatchQuoteWithPdf } from '@/lib/sms/send-quote-pdf'
 import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { sendWhatsApp } from '@/lib/sms/twilio'
 import {
@@ -645,22 +646,16 @@ export async function POST(req: Request) {
           to: callerNumber,
           from: fromNumber ?? '(default TWILIO_PHONE_NUMBER)',
         })
-        // Best-effort MMS attachment of the quote PDF — dispatch retries
-        // as a plain SMS automatically when the carrier rejects media,
-        // and the body always carries the download link.
-        let pdfMediaUrl: string | undefined
-        if (quotePdfPath) {
-          try {
-            pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
-          } catch {
-            pdfMediaUrl = undefined
-          }
-        }
-        const result = await dispatchQuoteMessage({
+        // Best-effort MMS attachment of the quote PDF — the shared helper
+        // signs the media URL (best-effort) and dispatch retries as a plain
+        // SMS automatically when the carrier rejects media; the body always
+        // carries the download link.
+        const result = await dispatchQuoteWithPdf({
           to: callerNumber,
           text: body,
           from: fromNumber,
-          ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
+          pdfPath: quotePdfPath,
+          signMediaUrl: signQuotePdfUrl,
         })
 
         if (result.ok) {

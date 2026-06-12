@@ -53,6 +53,24 @@ export type PricedLine = {
   trace: PriceTrace
 }
 
+/** Catalogue columns the tradie fills when adding an unmatched take-off item
+ *  to their custom assemblies straight from the priced BOM. The item's name
+ *  and count come from the line itself; price + labour are the required
+ *  catalogue columns the take-off can't infer (so they're never guessed). */
+export type CatalogueDraft = {
+  priceExGst: number
+  labourHours: number
+  category?: string
+}
+
+/** Persists an unmatched item into tenant_custom_assemblies (POST
+ *  /api/tenant/services) then re-prices. Resolves to an inline result so the
+ *  chip can show success / "already in your catalogue" / an error in place. */
+export type AddToCatalogueFn = (
+  item: { type: string; count: number },
+  draft: CatalogueDraft,
+) => Promise<{ ok: boolean; error?: string }>
+
 export type PricedBom = {
   lines: PricedLine[]
   unmatched: { type: string; count: number }[]

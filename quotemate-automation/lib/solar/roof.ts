@@ -21,6 +21,7 @@ import type {
   SolarRoofPlane,
   SolarOrientation,
   SolarPanelConfig,
+  SolarPanelPlacement,
   SolarImageryQuality,
   SolarConfig,
 } from './types'
@@ -104,10 +105,68 @@ export function normaliseSolarRoofFacts(
     ? round1(rawPitch)
     : null
 
+  // ── Premium-quote fields (spec 2026-06-12 §4.1) ────────────────────
+
+  // Per-panel placements: solarPotential.solarPanels[] — Google orders by
+  // energy, so the first N entries are the N-panel config. Each entry is
+  // guarded; malformed entries are dropped rather than zeroed.
+  const panels: SolarPanelPlacement[] = Array.isArray(sp.solarPanels)
+    ? sp.solarPanels
+        .map((p): SolarPanelPlacement | null => {
+          if (!p || typeof p !== 'object') return null
+          const obj = p as Record<string, unknown>
+          const center = obj.center as Record<string, unknown> | undefined
+          const lat = numberOr(center?.latitude, NaN)
+          const lng = numberOr(center?.longitude, NaN)
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+          return {
+            center: { lat, lng },
+            orientation: obj.orientation === 'PORTRAIT' ? 'PORTRAIT' : 'LANDSCAPE',
+            segment_index: Math.max(0, Math.floor(numberOr(obj.segmentIndex, 0))),
+            yearly_energy_dc_kwh: round1(numberOr(obj.yearlyEnergyDcKwh, 0)),
+          }
+        })
+        .filter((p): p is SolarPanelPlacement => p !== null)
+    : []
+
+  // Per-plane panel distribution, DERIVED by counting solarPanels[] per
+  // segment_index. (The real Google API does not put panelsCount on
+  // roofSegmentStats — per-config counts live in roofSegmentSummaries —
+  // so deriving from the placements keeps the count consistent with the
+  // drawn layout by construction.) Null when no geometry exists.
+  const planesWithCounts: SolarRoofPlane[] = planes.map((plane, i) => ({
+    ...plane,
+    panels_count:
+      panels.length > 0 ? panels.filter((p) => p.segment_index === i).length : null,
+  }))
+
+  // Physical panel dimensions (drive drawn rectangle size). Null when absent.
+  const heightM = numberOr(sp.panelHeightMeters, NaN)
+  const widthM = numberOr(sp.panelWidthMeters, NaN)
+  const panel_size_m =
+    Number.isFinite(heightM) && heightM > 0 && Number.isFinite(widthM) && widthM > 0
+      ? { height_m: heightM, width_m: widthM }
+      : null
+
+  // Grid CO₂ offset factor → environmental section. Null when absent.
+  const rawCarbon = numberOr(sp.carbonOffsetFactorKgPerMwh, NaN)
+  const carbon_offset_factor_kg_per_mwh =
+    Number.isFinite(rawCarbon) && rawCarbon > 0 ? round1(rawCarbon) : null
+
+  // wholeRoofStats.areaMeters2 — validation cross-check only (guardrails
+  // checkRoofAreaConsistency reads it; never blocks).
+  const wholeStats =
+    sp.wholeRoofStats && typeof sp.wholeRoofStats === 'object'
+      ? (sp.wholeRoofStats as Record<string, unknown>)
+      : {}
+  const rawWholeArea = numberOr(wholeStats.areaMeters2, NaN)
+  const whole_roof_area_m2 =
+    Number.isFinite(rawWholeArea) && rawWholeArea > 0 ? round1(rawWholeArea) : null
+
   return {
     source: 'google',
     usable_area_m2,
-    planes,
+    planes: planesWithCounts,
     segment_count: insights.segmentCount,
     primary_orientation,
     mean_pitch_degrees,
@@ -118,6 +177,10 @@ export function normaliseSolarRoofFacts(
     polygon_geojson: null,
     imagery_quality: coverage.imagery_quality as SolarImageryQuality,
     imagery_date: coverage.imagery_date,
+    panels,
+    panel_size_m,
+    carbon_offset_factor_kg_per_mwh,
+    whole_roof_area_m2,
   }
 }
 

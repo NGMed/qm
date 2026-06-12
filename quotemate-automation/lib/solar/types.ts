@@ -143,6 +143,30 @@ export type SolarRoofPlane = {
   area_m2: number
   /** Coarse orientation bucket derived from azimuth (drives derate hints). */
   orientation: SolarOrientation
+  /**
+   * Panels placeable on this plane, derived by counting solarPanels[] per
+   * segment_index (premium quote). Null when per-panel geometry is absent
+   * (manual fallback / pre-premium estimates).
+   */
+  panels_count?: number | null
+}
+
+/**
+ * One concrete panel placement from `solarPotential.solarPanels[]` —
+ * the per-panel geometry behind the deterministic layout + string
+ * overlays (premium quote spec §4.1). Google orders this array by
+ * energy production; the first N entries correspond to the N-panel
+ * config, so render-time consumers slice to the headline tier's count.
+ */
+export type SolarPanelPlacement = {
+  /** Panel centre coordinate. */
+  center: LatLng
+  /** Physical mounting orientation of the rectangle. */
+  orientation: 'LANDSCAPE' | 'PORTRAIT'
+  /** Index into SolarRoofFacts.planes / roofSegmentStats. */
+  segment_index: number
+  /** Google's annual DC estimate for this single panel, kWh/yr. */
+  yearly_energy_dc_kwh: number
 }
 
 /** Coarse roof-plane orientation — also the manual-fallback declared field. */
@@ -196,6 +220,19 @@ export type SolarRoofFacts = {
   imagery_quality: SolarImageryQuality | null
   /** ISO YYYY-MM-DD the imagery was captured. Null on manual. */
   imagery_date: string | null
+  // ── Premium-quote fields (spec 2026-06-12). OPTIONAL because estimates
+  //    persisted before the premium quote lack them — every consumer must
+  //    tolerate undefined (degradation matrix §4.6). Manual fallback emits
+  //    the empty/null values explicitly. ──────────────────────────────
+  /** Per-panel placements from solarPotential.solarPanels[]. Empty/absent
+   *  on the manual path — layout/string overlays are then omitted. */
+  panels?: SolarPanelPlacement[]
+  /** Physical panel dimensions Google assumed, metres. Null when absent. */
+  panel_size_m?: { height_m: number; width_m: number } | null
+  /** Grid CO₂ offset factor, kg per MWh (drives the environmental section). */
+  carbon_offset_factor_kg_per_mwh?: number | null
+  /** Google wholeRoofStats.areaMeters2 — validation cross-check only. */
+  whole_roof_area_m2?: number | null
 }
 
 // ── Coverage gate (coverage.ts) ──────────────────────────────────────
@@ -529,6 +566,23 @@ export type SolarConfig = {
    * is config-driven rather than a code edit. Default: 6.
    */
   complex_roof_min_segments?: number
+  // ── Premium-quote config (spec 2026-06-12) — all optional with guarded
+  //    consumer defaults, versioned here like every other constant. ────
+  /** Annual electricity price escalation fraction for the 20-year
+   *  projection (financial-summary.ts). Default: 0.03. */
+  price_escalation_pct_per_year?: number
+  /** Discount rate for the NPV calculation. Default: 0.05. */
+  discount_rate_pct?: number
+  /** Max panels per indicative string run in string-overlay.ts.
+   *  Default: 14. */
+  string_max_panels?: number
+  /** Typical household consumption used for MODELLED utility costs when
+   *  no bill is supplied, kWh/yr. Default: 6000. */
+  typical_household_kwh_per_year?: number
+  /** CO₂ equivalence constants for the environmental section (cited in
+   *  the assumptions table). Defaults: 15 tree-years/tonne, 4000 km/tonne. */
+  co2_equiv_trees_per_tonne?: number
+  co2_equiv_km_driven_per_tonne?: number
 }
 
 /** Result of validating config freshness before a publish (spec §5, §7). */
@@ -556,6 +610,13 @@ export type SolarEstimateContext = {
   location?: LatLng | null
   /** Best-effort Google Address Validation result for the input address. */
   address_validation?: SolarAddressValidationInsight | null
+  /**
+   * Customer's declared quarterly electricity bill, AUD (premium quote
+   * §4.1). Optional form input — when present, utility costs are personal
+   * (household_annual_kwh = bill × 4 ÷ retail rate); when absent the
+   * charts fall back to config defaults labelled "modelled".
+   */
+  quarterly_bill_aud?: number | null
 }
 
 /**

@@ -136,6 +136,13 @@ export function buildManualRoofFacts(
     polygon_geojson: null,
     imagery_quality: null,
     imagery_date: null,
+    // Premium-quote fields: no per-panel geometry exists on the manual
+    // path — layout/string overlays and the environmental section are
+    // omitted downstream (degradation matrix §4.6).
+    panels: [],
+    panel_size_m: null,
+    carbon_offset_factor_kg_per_mwh: null,
+    whole_roof_area_m2: null,
   }
 }
 

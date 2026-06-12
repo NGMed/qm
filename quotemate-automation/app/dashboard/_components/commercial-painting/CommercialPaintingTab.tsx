@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Eye,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -17,7 +18,9 @@ import {
   RefreshCw,
   Trash2,
   UploadCloud,
+  X,
 } from 'lucide-react'
+import { PlanOverlay } from '../PlanOverlay'
 import type {
   PaintDocType,
   PaintTakeoffItem,
@@ -103,6 +106,17 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
   const [errMsg, setErrMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
+  // ── In-tab document viewer (shared PlanOverlay for PDFs, <img> for
+  // photos). Files are fetched once with the auth header and cached for
+  // the session — they never round-trip again on page changes.
+  const [viewer, setViewer] = useState<
+    | { uploadId: string; filename: string; kind: 'pdf'; file: File }
+    | { uploadId: string; filename: string; kind: 'image'; objectUrl: string }
+    | null
+  >(null)
+  const [viewerLoading, setViewerLoading] = useState<string | null>(null)
+  const fileCache = useRef(new Map<string, { kind: 'pdf'; file: File } | { kind: 'image'; objectUrl: string }>())
+
   const authed = useCallback(
     (init?: RequestInit): RequestInit => ({
       ...init,
@@ -150,6 +164,7 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
       setJobName(body.run.job_name ?? '')
       setSiteAddress(body.run.site_address ?? '')
       setSavedQuote(null)
+      setViewer(null)
       setUploads(
         (body.uploads as Array<UploadRow & { doc_type: string | null }>).map((u) => ({
           ...u,
@@ -238,6 +253,38 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
     })).catch(() => {})
   }
 
+  async function openViewer(upload: UploadRow) {
+    if (viewer?.uploadId === upload.id) {
+      setViewer(null) // toggle off
+      return
+    }
+    const cached = fileCache.current.get(upload.id)
+    if (cached) {
+      setViewer({ uploadId: upload.id, filename: upload.filename, ...cached })
+      return
+    }
+    setViewerLoading(upload.id)
+    setErrMsg(null)
+    try {
+      const res = await fetch(`${API}/upload/${upload.id}/file`, authed())
+      if (!res.ok) {
+        setErrMsg('Could not load that document. Please try again.')
+        return
+      }
+      const blob = await res.blob()
+      const entry =
+        blob.type === 'application/pdf'
+          ? ({ kind: 'pdf', file: new File([blob], upload.filename, { type: blob.type }) } as const)
+          : ({ kind: 'image', objectUrl: URL.createObjectURL(blob) } as const)
+      fileCache.current.set(upload.id, entry)
+      setViewer({ uploadId: upload.id, filename: upload.filename, ...entry })
+    } catch {
+      setErrMsg('Could not load that document. Please try again.')
+    } finally {
+      setViewerLoading(null)
+    }
+  }
+
   async function removeUpload(uploadId: string) {
     try {
       const res = await fetch(`${API}/upload/${uploadId}`, authed({ method: 'DELETE' }))
@@ -254,6 +301,8 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
         return
       }
       setUploads((prev) => prev.filter((u) => u.id !== uploadId))
+      fileCache.current.delete(uploadId)
+      setViewer((v) => (v?.uploadId === uploadId ? null : v))
     } catch {
       setErrMsg('Removing the document failed. Please try again.')
     }
@@ -390,6 +439,7 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
     setExtraction(null)
     setBom(null)
     setSavedQuote(null)
+    setViewer(null)
     setErrMsg(null)
   }
 
@@ -508,6 +558,19 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
                     </select>
                     <button
                       type="button"
+                      onClick={() => void openViewer(u)}
+                      aria-label={`View ${u.filename}`}
+                      aria-pressed={viewer?.uploadId === u.id}
+                      className={`cursor-pointer p-1 transition-colors hover:text-accent ${
+                        viewer?.uploadId === u.id ? 'text-accent' : 'text-text-dim'
+                      }`}
+                    >
+                      {viewerLoading === u.id
+                        ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                        : <Eye className="h-4 w-4" aria-hidden />}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void removeUpload(u.id)}
                       aria-label={`Remove ${u.filename}`}
                       className="cursor-pointer p-1 text-text-dim transition-colors hover:text-warning"
@@ -517,6 +580,36 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
                   </li>
                 ))}
               </ul>
+            )}
+
+            {/* In-tab document viewer — the Estimator's PlanOverlay for
+                PDFs (full-page browsing), plain image for site photos. */}
+            {viewer && (
+              <div className="mt-4">
+                <div className="flex items-center gap-3 border border-b-0 border-ink-line bg-ink-deep px-4 py-2.5">
+                  <span className="min-w-0 flex-1 truncate font-mono text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-accent">
+                    Viewing · {viewer.filename}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setViewer(null)}
+                    aria-label="Close viewer"
+                    className="cursor-pointer p-1 text-text-dim transition-colors hover:text-text-pri"
+                  >
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+                {viewer.kind === 'pdf' ? (
+                  <div className="[&>div]:mt-0 [&>div]:border-t">
+                    <PlanOverlay file={viewer.file} items={[]} selectedIdx={null} requirePins={false} />
+                  </div>
+                ) : (
+                  <div className="border border-ink-line bg-ink-deep p-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={viewer.objectUrl} alt={viewer.filename} className="max-h-[34rem] w-auto" />
+                  </div>
+                )}
+              </div>
             )}
 
             <div className="mt-5 flex flex-wrap items-center gap-4">
@@ -562,7 +655,22 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
           <div className="flex items-start gap-5">
             <span className="font-mono text-4xl font-bold leading-none text-accent sm:text-5xl">02</span>
             <div className="min-w-0 flex-1">
-              <h3 className="font-extrabold uppercase tracking-tight text-text-pri">Confirm the takeoff</h3>
+              <div className="flex flex-wrap items-center gap-4">
+                <h3 className="font-extrabold uppercase tracking-tight text-text-pri">Confirm the takeoff</h3>
+                {uploads.some((u) => u.doc_type === 'plan_set') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const planSet = uploads.find((u) => u.doc_type === 'plan_set')
+                      if (planSet) void openViewer(planSet)
+                    }}
+                    className="inline-flex cursor-pointer items-center gap-1.5 font-mono text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-accent transition-colors hover:text-accent-press"
+                  >
+                    <Eye className="h-3.5 w-3.5" aria-hidden />
+                    {viewer ? 'Close plan viewer' : 'View plan set'}
+                  </button>
+                )}
+              </div>
               <p className="mt-1 text-sm leading-relaxed text-text-sec">
                 {extraction.measurementLineCount > 0
                   ? `Reconciled against the painter’s ${extraction.measurementLineCount}-line measurement takeoff — resolve the flags, adjust anything, then price.`

@@ -19,12 +19,18 @@ type Props = {
   /** Index into `items` of the selected row, or null for "show all". */
   selectedIdx: number | null
   onSelect?: (idx: number | null) => void
+  /**
+   * Electrical take-offs demand pins (default). Document-centric callers
+   * (commercial painting) pass false to browse a PDF with no pin data:
+   * page navigation covers every page instead of only pinned ones.
+   */
+  requirePins?: boolean
 }
 
 // Distinct, plan-friendly pin colours (cycled by item index).
 const PIN_COLOURS = ['#ff6b35', '#2ec4b6', '#e71d73', '#3a86ff', '#ffbe0b', '#8338ec', '#06d6a0', '#ef476f']
 
-export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
+export function PlanOverlay({ file, items, selectedIdx, onSelect, requirePins = true }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [pageCount, setPageCount] = useState(0)
   const [page, setPage] = useState<number | null>(null)
@@ -40,18 +46,18 @@ export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p)
   }, [items])
 
-  useEffect(() => {
-    if (page === null && pinnedPages.length > 0) setPage(pinnedPages[0])
-  }, [page, pinnedPages])
+  // Default page is DERIVED, not synced via an effect: the most-pinned
+  // page when pins exist, page 1 for pinless document browsing.
+  const effectivePage = page ?? pinnedPages[0] ?? (requirePins ? null : 1)
 
   // Render the selected page to the canvas. pdf.js is loaded lazily so the
   // dashboard bundle doesn't carry it until the viewer is actually shown.
   useEffect(() => {
-    if (page === null) return
+    if (effectivePage === null) return
     let cancelled = false
-    setRendering(true)
-    setError(null)
     ;(async () => {
+      setRendering(true)
+      setError(null)
       try {
         const pdfjs = await import('pdfjs-dist')
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -62,7 +68,7 @@ export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
         const doc = await pdfjs.getDocument({ data }).promise
         if (cancelled) return
         setPageCount(doc.numPages)
-        const pdfPage = await doc.getPage(Math.min(page, doc.numPages))
+        const pdfPage = await doc.getPage(Math.min(effectivePage, doc.numPages))
         const canvas = canvasRef.current
         if (!canvas || cancelled) return
         // Fit ~1600 CSS px wide — sharp enough to read symbols when zoomed.
@@ -83,19 +89,19 @@ export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
     return () => {
       cancelled = true
     }
-  }, [file, page])
+  }, [file, effectivePage])
 
   const pinsOnPage = useMemo(
     () =>
       items.flatMap((item, idx) =>
         (item.locations ?? [])
-          .filter((l) => l.page === page)
+          .filter((l) => l.page === effectivePage)
           .map((l) => ({ idx, type: item.type, x: l.x, y: l.y })),
       ),
-    [items, page],
+    [items, effectivePage],
   )
 
-  if (pinnedPages.length === 0) {
+  if (requirePins && pinnedPages.length === 0) {
     return (
       <p className="mt-4 border border-ink-line bg-ink-deep px-4 py-3 text-sm text-text-dim">
         No pin locations in this take-off — run the analysis again (newer runs include per-symbol pins) or use
@@ -103,6 +109,13 @@ export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
       </p>
     )
   }
+
+  // Pin-driven callers page through pinned sheets; document browsing
+  // (requirePins=false) pages through the whole file.
+  const pageOptions =
+    pinnedPages.length > 0
+      ? pinnedPages
+      : Array.from({ length: Math.max(pageCount, 1) }, (_, i) => i + 1)
 
   return (
     <div className="mt-5 border border-ink-line bg-ink-deep">
@@ -113,22 +126,24 @@ export function PlanOverlay({ file, items, selectedIdx, onSelect }: Props) {
         <label className="flex items-center gap-2 font-mono text-xs text-text-dim">
           Page
           <select
-            value={page ?? ''}
+            value={effectivePage ?? ''}
             onChange={(e) => setPage(Number(e.target.value))}
             aria-label="PDF page"
             className="border border-ink-line bg-ink-card px-2 py-1 font-mono text-xs text-text-pri focus:border-accent focus:outline-none"
           >
-            {pinnedPages.map((p) => (
+            {pageOptions.map((p) => (
               <option key={p} value={p}>
                 {p}{pageCount ? ` / ${pageCount}` : ''}
               </option>
             ))}
           </select>
         </label>
-        <span className="font-mono text-xs text-text-dim">
-          {pinsOnPage.length} pin{pinsOnPage.length === 1 ? '' : 's'} on this page
-          {selectedIdx !== null ? ` · showing: ${items[selectedIdx]?.type ?? ''}` : ' · click a row to highlight its pins'}
-        </span>
+        {items.length > 0 && (
+          <span className="font-mono text-xs text-text-dim">
+            {pinsOnPage.length} pin{pinsOnPage.length === 1 ? '' : 's'} on this page
+            {selectedIdx !== null ? ` · showing: ${items[selectedIdx]?.type ?? ''}` : ' · click a row to highlight its pins'}
+          </span>
+        )}
         {selectedIdx !== null && (
           <button
             type="button"

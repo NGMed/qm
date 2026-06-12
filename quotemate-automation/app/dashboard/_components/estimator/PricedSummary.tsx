@@ -5,15 +5,30 @@
 // here is model-generated: unmatched items are flagged, never guessed.
 
 import { Fragment, useId, useState } from 'react'
-import { money, type PricedBom } from './types'
+import { CATEGORIES } from '@/lib/estimate/categories'
+import { money, type AddToCatalogueFn, type PricedBom } from './types'
 
 type Props = {
   bom: PricedBom
   info: { catalogueSize: number; source: string } | null
   pricedAt?: string | null
+  /** When supplied, each "not priced" item becomes an inline add-to-catalogue
+   *  form (price + labour) that saves to the tenant's assemblies and re-prices.
+   *  Absent → the items render as static chips (read-only contexts). */
+  onAddToCatalogue?: AddToCatalogueFn
 }
 
-export function PricedSummary({ bom, info, pricedAt }: Props) {
+// Electrical + shared grounding categories for the optional add-form dropdown,
+// derived from the single CATEGORIES source so labels never drift. Plumbing
+// categories are omitted — the plan estimator is electrical-only.
+const ELECTRICAL_CATEGORY_VALUES = new Set<string>([
+  'downlight', 'gpo', 'smoke_alarm', 'fan', 'outdoor_light', 'rcbo', 'oven_cooktop',
+  'ev_charger', 'switchboard', 'fault_find', 'strip_light', 'security_camera',
+  'doorbell_intercom', 'sundry', 'general',
+])
+const CATEGORY_OPTIONS = CATEGORIES.filter((c) => ELECTRICAL_CATEGORY_VALUES.has(c.value))
+
+export function PricedSummary({ bom, info, pricedAt, onAddToCatalogue }: Props) {
   const [openTrace, setOpenTrace] = useState<number | null>(null)
   const traceId = useId()
 
@@ -122,16 +137,32 @@ export function PricedSummary({ bom, info, pricedAt }: Props) {
           <div className="font-mono text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-warning">
             Not priced — not in your catalogue ({bom.unmatched.length})
           </div>
-          <ul className="mt-2 flex flex-wrap gap-2">
-            {bom.unmatched.map((u, i) => (
-              <li key={i} className="border border-warning/50 px-2 py-1 font-mono text-xs text-text-sec">
-                {u.count}× {u.type}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 text-xs text-text-dim">
-            Add these under Services / Catalogue and re-price — unmatched items are never guessed.
-          </p>
+          {onAddToCatalogue ? (
+            <>
+              <ul className="mt-3 space-y-2">
+                {bom.unmatched.map((u) => (
+                  <UnmatchedItem key={u.type} item={u} onAdd={onAddToCatalogue} />
+                ))}
+              </ul>
+              <p className="mt-3 text-xs text-text-dim">
+                Add one with its price + labour and we’ll re-price instantly — it’s saved to your
+                catalogue so the next plan prices it automatically. Unmatched items are never guessed.
+              </p>
+            </>
+          ) : (
+            <>
+              <ul className="mt-2 flex flex-wrap gap-2">
+                {bom.unmatched.map((u, i) => (
+                  <li key={i} className="border border-warning/50 px-2 py-1 font-mono text-xs text-text-sec">
+                    {u.count}× {u.type}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-text-dim">
+                Add these under Services / Catalogue and re-price — unmatched items are never guessed.
+              </p>
+            </>
+          )}
         </div>
       )}
 
@@ -157,6 +188,162 @@ export function PricedSummary({ bom, info, pricedAt }: Props) {
         </p>
       )}
     </section>
+  )
+}
+
+// One "not priced" item as an inline add-to-catalogue form. The item name and
+// count come from the take-off; the tradie supplies the two columns the plan
+// can't infer (unit price + labour/unit). Saving persists a custom assembly
+// named exactly like the item — which the deterministic exact-name matcher then
+// links on re-price (lib/estimation/price.ts) — and the parent re-prices.
+function UnmatchedItem({
+  item,
+  onAdd,
+}: {
+  item: { type: string; count: number }
+  onAdd: AddToCatalogueFn
+}) {
+  const [open, setOpen] = useState(false)
+  const [price, setPrice] = useState('')
+  const [labour, setLabour] = useState('')
+  const [category, setCategory] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [added, setAdded] = useState(false)
+  const fid = useId()
+
+  const priceNum = Number(price)
+  const labourNum = Number(labour)
+  const priceValid = price.trim() !== '' && Number.isFinite(priceNum) && priceNum >= 0
+  const labourValid = labour.trim() === '' || (Number.isFinite(labourNum) && labourNum >= 0)
+  const canSubmit = priceValid && labourValid && !busy
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    const res = await onAdd(
+      { type: item.type, count: item.count },
+      { priceExGst: priceNum, labourHours: labour.trim() === '' ? 0 : labourNum, category: category || undefined },
+    )
+    setBusy(false)
+    if (res.ok) {
+      // On success the parent re-prices and this item leaves bom.unmatched, so
+      // the row unmounts. The flag only shows if the row lingers (re-price hiccup).
+      setAdded(true)
+      setOpen(false)
+    } else {
+      setError(res.error ?? 'Could not add to catalogue.')
+    }
+  }
+
+  return (
+    <li className="border border-warning/40 bg-ink-card">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <span className="font-mono text-xs text-text-sec">
+          {item.count}× {item.type}
+        </span>
+        {added ? (
+          <span className="font-mono text-[0.64rem] font-semibold uppercase tracking-[0.12em] text-teal-glow">
+            ✓ added
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen((s) => !s)
+              setError(null)
+            }}
+            aria-expanded={open ? 'true' : 'false'}
+            aria-controls={`${fid}-form`}
+            className="font-mono text-[0.64rem] font-semibold uppercase tracking-[0.12em] text-accent transition-colors hover:text-accent-press focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {open ? 'Cancel' : '+ Add to catalogue'}
+          </button>
+        )}
+      </div>
+
+      {open && !added && (
+        <form id={`${fid}-form`} onSubmit={submit} className="border-t border-ink-line px-3 py-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="block font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-text-dim">
+                Unit price ex GST
+              </span>
+              <div className="mt-1 flex items-center border border-ink-line bg-ink-deep focus-within:border-accent">
+                <span className="pl-2 font-mono text-xs text-text-dim">$</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="0.00"
+                  aria-label={`Unit price ex GST for ${item.type}`}
+                  className="w-full bg-transparent px-2 py-1.5 font-mono text-sm tabular-nums text-text-pri outline-none"
+                />
+              </div>
+            </label>
+            <label className="block">
+              <span className="block font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-text-dim">
+                Labour hrs / unit
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.25"
+                value={labour}
+                onChange={(e) => setLabour(e.target.value)}
+                placeholder="0"
+                aria-label={`Labour hours per unit for ${item.type}`}
+                className="mt-1 w-full border border-ink-line bg-ink-deep px-2 py-1.5 font-mono text-sm tabular-nums text-text-pri outline-none focus:border-accent"
+              />
+            </label>
+            <label className="block">
+              <span className="block font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-text-dim">
+                Category <span className="normal-case text-text-dim/70">(optional)</span>
+              </span>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                aria-label={`Catalogue category for ${item.type}`}
+                className="mt-1 w-full border border-ink-line bg-ink-deep px-2 py-1.5 font-mono text-sm text-text-pri outline-none focus:border-accent"
+              >
+                <option value="">Auto (from name)</option>
+                {CATEGORY_OPTIONS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {error && (
+            <p role="alert" className="mt-2 font-mono text-xs text-warning">
+              {error}
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="inline-flex items-center gap-2 bg-accent px-4 py-2 font-mono text-[0.64rem] font-semibold uppercase tracking-[0.12em] text-white transition-colors hover:bg-accent-press focus-visible:outline-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : 'Save to catalogue & re-price'}
+            </button>
+            <span className="font-mono text-[0.58rem] text-text-dim">
+              Re-prices now from your pricing book and remembers it for next time.
+            </span>
+          </div>
+        </form>
+      )}
+    </li>
   )
 }
 

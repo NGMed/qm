@@ -245,7 +245,9 @@ export async function runSmsPlanAnalysis(requestId: string): Promise<void> {
     firstName,
     businessName,
     resultsUrl: planResultsUrl(shareToken),
-    pdfUrl: planReportPdfUrl(shareToken),
+    // Only advertise the PDF link when a report was actually stored —
+    // otherwise /api/q/plan/[token]/pdf 404s on a dead-on-arrival link.
+    pdfUrl: reportPath ? planReportPdfUrl(shareToken) : null,
     lineCount,
     deviceCount,
     totalIncGst: bom?.totalIncGst ?? null,

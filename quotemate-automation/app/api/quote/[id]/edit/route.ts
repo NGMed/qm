@@ -30,7 +30,7 @@ import {
   expireCheckoutSession,
   createCheckoutSessionForTier,
 } from '@/lib/stripe/checkout'
-import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { dispatchQuoteWithPdf } from '@/lib/sms/send-quote-pdf'
 import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import { buildQuoteUpdatedSms } from '@/lib/sms/templates'
 import { resolveQuoteDisplayMode } from '@/lib/quote/display'
@@ -643,20 +643,14 @@ export async function POST(
             }),
           },
         )
-        // Best-effort MMS attach of the refreshed PDF.
-        let pdfMediaUrl: string | undefined
-        if (quotePdfPath) {
-          try {
-            pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
-          } catch {
-            pdfMediaUrl = undefined
-          }
-        }
-        const result = await dispatchQuoteMessage({
+        // Best-effort MMS attach of the refreshed PDF (shared helper signs
+        // the media URL and degrades to plain SMS on failure/rejection).
+        const result = await dispatchQuoteWithPdf({
           to: callerNumber,
           text,
           from: fromNumber,
-          ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
+          pdfPath: quotePdfPath,
+          signMediaUrl: signQuotePdfUrl,
         })
         if (result.ok) {
           console.log('[quote/edit] customer notify sent', {

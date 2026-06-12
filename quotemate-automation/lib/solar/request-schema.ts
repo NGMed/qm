@@ -30,6 +30,23 @@ export const SolarEstimateRequestSchema = z.object({
   panel_type: z
     .enum(['standard_panels', 'premium_panels', 'unknown'])
     .optional(),
+  // Optional customer contact — when a mobile is supplied the tradie-confirm
+  // step texts the customer their quote (PDF link + best-effort MMS). Absent
+  // → solar behaves as before (tradie-review only, customer views the page).
+  customer: z
+    .object({
+      name: z.string().trim().min(1).max(120).optional(),
+      mobile: z.string().trim().min(6).max(20).optional(),
+    })
+    .optional(),
+  // Optional energy context (premium quote §4.1) — a quarterly bill
+  // personalises the utility-cost / savings sections. Bounded so a typo
+  // ($85,000 instead of $850) can't distort the financial charts.
+  energy: z
+    .object({
+      quarterly_bill_aud: z.number().positive().max(10_000).optional(),
+    })
+    .optional(),
 })
 
 export type SolarEstimateRequestBody = z.infer<typeof SolarEstimateRequestSchema>

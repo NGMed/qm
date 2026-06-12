@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSolarTradieNotification, notifySolarEstimate } from './notify'
+import { buildSolarTradieNotification, buildSolarCustomerSms, notifySolarEstimate } from './notify'
 
 describe('buildSolarTradieNotification', () => {
   it('names the customer, system size, and the review URL', () => {
@@ -29,6 +29,37 @@ describe('buildSolarTradieNotification', () => {
     })
     expect(typeof body).toBe('string')
     expect(body.length).toBeGreaterThan(0)
+  })
+})
+
+describe('buildSolarCustomerSms', () => {
+  const base = {
+    businessName: 'Pilot Solar',
+    customerName: 'Mia',
+    systemKw: 6.6,
+    netIncGst: 8019,
+    quoteUrl: 'https://app/q/solar/TOKEN123',
+  }
+
+  it('carries the business, system size, net price and quote link', () => {
+    const sms = buildSolarCustomerSms({ ...base, pdfUrl: 'https://app/api/q/solar/TOKEN123/pdf' })
+    expect(sms).toContain('Hi Mia,')
+    expect(sms).toContain('Pilot Solar')
+    expect(sms).toContain('6.6 kW')
+    expect(sms).toContain('$8,019')
+    expect(sms).toContain(base.quoteUrl)
+    expect(sms).toContain('PDF copy:')
+  })
+
+  it('omits the PDF segment when no PDF was rendered', () => {
+    const sms = buildSolarCustomerSms({ ...base, pdfUrl: null })
+    expect(sms).not.toContain('PDF copy:')
+    expect(sms).toContain(base.quoteUrl)
+  })
+
+  it('falls back to a plain greeting without a name', () => {
+    const sms = buildSolarCustomerSms({ ...base, customerName: null })
+    expect(sms.startsWith('Hi, ')).toBe(true)
   })
 })
 

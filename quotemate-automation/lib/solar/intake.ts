@@ -31,7 +31,7 @@ import { estimateSolarProduction } from './production'
 import { calculateSolarPrice } from './pricing'
 import { calculateSolarEconomics } from './economics'
 import { validateSolarConfig } from './config'
-import { runSolarGuardrails } from './guardrails'
+import { runSolarGuardrails, checkRoofAreaConsistency } from './guardrails'
 import type {
   SolarAddressInput,
   SolarManualRoofInput,
@@ -103,6 +103,9 @@ export async function runSolarEstimate(args: {
   input: SolarAddressInput
   manual?: SolarManualRoofInput
   panelType?: SolarPanelType
+  /** Customer's optional quarterly electricity bill, AUD (premium quote
+   *  §4.1) — persisted on context for utility-cost personalisation. */
+  quarterlyBillAud?: number | null
   config: SolarConfig
   opts?: SolarEnrichmentOrchestratorOpts
 }): Promise<SolarEstimate> {
@@ -124,6 +127,14 @@ export async function runSolarEstimate(args: {
     state: args.input.state,
     install_year: installYear,
     network: opts.network,
+    // Optional bill — only a finite positive value is persisted; anything
+    // else degrades to null (modelled utility costs downstream).
+    quarterly_bill_aud:
+      typeof args.quarterlyBillAud === 'number' &&
+      Number.isFinite(args.quarterlyBillAud) &&
+      args.quarterlyBillAud > 0
+        ? args.quarterlyBillAud
+        : null,
   }
 
   // 1. Address validation (best-effort) → geocode → coverage gate.
@@ -160,6 +171,12 @@ export async function runSolarEstimate(args: {
     // through the solar-owned insights client and parse.
     const raw = await fetchRawInsights(location, opts.solarOpts)
     roof = normaliseSolarRoofFacts(raw, coverage, config)
+    // Validation-only cross-check (premium quote §4.1): our summed segment
+    // areas vs Google's wholeRoofStats. Logged, never blocks — see
+    // checkRoofAreaConsistency for why this is not a guardrail flag.
+    for (const note of checkRoofAreaConsistency(roof)) {
+      console.warn('[solar/intake]', note)
+    }
     coverage_source = 'google'
     satellite_image_url = opts.satelliteImageUrl
       ? await opts.satelliteImageUrl(location)

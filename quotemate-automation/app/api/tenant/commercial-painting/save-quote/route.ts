@@ -81,8 +81,11 @@ export async function POST(req: Request) {
       ok: true,
       quoteId: prior.quote_id,
       shareToken: prior.share_token,
-      quoteViewUrl: `${appUrl}/q/${prior.share_token}`,
-      pdfUrl: prior.pdf_ready ? `${appUrl}/api/q/${prior.share_token}/pdf` : null,
+      // Relative — the dashboard opens these on whatever origin it runs on
+      // (localhost dev included); an absolute prod URL 404s against a quote
+      // that lives in the dev database.
+      quoteViewUrl: `/q/${prior.share_token}`,
+      pdfUrl: prior.pdf_ready ? `/api/q/${prior.share_token}/pdf` : null,
       alreadySaved: true,
     })
   }
@@ -127,6 +130,9 @@ export async function POST(req: Request) {
     )
   }
 
+  // Absolute URL only for the PRINTED footer of the tender PDF (a PDF
+  // can't use a relative link); the dashboard's clickable links below
+  // are relative so they work on any origin, dev included.
   const quoteViewUrl = `${appUrl}/q/${shareToken}`
   const log = pipelineLog('estimate', paintRunId)
 
@@ -183,7 +189,7 @@ export async function POST(req: Request) {
     ok: true,
     quoteId: quoteRow.id,
     shareToken,
-    quoteViewUrl,
-    pdfUrl: pdfReady ? `${appUrl}/api/q/${shareToken}/pdf` : null,
+    quoteViewUrl: `/q/${shareToken}`,
+    pdfUrl: pdfReady ? `/api/q/${shareToken}/pdf` : null,
   })
 }

@@ -17,6 +17,8 @@ import { renderPdfFromHtml, gotenbergConfigured } from '@/lib/pdf/gotenberg'
 import { buildQuoteReportHtml, type QuoteReportTier } from './report-html'
 import { buildRoofQuoteReportHtml } from '@/lib/roofing/report-html'
 import type { MultiRoofQuote } from '@/lib/roofing/types'
+import { buildSolarQuoteReportHtml } from '@/lib/solar/report-html'
+import type { SolarEstimate } from '@/lib/solar/types'
 
 const BUCKET = 'quote-pdfs'
 const APP_URL = (process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app').replace(/\/$/, '')
@@ -40,6 +42,11 @@ export function quotePdfUrl(shareToken: string): string {
 /** Stable customer download URL for a roofing quote PDF. */
 export function roofQuotePdfUrl(publicToken: string): string {
   return `${APP_URL}/api/q/roof/${publicToken}/pdf`
+}
+
+/** Stable customer download URL for a solar quote PDF. */
+export function solarQuotePdfUrl(publicToken: string): string {
+  return `${APP_URL}/api/q/solar/${publicToken}/pdf`
 }
 
 async function storePdf(path: string, data: Buffer): Promise<string> {
@@ -84,6 +91,15 @@ type RoofPdfRow = {
   tenant_id: string | null
   address: string | null
   quote: MultiRoofQuote | null
+  pdf_path: string | null
+}
+
+type SolarPdfRow = {
+  public_token: string
+  tenant_id: string | null
+  address: string | null
+  estimate: SolarEstimate | null
+  routing: string | null
   pdf_path: string | null
 }
 
@@ -200,6 +216,51 @@ export async function ensureRoofQuotePdf(
     return path
   } catch (e) {
     console.error('[quote-pdf] ensureRoofQuotePdf failed (non-fatal)', {
+      publicToken: publicToken.slice(0, 8) + '…',
+      message: e instanceof Error ? e.message : String(e),
+    })
+    return null
+  }
+}
+
+/**
+ * Generate (or reuse) the PDF for a solar quote (migration 106). Reads the
+ * full persisted SolarEstimate from solar_estimates.estimate, so no
+ * recomputation. Inspection-routed estimates carry no committable price and
+ * return null. Stored at solar/<publicToken>.pdf in the same quote-pdfs
+ * bucket. Never throws.
+ */
+export async function ensureSolarQuotePdf(
+  publicToken: string,
+  opts: { regenerate?: boolean } = {},
+): Promise<string | null> {
+  try {
+    if (!gotenbergConfigured()) return null
+    const { data: row } = await supabase()
+      .from('solar_estimates')
+      .select('public_token, tenant_id, address, estimate, routing, pdf_path')
+      .eq('public_token', publicToken)
+      .maybeSingle<SolarPdfRow>()
+    if (!row) return null
+    if (row.routing === 'inspection_required') return null
+    if (row.pdf_path && !opts.regenerate) return row.pdf_path
+
+    const estimate = row.estimate
+    if (!estimate) return null
+    const businessName = await tenantBusinessName(row.tenant_id)
+
+    const html = buildSolarQuoteReportHtml({
+      businessName,
+      address: row.address ?? '',
+      estimate,
+      quoteViewUrl: `${APP_URL}/q/solar/${publicToken}`,
+    })
+    const pdf = await renderPdfFromHtml(html)
+    const path = await storePdf(`solar/${publicToken}.pdf`, pdf)
+    await supabase().from('solar_estimates').update({ pdf_path: path }).eq('public_token', publicToken)
+    return path
+  } catch (e) {
+    console.error('[quote-pdf] ensureSolarQuotePdf failed (non-fatal)', {
       publicToken: publicToken.slice(0, 8) + '…',
       message: e instanceof Error ? e.message : String(e),
     })

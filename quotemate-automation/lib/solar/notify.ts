@@ -36,6 +36,28 @@ export function buildSolarTradieNotification(args: {
   )
 }
 
+/** PURE — build the CUSTOMER quote SMS body (sent on tradie-confirm when a
+ *  customer mobile was captured). Carries the durable quote link and, when a
+ *  PDF was rendered, its download link; the PDF also rides along as a
+ *  best-effort MMS via dispatchQuoteWithPdf. */
+export function buildSolarCustomerSms(args: {
+  businessName: string
+  customerName?: string | null
+  systemKw: number
+  netIncGst: number
+  quoteUrl: string
+  pdfUrl?: string | null
+}): string {
+  const hi = args.customerName ? `Hi ${args.customerName}, ` : 'Hi, '
+  const dollars = `$${Math.round(args.netIncGst).toLocaleString('en-AU')}`
+  const pdf = args.pdfUrl ? ` · PDF copy: ${args.pdfUrl}` : ''
+  return (
+    `${hi}your solar quote from ${args.businessName} is ready: ` +
+    `${args.systemKw} kW for ${dollars} net (after STC rebate, inc GST). ` +
+    `View it: ${args.quoteUrl}${pdf}`
+  )
+}
+
 export async function notifySolarEstimate(args: {
   tenant: {
     owner_mobile: string | null

@@ -91,7 +91,37 @@ export function checkCecBenchmark(prod: SolarProductionResult): string[] {
   return []
 }
 
-import type { SolarEstimate, SolarCoverageFailureCode } from './types'
+import type { SolarEstimate, SolarCoverageFailureCode, SolarRoofFacts } from './types'
+
+// ── Roof-area consistency cross-check (premium quote §4.1) ───────────
+
+/** Relative divergence between summed segment areas and Google's
+ *  wholeRoofStats area that triggers the logged cross-check. */
+const ROOF_AREA_MISMATCH_TOLERANCE = 0.15
+
+/**
+ * PURE — compare our summed segment areas against Google's own
+ * wholeRoofStats.areaMeters2. Returns [] when consistent (or when the
+ * whole-roof figure is absent), else a one-element human-readable note.
+ *
+ * VALIDATION ONLY — deliberately NOT wired into runSolarGuardrails: a
+ * guardrail flag blocks tradie confirmation until a clean re-draft, but
+ * an area mismatch is data-driven and a re-draft cannot clear it. The
+ * orchestrator logs this instead (spec §4.1 "logged cross-check",
+ * review-forcing-not-blocking).
+ */
+export function checkRoofAreaConsistency(roof: SolarRoofFacts): string[] {
+  const whole = roof.whole_roof_area_m2
+  if (whole == null || !(whole > 0)) return []
+  const sum = roof.usable_area_m2
+  const divergence = Math.abs(sum - whole) / whole
+  if (divergence <= ROOF_AREA_MISMATCH_TOLERANCE) return []
+  return [
+    `roof_area_mismatch: segment areas sum to ${sum.toFixed(1)} m² vs Google's ` +
+      `whole-roof ${whole.toFixed(1)} m² (${(divergence * 100).toFixed(0)}% apart) — ` +
+      'check the roof model before relying on the layout.',
+  ]
+}
 
 /**
  * PURE — run every deterministic output check across an entire

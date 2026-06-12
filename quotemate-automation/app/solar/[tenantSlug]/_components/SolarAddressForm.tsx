@@ -56,6 +56,9 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
   const [storeys, setStoreys] = useState<1 | 2 | 3>(1)
   const [panelType, setPanelType] =
     useState<'standard_panels' | 'premium_panels' | 'unknown'>('standard_panels')
+  const [customerName, setCustomerName] = useState('')
+  const [customerMobile, setCustomerMobile] = useState('')
+  const [quarterlyBill, setQuarterlyBill] = useState('')
   const [busy, setBusy] = useState(false)
   const [busyStep, setBusyStep] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -184,6 +187,7 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
       const payload = buildSolarFormPayload({
         address, postcode, state: stateCode, manualOpen,
         orientation, roofSize, storeys, panelType,
+        customerName, customerMobile, quarterlyBill,
       })
       const res = await fetch(`/api/solar/${tenantSlug}/estimate`, {
         method: 'POST',
@@ -317,6 +321,69 @@ export function SolarAddressForm({ tenantSlug }: { tenantSlug: string }) {
           >
             {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+        </div>
+      </div>
+
+      {/* ── Optional contact — opt in to get the quote texted ──── */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="solar-name-input" className={labelClass}>
+            Your name <span className="normal-case tracking-normal text-text-dim">· optional</span>
+          </label>
+          <input
+            id="solar-name-input"
+            data-testid="solar-name"
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            maxLength={120}
+            autoComplete="name"
+            placeholder="First name"
+            className={inputClass}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="solar-mobile-input" className={labelClass}>
+            Mobile <span className="normal-case tracking-normal text-text-dim">· to get it texted</span>
+          </label>
+          <input
+            id="solar-mobile-input"
+            data-testid="solar-mobile"
+            value={customerMobile}
+            onChange={(e) => setCustomerMobile(e.target.value)}
+            inputMode="tel"
+            autoComplete="tel"
+            maxLength={20}
+            placeholder="04xx xxx xxx"
+            className={inputClass}
+          />
+        </div>
+      </div>
+
+      {/* ── Optional quarterly bill — personalises the savings maths ── */}
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="solar-bill-input" className={labelClass}>
+          Quarterly power bill{' '}
+          <span className="normal-case tracking-normal text-text-dim">
+            · optional — personalises your savings
+          </span>
+        </label>
+        <div className="relative">
+          <span
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-dim"
+            aria-hidden
+          >
+            $
+          </span>
+          <input
+            id="solar-bill-input"
+            data-testid="solar-bill"
+            value={quarterlyBill}
+            onChange={(e) => setQuarterlyBill(e.target.value)}
+            inputMode="decimal"
+            maxLength={8}
+            placeholder="850"
+            className={`${inputClass} pl-9`}
+          />
         </div>
       </div>
 

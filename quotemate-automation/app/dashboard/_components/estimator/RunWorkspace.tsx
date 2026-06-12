@@ -22,6 +22,7 @@ import {
   itemsToRows,
   money,
   rowsToItems,
+  type AddToCatalogueFn,
   type EditableRow,
   type PriceResponse,
   type PricedBom,
@@ -143,6 +144,44 @@ export function RunWorkspace({ runId }: { runId: string }) {
       }
     },
     [rows, runId],
+  )
+
+  // Save an unmatched take-off item into the tenant's custom assemblies, then
+  // re-price so it flows into the BOM. The assembly is named exactly like the
+  // item, which the deterministic exact-name matcher links on re-price — no LLM,
+  // no guessed price. A duplicate name just means it already exists, so we still
+  // re-price to pick it up.
+  const addToCatalogue = useCallback<AddToCatalogueFn>(
+    async (item, draft) => {
+      if (!accessToken) return { ok: false, error: 'Not signed in.' }
+      try {
+        const res = await fetch('/api/tenant/services', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trade: 'electrical',
+            name: item.type,
+            default_unit_price_ex_gst: draft.priceExGst,
+            default_labour_hours: draft.labourHours,
+            ...(draft.category ? { category: draft.category } : {}),
+          }),
+        })
+        const json = (await res.json()) as { ok?: boolean; error?: string; message?: string }
+        if (!res.ok || !json.ok) {
+          if (json.error === 'duplicate_name') {
+            // Already in the catalogue — re-price links it by exact name.
+            await price(accessToken)
+            return { ok: true }
+          }
+          return { ok: false, error: json.message || json.error || 'Could not add to catalogue.' }
+        }
+        const repriced = await price(accessToken)
+        return repriced ? { ok: true } : { ok: false, error: 'Saved — hit Re-price to apply it.' }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    [accessToken, price],
   )
 
   const save = useCallback(async () => {
@@ -436,7 +475,7 @@ export function RunWorkspace({ runId }: { runId: string }) {
       {/* ── Priced BOM ────────────────────────────────────────── */}
       {priced && (
         <section className="border border-ink-line bg-ink-card p-6 sm:p-8">
-          <PricedSummary bom={priced} info={priceInfo} pricedAt={pricedAt} />
+          <PricedSummary bom={priced} info={priceInfo} pricedAt={pricedAt} onAddToCatalogue={addToCatalogue} />
         </section>
       )}
 

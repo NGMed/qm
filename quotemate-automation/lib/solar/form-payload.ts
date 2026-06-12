@@ -14,6 +14,10 @@ export function buildSolarFormPayload(state: {
   roofSize: 'small' | 'medium' | 'large'
   storeys: 1 | 2 | 3
   panelType: 'standard_panels' | 'premium_panels' | 'unknown'
+  customerName?: string
+  customerMobile?: string
+  /** Raw quarterly-bill text from the optional form field (e.g. "850"). */
+  quarterlyBill?: string
 }): SolarEstimateRequestBody {
   const payload: SolarEstimateRequestBody = {
     address: {
@@ -31,6 +35,26 @@ export function buildSolarFormPayload(state: {
   }
   if (state.panelType !== 'unknown') {
     payload.panel_type = state.panelType
+  }
+  // Optional contact — only include keys the customer actually filled, so an
+  // empty field never persists as a blank phone/name.
+  const name = state.customerName?.trim()
+  const mobile = state.customerMobile?.trim()
+  if (name || mobile) {
+    payload.customer = {
+      ...(name ? { name } : {}),
+      ...(mobile ? { mobile } : {}),
+    }
+  }
+  // Optional quarterly bill — parsed leniently ("$850" / "850.50" both
+  // work); only a finite positive number within the schema bound is sent,
+  // so a blank or junk field never reaches the API.
+  const billRaw = state.quarterlyBill?.trim().replace(/^\$/, '')
+  if (billRaw) {
+    const bill = Number.parseFloat(billRaw)
+    if (Number.isFinite(bill) && bill > 0 && bill <= 10_000) {
+      payload.energy = { quarterly_bill_aud: bill }
+    }
   }
   return payload
 }

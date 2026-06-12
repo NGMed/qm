@@ -4,6 +4,7 @@
 // uptime monitor.
 
 import { createClient } from '@supabase/supabase-js'
+import { gotenbergConfigured } from '@/lib/pdf/gotenberg'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,9 +39,41 @@ export async function GET() {
     checks.supabase = { ok: false, detail: 'env vars missing — skipped' }
   }
 
-  const allOk = Object.values(checks).every((c) => c.ok)
+  // 3. Gotenberg (quote PDF + MMS) — INFORMATIONAL only. The PDF link and
+  //    MMS attachment are a bonus on top of every quote SMS, so a missing
+  //    or unreachable Gotenberg must NOT fail readiness. But surface it:
+  //    when GOTENBERG_URL is unset, every trade's PDF link + MMS silently
+  //    disappears with no error, which is otherwise invisible.
+  if (gotenbergConfigured()) {
+    const base = process.env.GOTENBERG_URL!.trim().replace(/\/$/, '')
+    const t0 = Date.now()
+    try {
+      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5_000) })
+      checks.gotenberg = {
+        ok: res.ok,
+        detail: res.ok ? 'reachable' : `health returned ${res.status}`,
+        ms: Date.now() - t0,
+      }
+    } catch (e) {
+      checks.gotenberg = {
+        ok: false,
+        detail: `unreachable: ${e instanceof Error ? e.message : String(e)}`,
+        ms: Date.now() - t0,
+      }
+    }
+  } else {
+    checks.gotenberg = {
+      ok: false,
+      detail: 'GOTENBERG_URL not set — quote PDFs + MMS attachments are disabled',
+    }
+  }
+
+  // Core readiness (env + DB) gates the HTTP status. Gotenberg is reported
+  // in `checks` but excluded from the gate so the PDF/MMS layer being off
+  // doesn't 503 an otherwise-healthy app.
+  const coreOk = checks.env.ok && checks.supabase.ok
   return Response.json(
-    { ok: allOk, time: new Date().toISOString(), checks },
-    { status: allOk ? 200 : 503 }
+    { ok: coreOk, time: new Date().toISOString(), checks },
+    { status: coreOk ? 200 : 503 }
   )
 }

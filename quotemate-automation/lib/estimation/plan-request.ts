@@ -45,12 +45,15 @@ export function buildPlanUploadSms(opts: {
   )
 }
 
-/** Results reply: link to the take-off + the downloadable PDF report. */
+/** Results reply: link to the take-off + (when one was rendered) the
+ *  downloadable PDF report. `pdfUrl` is omitted when the Gotenberg render
+ *  was skipped or failed — appending it unconditionally texts the customer
+ *  a link that 404s (/api/q/plan/[token]/pdf has no stored report). */
 export function buildPlanResultsSms(opts: {
   firstName?: string | null
   businessName: string
   resultsUrl: string
-  pdfUrl: string
+  pdfUrl?: string | null
   lineCount: number
   deviceCount: number
   totalIncGst?: number | null
@@ -59,9 +62,10 @@ export function buildPlanResultsSms(opts: {
     typeof opts.totalIncGst === 'number'
       ? ` Indicative estimate $${opts.totalIncGst.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} inc GST — ${opts.businessName} will confirm the final price.`
       : ''
+  const pdfSegment = opts.pdfUrl ? ` · PDF report: ${opts.pdfUrl}` : ''
   return (
     `${greet(opts.firstName)} Your plan take-off is ready: ${opts.lineCount} item types, ` +
-    `${opts.deviceCount} devices counted.${headline} View it: ${opts.resultsUrl} · PDF report: ${opts.pdfUrl}`
+    `${opts.deviceCount} devices counted.${headline} View it: ${opts.resultsUrl}${pdfSegment}`
   )
 }
 

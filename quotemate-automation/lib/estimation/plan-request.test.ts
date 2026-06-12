@@ -87,6 +87,19 @@ describe('buildPlanResultsSms', () => {
     expect(sms).not.toContain('inc GST')
     expect(sms).toContain(base.resultsUrl)
   })
+
+  it('omits the PDF link when no pdfUrl is supplied (render skipped/failed)', () => {
+    const { pdfUrl: _pdfUrl, ...noPdf } = base
+    const sms = buildPlanResultsSms({ ...noPdf, totalIncGst: 999 })
+    expect(sms).not.toContain('PDF report:')
+    expect(sms).toContain(base.resultsUrl)
+  })
+
+  it('still includes the PDF link when a pdfUrl is supplied', () => {
+    const sms = buildPlanResultsSms({ ...base, totalIncGst: null })
+    expect(sms).toContain('PDF report:')
+    expect(sms).toContain(base.pdfUrl)
+  })
 })
 
 describe('buildPlanFailureSms', () => {

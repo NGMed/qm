@@ -66,7 +66,7 @@ export async function POST(
       { status: 400 },
     )
   }
-  const { address, manual, panel_type } = parsed.data
+  const { address, manual, panel_type, customer, energy } = parsed.data
 
   // ── Run the deterministic engine. ────────────────────────────────
   const config = await loadSolarConfig(supabase)
@@ -123,6 +123,11 @@ export async function POST(
     estimate,
     tenantId: tenant.id as string,
     address,
+    // Optional customer contact — persisted on intake.caller so the
+    // tradie-confirm step can text the customer their quote. mobile→phone.
+    customer: customer
+      ? { name: customer.name, phone: customer.mobile }
+      : undefined,
   })
 
   const { data: intakeRow, error: intakeErr } = await supabase

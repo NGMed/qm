@@ -100,10 +100,18 @@ const SIGNALS = [
   'ceiling rose', 'isolator', 'tv point', 'antenna',
 ]
 
+// An exact normalised-name identity outscores any signal overlap. A tradie who
+// adds a custom assembly straight from the take-off's "not priced" list (where
+// the row name IS the item label) means it deliberately and unambiguously — so
+// that row must win over a looser signal match against a generic shared one.
+const EXACT_NAME_SCORE = 1_000
+
 /** Best-matching assembly for an item type plus the signal phrases that made
  *  the match — the "why" half of the pricing trace. Null when nothing matches.
  *  Score = total length of signals shared by the item type and the assembly
- *  name/category; longest-signal-overlap wins, first assembly breaks ties. */
+ *  name/category, plus a large bonus for an exact normalised-name match;
+ *  highest score wins, first assembly breaks ties (custom rows are passed
+ *  first, so a tenant's own assembly beats a shared one on a tie). */
 export function matchAssemblyWithSignals(
   type: string,
   assemblies: AssemblyRow[],
@@ -114,9 +122,17 @@ export function matchAssemblyWithSignals(
   let bestScore = 0
   let bestSignals: string[] = []
   for (const a of assemblies) {
-    const hay = `${norm(a.name)} ${norm(a.category ?? '')}`
+    const an = norm(a.name)
+    const hay = `${an} ${norm(a.category ?? '')}`
     let score = 0
     const signals: string[] = []
+    // Exact-name identity — the path that makes "add to my catalogue → re-price"
+    // actually match the item the tradie just added (its words may share no
+    // curated SIGNAL, e.g. "Security camera (CS)", "Duress button").
+    if (an === t) {
+      score += EXACT_NAME_SCORE
+      signals.push('exact name')
+    }
     for (const sig of SIGNALS) {
       if (t.includes(sig) && hay.includes(sig)) {
         score += sig.length

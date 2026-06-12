@@ -23,7 +23,7 @@
 // auth pattern in /api/quote/[id]/edit + /api/quote/[id]/check-owner.
 
 import { createClient } from '@supabase/supabase-js'
-import { dispatchQuoteMessage } from '@/lib/sms/dispatch'
+import { dispatchQuoteWithPdf } from '@/lib/sms/send-quote-pdf'
 import { ensureQuotePdf, quotePdfUrl, signQuotePdfUrl } from '@/lib/quote/pdf'
 import {
   buildQuoteSms,
@@ -189,21 +189,15 @@ export async function POST(
 
   const body = buildQuoteSms(intakeForSms, quoteForSms, { displayMode: asQuoteDisplayMode(displayMode) })
   const fromNumber = tenant.twilio_sms_number ?? process.env.TWILIO_SMS_NUMBER ?? undefined
-  // Best-effort MMS attach of the PDF — dispatch auto-falls back to a
-  // plain SMS when the carrier rejects media; the body has the link.
-  let pdfMediaUrl: string | undefined
-  if (quotePdfPath) {
-    try {
-      pdfMediaUrl = await signQuotePdfUrl(quotePdfPath)
-    } catch {
-      pdfMediaUrl = undefined
-    }
-  }
-  const dispatch = await dispatchQuoteMessage({
+  // Best-effort MMS attach of the PDF — the shared helper signs the media
+  // URL (best-effort) and dispatch auto-falls back to a plain SMS when the
+  // carrier rejects media; the body always carries the download link.
+  const dispatch = await dispatchQuoteWithPdf({
     to: callerNumber,
     text: body,
     from: fromNumber,
-    ...(pdfMediaUrl ? { mediaUrl: pdfMediaUrl } : {}),
+    pdfPath: quotePdfPath,
+    signMediaUrl: signQuotePdfUrl,
   })
 
   if (!dispatch.ok) {

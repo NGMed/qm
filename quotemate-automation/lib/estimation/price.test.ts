@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchAssembly, priceTakeoff, type AssemblyRow, type PricingBook } from './price'
+import { matchAssembly, matchAssemblyWithSignals, priceTakeoff, type AssemblyRow, type PricingBook } from './price'
 
 // The 5 seeded electrical assemblies (sql/init.sql).
 const ASSEMBLIES: AssemblyRow[] = [
@@ -24,6 +24,55 @@ describe('matchAssembly', () => {
   })
   it('returns null for an item with no catalogue match', () => {
     expect(matchAssembly('L6 Feature Pendant Light', ASSEMBLIES)).toBeNull()
+  })
+})
+
+describe('matchAssembly — exact-name (add-to-catalogue path)', () => {
+  // A "Security camera (CS)" take-off item shares NO curated SIGNAL phrase, so
+  // it is unmatched against the seed catalogue. Once the tradie adds a custom
+  // assembly named exactly like the item, re-pricing must match it by name.
+  const SECURITY_CAM: AssemblyRow = {
+    name: 'Security camera (CS)',
+    category: 'security_camera',
+    default_unit_price_ex_gst: 320,
+    default_labour_hours: 1.5,
+  }
+
+  it('does not match a signal-less item against the seed catalogue', () => {
+    expect(matchAssembly('Security camera (CS)', ASSEMBLIES)).toBeNull()
+  })
+
+  it('matches once an exact-name custom assembly is added', () => {
+    const withCustom = [SECURITY_CAM, ...ASSEMBLIES]
+    const m = matchAssemblyWithSignals('Security camera (CS)', withCustom)
+    expect(m?.assembly.name).toBe('Security camera (CS)')
+    expect(m?.signals).toContain('exact name')
+  })
+
+  it('is case- and punctuation-insensitive on the exact-name match', () => {
+    const withCustom = [SECURITY_CAM, ...ASSEMBLIES]
+    expect(matchAssembly('SECURITY CAMERA  (cs)', withCustom)?.name).toBe('Security camera (CS)')
+  })
+
+  it('lets an exact-name custom row outrank a looser signal match', () => {
+    // "Data point" hits the 'data point' signal on a shared assembly, but the
+    // tenant's own exactly-named row must win.
+    const shared: AssemblyRow = { name: 'Generic data outlet', category: 'data', default_unit_price_ex_gst: 40, default_labour_hours: 0.5 }
+    const custom: AssemblyRow = { name: 'Data point Cat 6 Ethernet', category: 'data', default_unit_price_ex_gst: 55, default_labour_hours: 0.6 }
+    const m = matchAssemblyWithSignals('Data point Cat 6 Ethernet', [custom, shared])
+    expect(m?.assembly.name).toBe('Data point Cat 6 Ethernet')
+  })
+
+  it('prices a freshly-added item end-to-end', () => {
+    const bom = priceTakeoff([{ type: 'Security camera (CS)', count: 11 }], [SECURITY_CAM, ...ASSEMBLIES], BOOK)
+    expect(bom.unmatched).toHaveLength(0)
+    expect(bom.lines).toHaveLength(1)
+    const line = bom.lines[0]
+    expect(line.matched).toBe('Security camera (CS)')
+    expect(line.unitPriceExGst).toBe(409.6) // 320 × 1.28
+    expect(line.materialExGst).toBe(4505.6) // 11 × 409.6
+    expect(line.labourHours).toBe(16.5) // 11 × 1.5
+    expect(line.labourExGst).toBe(1815) // 16.5 × 110
   })
 })
 
