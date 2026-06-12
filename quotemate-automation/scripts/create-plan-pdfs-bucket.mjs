@@ -1,9 +1,13 @@
-// QuoteMate · create the private `plan-pdfs` storage bucket (SMS estimator).
+// QuoteMate · create the private `plan-pdfs` storage bucket (SMS estimator
+// + commercial painting runs).
 // Holds customer-uploaded plan PDFs + Gotenberg report PDFs:
 //   plan-pdfs/<requestId>/plan.pdf
 //   plan-pdfs/<requestId>/report.pdf
-// 32MB cap (Anthropic PDF ceiling), application/pdf only, private —
-// reads happen server-side or via short-lived signed URLs.
+// and commercial painting run documents (PDFs AND site photos):
+//   plan-pdfs/paint/<runId>/<uploadId>.<ext>
+// 32MB cap (Anthropic PDF ceiling), private — reads happen server-side or
+// via short-lived signed URLs. The MIME allowlist matches the painting
+// upload route (app/api/tenant/commercial-painting/upload): PDF + images.
 // Idempotent. Usage: node --env-file=.env.local scripts/create-plan-pdfs-bucket.mjs
 
 import { createClient } from '@supabase/supabase-js'
@@ -16,7 +20,7 @@ const supabase = createClient(
 const SPEC = {
   public: false,
   fileSizeLimit: 32 * 1024 * 1024,
-  allowedMimeTypes: ['application/pdf'],
+  allowedMimeTypes: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
 }
 
 const { data: existing } = await supabase.storage.getBucket('plan-pdfs')

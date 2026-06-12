@@ -25,9 +25,10 @@ const bom = pricePaintTakeoff(items, resolvePaintRates(ROWS))
 describe('buildTenderTier', () => {
   const tier = buildTenderTier(bom)
 
-  it('carries every priced line + equipment as line items in the established shape', () => {
-    // 2 main lines + 1 scissor-lift line (5.2 m ceiling triggers it).
-    expect(tier.line_items).toHaveLength(3)
+  it('carries every priced line + equipment + the materials adjustment as line items', () => {
+    // 2 main lines + 1 scissor-lift line (5.2 m ceiling triggers it)
+    // + 1 materials supply adjustment (whole-litre rounding + sundries).
+    expect(tier.line_items).toHaveLength(4)
     const lift = tier.line_items.find((l) => l.unit === 'days')!
     expect(lift.description).toContain('Scissor lift')
     for (const li of tier.line_items) {
@@ -35,6 +36,13 @@ describe('buildTenderTier', () => {
       expect(li.unit_price_ex_gst).toBeGreaterThan(0)
       expect(li.source).toBe('paint_rates')
     }
+  })
+
+  it('line items sum EXACTLY to the tier subtotal (quote consumers reconcile)', () => {
+    const sum = tier.line_items.reduce((s, l) => s + l.total_ex_gst, 0)
+    expect(sum).toBeCloseTo(tier.subtotal_ex_gst, 2)
+    const adj = tier.line_items.find((l) => l.description.includes('Materials supply adjustment'))!
+    expect(adj.total_ex_gst).toBeGreaterThan(0) // sundries + litre rounding
   })
 
   it('separate-price lines stay OUT of the tender tier', () => {

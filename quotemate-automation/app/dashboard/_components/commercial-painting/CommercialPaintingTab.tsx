@@ -77,11 +77,14 @@ type ExtractionState = {
   finishesSchedule: Array<{ code: string; product: string; sheen: string; surfaces: string }>
   overallNote: string
   measurementLineCount: number
+  measurementParseFailed: boolean
   hasCorrections: boolean
 }
 
 export default function CommercialPaintingTab({ accessToken }: { accessToken: string | null }) {
   const [runId, setRunId] = useState<string | null>(null)
+  const [runStatus, setRunStatus] = useState<string | null>(null)
+  const [statusNote, setStatusNote] = useState<string | null>(null)
   const [jobName, setJobName] = useState('')
   const [siteAddress, setSiteAddress] = useState('')
   const [uploads, setUploads] = useState<UploadRow[]>([])
@@ -142,8 +145,11 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
         return
       }
       setRunId(body.run.id)
+      setRunStatus((body.run.status as string) ?? null)
+      setStatusNote((body.run.status_note as string) ?? null)
       setJobName(body.run.job_name ?? '')
       setSiteAddress(body.run.site_address ?? '')
+      setSavedQuote(null)
       setUploads(
         (body.uploads as Array<UploadRow & { doc_type: string | null }>).map((u) => ({
           ...u,
@@ -155,6 +161,7 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
           finishes_schedule?: ExtractionState['finishesSchedule']
           flags?: ReconcileFlag[]
           measurement_line_count?: number
+          measurement_parse_failed?: boolean
         }
         const corrected = body.extraction.corrected_items as PaintTakeoffItem[] | null
         setExtraction({
@@ -167,6 +174,7 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
           finishesSchedule: sheets.finishes_schedule ?? [],
           overallNote: body.extraction.overall_note ?? '',
           measurementLineCount: sheets.measurement_line_count ?? 0,
+          measurementParseFailed: sheets.measurement_parse_failed === true,
           hasCorrections: Array.isArray(corrected) && corrected.length > 0,
         })
         setBom((body.extraction.priced_bom as PricedPaintBom | null) ?? null)
@@ -227,8 +235,24 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
   }
 
   async function removeUpload(uploadId: string) {
-    setUploads((prev) => prev.filter((u) => u.id !== uploadId))
-    await fetch(`${API}/upload/${uploadId}`, authed({ method: 'DELETE' })).catch(() => {})
+    try {
+      const res = await fetch(`${API}/upload/${uploadId}`, authed({ method: 'DELETE' }))
+      const body = await res.json().catch(() => null)
+      if (res.status === 409) {
+        setErrMsg(
+          body?.detail ??
+            'This document is the source of the run’s takeoff and can’t be removed. Start a new run instead.',
+        )
+        return
+      }
+      if (!res.ok) {
+        setErrMsg('Removing the document failed. Please try again.')
+        return
+      }
+      setUploads((prev) => prev.filter((u) => u.id !== uploadId))
+    } catch {
+      setErrMsg('Removing the document failed. Please try again.')
+    }
   }
 
   const hasPlanSet = uploads.some((u) => u.doc_type === 'plan_set')
@@ -240,7 +264,17 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
     setExtractStep(0)
     setErrMsg(null)
     setBom(null)
+    setSavedQuote(null)
     try {
+      // Persist job facts typed after the upload, so they reach the
+      // saved quote + tender PDF.
+      if (jobName.trim() || siteAddress.trim()) {
+        await fetch(`${API}/run/${runId}`, authed({
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ job_name: jobName, site_address: siteAddress }),
+        })).catch(() => {})
+      }
       const res = await fetch(`${API}/extract`, authed({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -251,10 +285,17 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
         setErrMsg(
           body?.error === 'plan_set_required'
             ? 'Mark one document as the plan set first.'
-            : 'The takeoff failed — you can retry. Nothing was lost.',
+            : body?.error === 'extraction_in_flight'
+              ? 'An extraction is already running for this run — it takes a few minutes. Use the run in “Recent runs” to pick up the result.'
+              : body?.error === 'rate_limited'
+                ? body?.detail ?? 'Takeoff limit reached — try again shortly.'
+                : 'The takeoff failed — you can retry. Nothing was lost.',
         )
+        if (body?.error !== 'extraction_in_flight') setRunStatus('failed')
         return
       }
+      setRunStatus('ready')
+      setStatusNote(null)
       setExtraction({
         id: body.extractionId,
         items: body.items as PaintTakeoffItem[],
@@ -262,12 +303,13 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
         finishesSchedule: body.finishesSchedule ?? [],
         overallNote: body.overallNote ?? '',
         measurementLineCount: body.measurementLineCount ?? 0,
+        measurementParseFailed: body.measurementParseFailed === true,
         hasCorrections: false,
       })
       if (body.job?.name && !jobName) setJobName(body.job.name)
       if (body.job?.address && !siteAddress) setSiteAddress(body.job.address)
     } catch {
-      setErrMsg('The takeoff failed — you can retry. Nothing was lost.')
+      setErrMsg('The takeoff failed or the connection dropped — reopen the run from “Recent runs” in a few minutes to check for a result before retrying.')
     } finally {
       setExtracting(false)
     }
@@ -278,6 +320,9 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
     if (!runId || !extraction) return
     setPricing(true)
     setErrMsg(null)
+    // Edits invalidate the previous pricing AND any quote saved from it.
+    setBom(null)
+    setSavedQuote(null)
     try {
       const save = await fetch(`${API}/run/${runId}`, authed({
         method: 'PATCH',
@@ -333,6 +378,8 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
 
   function resetRun() {
     setRunId(null)
+    setRunStatus(null)
+    setStatusNote(null)
     setJobName('')
     setSiteAddress('')
     setUploads([])
@@ -360,6 +407,33 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
         <p role="alert" className="border border-ink-line border-l-4 border-l-warning bg-ink-card px-4 py-3 text-sm text-text-sec">
           {errMsg}
         </p>
+      )}
+
+      {/* Run-status banners — a resumed run must explain itself. */}
+      {runStatus === 'failed' && !extracting && (
+        <div role="alert" className="border border-ink-line border-l-4 border-l-warning bg-ink-card px-4 py-3">
+          <p className="font-mono text-[0.66rem] font-semibold uppercase tracking-[0.14em] text-warning">
+            Last takeoff failed
+          </p>
+          <p className="mt-1 text-sm text-text-sec">
+            {statusNote ?? 'The model could not read the documents.'} Adjust the documents if needed, then run the takeoff again.
+          </p>
+        </div>
+      )}
+      {runStatus === 'extracting' && !extracting && (
+        <div className="flex flex-wrap items-center gap-3 border border-ink-line border-l-4 border-l-accent bg-ink-card px-4 py-3">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden />
+          <p className="flex-1 text-sm text-text-sec">
+            A takeoff is running on the server for this run — it takes a few minutes.
+          </p>
+          <button
+            type="button"
+            onClick={() => { if (runId) void loadRun(runId) }}
+            className="inline-flex cursor-pointer items-center gap-1.5 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-accent transition-colors hover:text-accent-press"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Check now
+          </button>
+        </div>
       )}
 
       {/* ── 01 · Documents ──────────────────────────────────────────── */}
@@ -491,6 +565,14 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
                   : 'Check quantities, systems and heights, then price. Nothing is priced until you confirm.'}
               </p>
 
+              {extraction.measurementParseFailed && (
+                <p role="alert" className="mt-4 border border-ink-line border-l-4 border-l-warning bg-ink-deep px-4 py-3 text-sm text-text-sec">
+                  The measurements document could not be transcribed, so this takeoff is
+                  plan-only — no reconciliation flags were produced. Check quantities
+                  against the painter’s takeoff by hand, or re-run after fixing the document.
+                </p>
+              )}
+
               {lowShare > 0.5 && (
                 <p role="alert" className="mt-4 border border-ink-line border-l-4 border-l-warning bg-ink-deep px-4 py-3 text-sm text-text-sec">
                   More than half this takeoff’s area is low-confidence. Recommend a site
@@ -575,8 +657,9 @@ export default function CommercialPaintingTab({ accessToken }: { accessToken: st
               <li key={r.id}>
                 <button
                   type="button"
+                  disabled={extracting || pricing || saving}
                   onClick={() => void loadRun(r.id)}
-                  className="flex w-full cursor-pointer items-center gap-3 bg-ink-deep px-4 py-3 text-left transition-colors hover:bg-ink"
+                  className="flex w-full cursor-pointer items-center gap-3 bg-ink-deep px-4 py-3 text-left transition-colors hover:bg-ink disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <RefreshCw className="h-3.5 w-3.5 shrink-0 text-text-dim" aria-hidden />
                   <span className="min-w-0 flex-1">

@@ -20,10 +20,19 @@ import {
   runMeasurementParse,
 } from '@/lib/commercial-painting/extract'
 import { reconcileTakeoff } from '@/lib/commercial-painting/reconcile'
+import { pipelineLog } from '@/lib/log/pipeline'
 import type { MeasurementLine } from '@/lib/commercial-painting/types'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
+
+/** An 'extracting' run younger than this is treated as genuinely in
+ *  flight; older means the function died without reaching its catch
+ *  (maxDuration kill / OOM) and the run is recoverable by retrying. */
+const IN_FLIGHT_STALE_MS = 10 * 60 * 1000
+
+/** Per-tenant Opus budget: extractions started in the trailing hour. */
+const MAX_EXTRACTIONS_PER_HOUR = 8
 
 type UploadRow = {
   id: string
@@ -47,11 +56,46 @@ export async function POST(req: Request) {
 
   const { data: run } = await estimatorSupabase
     .from('paint_runs')
-    .select('id, job_name, site_address, status')
+    .select('id, job_name, site_address, status, updated_at')
     .eq('id', paintRunId)
     .eq('tenant_id', tenant.id)
     .maybeSingle()
   if (!run) return Response.json({ ok: false, error: 'run_not_found' }, { status: 404 })
+
+  // ── In-flight guard: one extraction per run at a time. ────────────
+  if (run.status === 'extracting') {
+    const ageMs = Date.now() - new Date(run.updated_at as string).getTime()
+    if (Number.isFinite(ageMs) && ageMs < IN_FLIGHT_STALE_MS) {
+      return Response.json(
+        {
+          ok: false,
+          error: 'extraction_in_flight',
+          detail: 'An extraction is already running for this run — it takes a few minutes. Reload the run to pick up the result.',
+        },
+        { status: 409 },
+      )
+    }
+    // Stale 'extracting' (function died mid-run): fall through and reclaim.
+  }
+
+  // ── Per-tenant Opus budget (cost/quota abuse guard). ──────────────
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const { count: recentCount } = await estimatorSupabase
+    .from('plan_extractions')
+    .select('id', { count: 'exact', head: true })
+    .eq('tenant_id', tenant.id)
+    .eq('trade', 'commercial_painting')
+    .gte('created_at', hourAgo)
+  if ((recentCount ?? 0) >= MAX_EXTRACTIONS_PER_HOUR) {
+    return Response.json(
+      {
+        ok: false,
+        error: 'rate_limited',
+        detail: `Takeoff limit reached (${MAX_EXTRACTIONS_PER_HOUR}/hour). Try again shortly.`,
+      },
+      { status: 429 },
+    )
+  }
 
   const { data: uploadRows } = await estimatorSupabase
     .from('plan_uploads')
@@ -76,7 +120,28 @@ export async function POST(req: Request) {
       .update({ status, status_note: note ?? null, updated_at: new Date().toISOString() })
       .eq('id', paintRunId)
 
-  await setStatus('extracting')
+  // ── CAS claim: only one concurrent request transitions the run. ───
+  const { data: claimed } = await estimatorSupabase
+    .from('paint_runs')
+    .update({ status: 'extracting', status_note: null, updated_at: new Date().toISOString() })
+    .eq('id', paintRunId)
+    .eq('status', run.status as string)
+    .select('id')
+    .maybeSingle()
+  if (!claimed) {
+    return Response.json(
+      { ok: false, error: 'extraction_in_flight', detail: 'Another request just claimed this run.' },
+      { status: 409 },
+    )
+  }
+
+  const log = pipelineLog('estimate', paintRunId)
+  log.step('paint takeoff started', {
+    tenant: tenant.id,
+    uploads: uploads.length,
+    hasMeasurements: Boolean(measurementDoc),
+    hasServices: Boolean(servicesDoc),
+  })
 
   try {
     const planBytes = await downloadPaintDoc(planSet.pdf_path!)
@@ -96,6 +161,7 @@ export async function POST(req: Request) {
     ])
 
     if (!extraction.parsed || extraction.parsed.items.length === 0) {
+      log.err('paint takeoff unparseable', undefined, { model: extraction.model, runtime: extraction.runtimeSeconds })
       await setStatus('failed', `The model could not produce a takeoff from the plan set. ${extraction.raw.slice(0, 280)}`)
       return Response.json(
         { ok: false, error: 'extraction_unparseable', model: extraction.model },
@@ -145,6 +211,14 @@ export async function POST(req: Request) {
       .update({ ...jobUpdates, status: 'ready', status_note: null, updated_at: new Date().toISOString() })
       .eq('id', paintRunId)
 
+    log.ok('paint takeoff ready', {
+      model: extraction.model,
+      runtime: runtime,
+      items: reconciled.items.length,
+      flags: reconciled.flags.length,
+      measurementLines: measurementLines.length,
+    })
+
     return Response.json({
       ok: true,
       extractionId: extRow.id,
@@ -160,6 +234,7 @@ export async function POST(req: Request) {
     })
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
+    log.err('paint takeoff failed', e)
     await setStatus('failed', detail.slice(0, 300))
     return Response.json({ ok: false, error: 'extraction_failed', detail }, { status: 502 })
   }

@@ -98,14 +98,36 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const run = await loadRun(tenant.id, id)
   if (!run) return Response.json({ ok: false, error: 'not_found' }, { status: 404 })
 
-  let body: { extractionId?: string; corrected_items?: unknown }
+  let body: {
+    extractionId?: string
+    corrected_items?: unknown
+    job_name?: string
+    site_address?: string
+  }
   try {
     body = await req.json()
   } catch {
     return Response.json({ ok: false, error: 'invalid_json' }, { status: 400 })
   }
+
+  // Job facts can be updated on their own (typed after upload — they
+  // must land on the saved quote + tender PDF).
+  const jobFields: Record<string, string | null> = {}
+  if (typeof body.job_name === 'string') jobFields.job_name = body.job_name.trim().slice(0, 200) || null
+  if (typeof body.site_address === 'string') jobFields.site_address = body.site_address.trim().slice(0, 300) || null
+  if (Object.keys(jobFields).length > 0) {
+    await estimatorSupabase
+      .from('paint_runs')
+      .update({ ...jobFields, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('tenant_id', tenant.id)
+  }
+
   const extractionId = body.extractionId?.trim()
-  if (!extractionId) return Response.json({ ok: false, error: 'missing_extractionId' }, { status: 400 })
+  if (!extractionId) {
+    if (Object.keys(jobFields).length > 0) return Response.json({ ok: true, savedItems: 0 })
+    return Response.json({ ok: false, error: 'missing_extractionId' }, { status: 400 })
+  }
 
   const items = sanitiseItems(body.corrected_items)
   if (!items || items.length === 0) {

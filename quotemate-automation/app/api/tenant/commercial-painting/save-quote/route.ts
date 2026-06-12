@@ -15,6 +15,7 @@ import { buildPaintQuotePayloads } from '@/lib/commercial-painting/save-quote-he
 import { buildPaintTenderReportHtml } from '@/lib/commercial-painting/report-html'
 import { gotenbergConfigured, renderPdfFromHtml } from '@/lib/pdf/gotenberg'
 import { generateShareToken } from '@/lib/stripe/checkout'
+import { pipelineLog } from '@/lib/log/pipeline'
 import type { PricedPaintBom } from '@/lib/commercial-painting/types'
 
 export const dynamic = 'force-dynamic'
@@ -51,7 +52,7 @@ export async function POST(req: Request) {
       .maybeSingle(),
     estimatorSupabase
       .from('plan_extractions')
-      .select('id, priced_bom')
+      .select('id, priced_bom, priced_at, sheets_used')
       .eq('id', extractionId)
       .eq('paint_run_id', paintRunId)
       .eq('tenant_id', tenant.id)
@@ -64,6 +65,26 @@ export async function POST(req: Request) {
       { ok: false, error: 'not_priced', detail: 'Price the confirmed takeoff before saving a quote.' },
       { status: 422 },
     )
+  }
+
+  const appUrl = process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app'
+
+  // ── Idempotency: one quote per pricing pass. Re-saving the same
+  // priced_at returns the existing quote instead of minting duplicate
+  // rows + share tokens; a re-price (new priced_at) allows a new quote.
+  const sheets = (ext?.sheets_used ?? {}) as Record<string, unknown> & {
+    saved_quote?: { quote_id: string; share_token: string; priced_at: string; pdf_ready?: boolean }
+  }
+  if (sheets.saved_quote && sheets.saved_quote.priced_at === ext?.priced_at) {
+    const prior = sheets.saved_quote
+    return Response.json({
+      ok: true,
+      quoteId: prior.quote_id,
+      shareToken: prior.share_token,
+      quoteViewUrl: `${appUrl}/q/${prior.share_token}`,
+      pdfUrl: prior.pdf_ready ? `${appUrl}/api/q/${prior.share_token}/pdf` : null,
+      alreadySaved: true,
+    })
   }
 
   const { data: tenantRow } = await estimatorSupabase
@@ -106,8 +127,8 @@ export async function POST(req: Request) {
     )
   }
 
-  const appUrl = process.env.APP_URL ?? 'https://quote-mate-rho.vercel.app'
   const quoteViewUrl = `${appUrl}/q/${shareToken}`
+  const log = pipelineLog('estimate', paintRunId)
 
   // ── Tender PDF — best-effort, never blocks the quote. ─────────────
   let pdfReady = false
@@ -128,11 +149,35 @@ export async function POST(req: Request) {
       if (!upErr) {
         await estimatorSupabase.from('quotes').update({ pdf_path: path }).eq('id', quoteRow.id)
         pdfReady = true
+      } else {
+        log.err('paint tender pdf upload failed', upErr, { quoteId: quoteRow.id })
       }
-    } catch {
-      // PDF is a bonus; the quote record is the deliverable.
+    } catch (e) {
+      // PDF is a bonus; the quote record is the deliverable — but the
+      // failure must be visible in platform logs, not swallowed.
+      log.err('paint tender pdf render failed', e, { quoteId: quoteRow.id })
     }
+  } else {
+    log.err('paint tender pdf skipped — GOTENBERG_URL not configured', undefined, { quoteId: quoteRow.id })
   }
+
+  // Record the saved quote on the extraction (idempotency anchor).
+  await estimatorSupabase
+    .from('plan_extractions')
+    .update({
+      sheets_used: {
+        ...sheets,
+        saved_quote: {
+          quote_id: quoteRow.id,
+          share_token: shareToken,
+          priced_at: ext?.priced_at ?? null,
+          pdf_ready: pdfReady,
+        },
+      },
+    })
+    .eq('id', extractionId)
+
+  log.ok('paint quote saved', { quoteId: quoteRow.id, totalIncGst: bom.totalIncGst, pdfReady })
 
   return Response.json({
     ok: true,

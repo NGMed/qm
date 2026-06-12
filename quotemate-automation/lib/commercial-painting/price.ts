@@ -41,7 +41,13 @@ function money(n: number): string {
 }
 
 type PriceOneResult =
-  | { ok: true; line: PricedPaintLine }
+  | {
+      ok: true
+      line: PricedPaintLine
+      /** Unrounded material facts for the per-product roll-up — the
+       *  display-rounded line values must never feed aggregation. */
+      mat: { product: string; pricePerL: number; litresRaw: number }
+    }
   | { ok: false }
 
 function priceOne(item: PaintTakeoffItem, book: PaintRateBook): PriceOneResult {
@@ -65,6 +71,7 @@ function priceOne(item: PaintTakeoffItem, book: PaintRateBook): PriceOneResult {
     const materialExGst = round2(litres * mat.pricePerL)
     return {
       ok: true,
+      mat: { product: mat.product, pricePerL: mat.pricePerL, litresRaw: litres },
       line: {
         surface: item.surface,
         room: item.room,
@@ -103,6 +110,7 @@ function priceOne(item: PaintTakeoffItem, book: PaintRateBook): PriceOneResult {
 
   return {
     ok: true,
+    mat: { product: mat.product, pricePerL: mat.pricePerL, litresRaw: litres },
     line: {
       surface: item.surface,
       room: item.room,
@@ -138,6 +146,7 @@ export function pricePaintTakeoff(
 
   const mainLines: PricedPaintLine[] = []
   const separateLines: PricedPaintLine[] = []
+  const mainMats: Array<{ product: string; pricePerL: number; litresRaw: number }> = []
   const unmatched: PricedPaintBom['unmatched'] = []
   const excluded: PricedPaintBom['excluded'] = []
 
@@ -161,20 +170,25 @@ export function pricePaintTakeoff(
       })
       continue
     }
-    if (r.line.separate_price) separateLines.push(r.line)
-    else mainLines.push(r.line)
+    if (r.line.separate_price) {
+      separateLines.push(r.line)
+    } else {
+      mainLines.push(r.line)
+      mainMats.push(r.mat)
+    }
   }
 
-  // ── Materials: aggregate raw litres per product, THEN round up to
-  // whole litres (you buy whole litres per product, not per line). ───
+  // ── Materials: aggregate RAW litres per product at the BOOK rate,
+  // THEN round up to whole litres (you buy whole litres per product,
+  // not per line). Never re-derive from display-rounded line values —
+  // rounded litres ÷ rounded dollars drifts and can blow up on tiny
+  // lines (the $400/L bug).
   const sundries = book.modifiers.sundriesPct
   const litresByProduct = new Map<string, { litresRaw: number; pricePerL: number }>()
-  for (const line of mainLines) {
-    const cur = litresByProduct.get(line.product) ?? { litresRaw: 0, pricePerL: 0 }
-    cur.litresRaw += line.litres
-    // pricePerL is uniform per product (same rate row) — last write wins.
-    cur.pricePerL = round2(line.materialExGst / Math.max(line.litres, 0.0001))
-    litresByProduct.set(line.product, cur)
+  for (const mat of mainMats) {
+    const cur = litresByProduct.get(mat.product) ?? { litresRaw: 0, pricePerL: mat.pricePerL }
+    cur.litresRaw += mat.litresRaw
+    litresByProduct.set(mat.product, cur)
   }
   const materials: PaintMaterialSummary[] = [...litresByProduct.entries()].map(
     ([product, m]) => {

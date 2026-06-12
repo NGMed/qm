@@ -42,6 +42,25 @@ export function buildTenderTier(bom: PricedPaintBom) {
       source: 'paint_rates',
     })
   }
+
+  // The per-line material figures are raw-litre costs; the BOM's
+  // materials total buys WHOLE litres per product and adds sundries.
+  // Carry that difference as an explicit line so line_items sum exactly
+  // to subtotal_ex_gst (quote consumers reconcile line items vs totals).
+  const linesSum = round2(lineItems.reduce((s, l) => s + l.total_ex_gst, 0))
+  const adjustment = round2(bom.subtotalExGst - linesSum)
+  if (Math.abs(adjustment) >= 0.01) {
+    lineItems.push({
+      unit: 'item',
+      quantity: 1,
+      description:
+        'Materials supply adjustment — whole-litre purchase rounding + sundries (masking, drop sheets, rollers)',
+      unit_price_ex_gst: adjustment,
+      total_ex_gst: adjustment,
+      source: 'paint_rates',
+    })
+  }
+
   return {
     label: 'Tender price',
     subtotal_ex_gst: bom.subtotalExGst,

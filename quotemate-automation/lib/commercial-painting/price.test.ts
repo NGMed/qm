@@ -114,6 +114,50 @@ describe('pricePaintTakeoff — coverage math', () => {
     expect(bom.materials[0].litres).toBe(12)
   })
 
+  it('regression: a tiny line cannot corrupt the product bucket rate ($400/L bug)', () => {
+    // 0.03 m² rounds to 0.00 display litres; the old code re-derived
+    // $/L from rounded values (0.04/0.0001 = $400/L) and repriced the
+    // WHOLE bucket. The book rate must always win.
+    const bom = pricePaintTakeoff(
+      [
+        item({ quantity: 100 }), // 13.33 L low sheen
+        item({ quantity: 0.03, surface: 'Patch reveal' }),
+      ],
+      book,
+    )
+    expect(bom.materials).toHaveLength(1)
+    expect(bom.materials[0].pricePerL).toBe(11) // the book rate, exactly
+    // 14 L × $11 × 1.08 — not 14 × $400.
+    expect(bom.materials[0].costExGst).toBeCloseTo(166.32, 2)
+  })
+
+  it('regression: materials totals are order-independent', () => {
+    const a = pricePaintTakeoff(
+      [item({ quantity: 100 }), item({ quantity: 0.8, surface: 'Reveal' })],
+      book,
+    )
+    const b = pricePaintTakeoff(
+      [item({ quantity: 0.8, surface: 'Reveal' }), item({ quantity: 100 })],
+      book,
+    )
+    expect(a.materialsExGst).toBe(b.materialsExGst)
+    expect(a.materials[0].pricePerL).toBe(b.materials[0].pricePerL)
+  })
+
+  it('regression: ceil works on RAW litres, not display-rounded sums', () => {
+    // Three lines of raw 0.334 L (2.505 m²): raw sum 1.002 → 2 L.
+    // Summing 2dp-rounded 0.33×3 = 0.99 would wrongly give 1 L.
+    const bom = pricePaintTakeoff(
+      [
+        item({ quantity: 2.505, surface: 'A' }),
+        item({ quantity: 2.505, surface: 'B' }),
+        item({ quantity: 2.505, surface: 'C' }),
+      ],
+      book,
+    )
+    expect(bom.materials[0].litres).toBe(2)
+  })
+
   it('per-item doors: hours/unit/coat with enamel material', () => {
     // 1 door × 0.75h × 2 coats × 1.0 × 1.1 = 1.65h → $123.75
     const bom = pricePaintTakeoff(
