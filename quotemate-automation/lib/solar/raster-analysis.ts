@@ -245,28 +245,51 @@ export function estimateBuildingHeightFromDsm(
 
 export type PlaneAnchor = { plane_index: number; x_pct: number; y_pct: number }
 
+/** Metres per degree of latitude (WGS84 mean). */
+const M_PER_DEG_LAT = 111_132
+/** Metres per degree of longitude at the equator. */
+const M_PER_DEG_LNG = 111_320
+
 /**
  * PURE — project each roof plane's panel-centroid into percentage
- * coordinates inside a geo-referenced raster (the flux heatmap), via the
- * raster's [west, south, east, north] bbox. Planes with no panels inside
- * the bbox are skipped, so a label can never float off the roof.
+ * coordinates inside the flux raster image.
+ *
+ * Google Solar GeoTIFFs carry a PROJECTED bbox (UTM metres — verified
+ * live 2026-06-13), so a naive degrees-vs-bbox comparison fails. Instead
+ * the raster's geometry is anchored on what we DO know: it is north-up
+ * and centred on the dataLayers request `center`, with the bbox giving
+ * its true metre extents. Panel positions become local-metre offsets
+ * from that centre (equirectangular — exact to centimetres at 50 m).
+ * When the bbox is in degrees (|values| ≤ 360) the spans convert first.
+ * Planes whose centroid lands outside the image are skipped, so a label
+ * can never float off the roof.
  */
 export function projectPlaneAnchors(
   panels: Array<{ center: { lat: number; lng: number }; segment_index: number }>,
   bbox: [number, number, number, number] | null,
+  center: { lat: number; lng: number },
 ): PlaneAnchor[] {
   if (!bbox || panels.length === 0) return []
+  if (!Number.isFinite(center.lat) || !Number.isFinite(center.lng)) return []
   const [west, south, east, north] = bbox
-  const spanX = east - west
-  const spanY = north - south
-  if (!(spanX > 0) || !(spanY > 0)) return []
+  if (![west, south, east, north].every((v) => Number.isFinite(v))) return []
+
+  // Raster extents in METRES, regardless of the bbox CRS.
+  const degreeBbox = Math.abs(west) <= 360 && Math.abs(east) <= 360 && Math.abs(north) <= 360
+  const cosLat = Math.cos((center.lat * Math.PI) / 180)
+  const widthM = degreeBbox ? (east - west) * M_PER_DEG_LNG * cosLat : east - west
+  const heightM = degreeBbox ? (north - south) * M_PER_DEG_LAT : north - south
+  if (!(widthM > 0) || !(heightM > 0)) return []
 
   const sums = new Map<number, { x: number; y: number; n: number }>()
   for (const p of panels) {
     const { lat, lng } = p.center
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
-    const x = (lng - west) / spanX
-    const y = (north - lat) / spanY
+    // Local-metre offset from the raster centre (north-up image).
+    const dxM = (lng - center.lng) * M_PER_DEG_LNG * cosLat
+    const dyM = (lat - center.lat) * M_PER_DEG_LAT
+    const x = (dxM + widthM / 2) / widthM
+    const y = (heightM / 2 - dyM) / heightM
     if (x < 0 || x > 1 || y < 0 || y > 1) continue
     const acc = sums.get(p.segment_index)
     if (acc) {

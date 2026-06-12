@@ -232,7 +232,7 @@ export async function applySolarSunAssets(
     // quote page can pin sun-score labels onto the roof deterministically.
     const planeAnchors =
       flux && annualFlux?.bbox
-        ? projectPlaneAnchors(estimate.roof.panels ?? [], annualFlux.bbox)
+        ? projectPlaneAnchors(estimate.roof.panels ?? [], annualFlux.bbox, args.location)
         : []
 
     const sun = buildSunContext({

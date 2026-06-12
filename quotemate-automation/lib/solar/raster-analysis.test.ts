@@ -167,47 +167,68 @@ describe('analyzeHourlyShade', () => {
 })
 
 describe('projectPlaneAnchors', () => {
-  // bbox [west, south, east, north] — a 100 m-ish box around Sydney.
-  const BBOX: [number, number, number, number] = [151.2, -33.87, 151.21, -33.86]
+  const CENTER = { lat: -33.8679, lng: 151.211 }
+  // The REAL shape: Google Solar flux bbox is projected UTM METRES
+  // (verified live 2026-06-13) — a 100 m × 100.5 m box.
+  const METRE_BBOX: [number, number, number, number] = [334474, 6251000.5, 334574, 6251101]
 
-  it('projects per-plane panel centroids to % coordinates', () => {
-    const panels = [
-      // Plane 0: two panels straddling the bbox centre horizontally.
-      { center: { lat: -33.865, lng: 151.2025 }, segment_index: 0 },
-      { center: { lat: -33.865, lng: 151.2075 }, segment_index: 0 },
-      // Plane 1: one panel at the exact bbox centre.
-      { center: { lat: -33.865, lng: 151.205 }, segment_index: 1 },
-    ]
-    const anchors = projectPlaneAnchors(panels, BBOX)
-    expect(anchors).toHaveLength(2)
-    expect(anchors[0].plane_index).toBe(0)
+  it('centres a panel at the request centre regardless of bbox CRS', () => {
+    const panels = [{ center: CENTER, segment_index: 0 }]
+    const anchors = projectPlaneAnchors(panels, METRE_BBOX, CENTER)
+    expect(anchors).toHaveLength(1)
     expect(anchors[0].x_pct).toBeCloseTo(50, 0)
     expect(anchors[0].y_pct).toBeCloseTo(50, 0)
-    expect(anchors[1]).toMatchObject({ plane_index: 1 })
-    expect(anchors[1].x_pct).toBeCloseTo(50, 0)
   })
 
-  it('drops panels outside the bbox so labels never float off-image', () => {
+  it('offsets in metres inside a UTM bbox (east → right, north → up)', () => {
+    // ~25 m east of centre: dLng = 25 / (111320 × cos(lat)).
+    const dLng = 25 / (111_320 * Math.cos((CENTER.lat * Math.PI) / 180))
+    const dLat = 25 / 111_132 // ~25 m north
     const anchors = projectPlaneAnchors(
       [
-        { center: { lat: -33.865, lng: 151.205 }, segment_index: 0 },
+        { center: { lat: CENTER.lat, lng: CENTER.lng + dLng }, segment_index: 0 },
+        { center: { lat: CENTER.lat + dLat, lng: CENTER.lng }, segment_index: 1 },
+      ],
+      METRE_BBOX,
+      CENTER,
+    )
+    expect(anchors[0].x_pct).toBeCloseTo(75, 0) // 25 m east in a 100 m box
+    expect(anchors[0].y_pct).toBeCloseTo(50, 0)
+    expect(anchors[1].y_pct).toBeLessThan(50) // north = up = smaller y
+  })
+
+  it('also handles a degree-valued bbox', () => {
+    const degBbox: [number, number, number, number] = [151.2105, -33.8684, 151.2115, -33.8674]
+    const anchors = projectPlaneAnchors(
+      [{ center: CENTER, segment_index: 0 }],
+      degBbox,
+      CENTER,
+    )
+    expect(anchors).toHaveLength(1)
+    expect(anchors[0].x_pct).toBeCloseTo(50, 0)
+  })
+
+  it('drops panels outside the raster so labels never float off-image', () => {
+    const anchors = projectPlaneAnchors(
+      [
+        { center: CENTER, segment_index: 0 },
         { center: { lat: -40, lng: 140 }, segment_index: 1 }, // far away
       ],
-      BBOX,
+      METRE_BBOX,
+      CENTER,
     )
     expect(anchors).toHaveLength(1)
     expect(anchors[0].plane_index).toBe(0)
   })
 
   it('returns empty for a null/degenerate bbox or no panels', () => {
-    expect(projectPlaneAnchors([], BBOX)).toEqual([])
-    expect(
-      projectPlaneAnchors([{ center: { lat: -33.865, lng: 151.205 }, segment_index: 0 }], null),
-    ).toEqual([])
+    expect(projectPlaneAnchors([], METRE_BBOX, CENTER)).toEqual([])
+    expect(projectPlaneAnchors([{ center: CENTER, segment_index: 0 }], null, CENTER)).toEqual([])
     expect(
       projectPlaneAnchors(
-        [{ center: { lat: -33.865, lng: 151.205 }, segment_index: 0 }],
-        [151.2, -33.86, 151.2, -33.86],
+        [{ center: CENTER, segment_index: 0 }],
+        [334474, 6251000, 334474, 6251000],
+        CENTER,
       ),
     ).toEqual([])
   })
