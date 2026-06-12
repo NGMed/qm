@@ -38,6 +38,65 @@ describe('buildSolarQuoteReportHtml — legacy (no premium)', () => {
   })
 })
 
+describe('buildSolarQuoteReportHtml — on-heatmap sun-score labels (2026-06-13)', () => {
+  /** Estimate whose plane carries quantiles (scores) + an on-image anchor. */
+  function anchoredEstimate(withAnchors: boolean) {
+    const estimate = makeFixtureEstimate()
+    estimate.roof = {
+      ...estimate.roof,
+      planes: [
+        {
+          ...estimate.roof.planes[0],
+          sunshine_quantiles: [1200, 1300, 1400, 1500, 1550, 1600, 1650, 1700, 1750, 1800, 1850],
+        },
+      ],
+    }
+    estimate.context.sun = {
+      ...estimate.context.sun!,
+      plane_anchors: withAnchors ? [{ plane_index: 0, x_pct: 42.5, y_pct: 31 }] : null,
+    }
+    return estimate
+  }
+
+  it('pins the labels on the heatmap and suppresses the duplicate plane table', () => {
+    const estimate = anchoredEstimate(true)
+    const premium = buildSolarPremiumQuote({ estimate, config: DEFAULT_SOLAR_CONFIG, theme: 'light' })
+    const html = buildSolarQuoteReportHtml({
+      ...BASE,
+      estimate,
+      premium,
+      fluxImageUrl: 'https://example.test/flux.png',
+    })
+    expect(html).toContain('BEST SPOT')
+    expect(html).toContain('left:42.5%')
+    expect(html).toContain('the best place for panels')
+    // The plane table would duplicate the on-image labels — suppressed.
+    expect(html).not.toContain('% of best face</td>')
+  })
+
+  it('keeps the plane table when no anchors exist (older estimates)', () => {
+    const estimate = anchoredEstimate(false)
+    const premium = buildSolarPremiumQuote({ estimate, config: DEFAULT_SOLAR_CONFIG, theme: 'light' })
+    const html = buildSolarQuoteReportHtml({
+      ...BASE,
+      estimate,
+      premium,
+      fluxImageUrl: 'https://example.test/flux.png',
+    })
+    expect(html).not.toContain('BEST SPOT')
+    expect(html).toContain('% of best face</td>')
+  })
+
+  it('keeps the plane table when the flux figure itself is absent', () => {
+    const estimate = anchoredEstimate(true)
+    const premium = buildSolarPremiumQuote({ estimate, config: DEFAULT_SOLAR_CONFIG, theme: 'light' })
+    const html = buildSolarQuoteReportHtml({ ...BASE, estimate, premium, fluxImageUrl: null })
+    // No figure rendered → the table is the only carrier of the scores.
+    expect(html).not.toContain('BEST SPOT')
+    expect(html).toContain('% of best face</td>')
+  })
+})
+
 describe('buildSolarQuoteReportHtml — Felt variant (spec 2026-06-13)', () => {
   const html = buildSolarQuoteReportHtml({
     ...BASE,
