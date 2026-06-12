@@ -26,7 +26,7 @@ import type {
   SolarStcBreakdown,
   SolarQuotePrice,
 } from './types'
-import { DEFAULT_SOLAR_CONFIG } from './config'
+import { DEFAULT_SOLAR_CONFIG, resolveStcZoneRating } from './config'
 import { roundTo } from './math'
 
 // ── GST rate constant (10% AU GST). Applied only when rateCard.gst_registered. ──
@@ -85,7 +85,7 @@ export function stcBreakdown(args: {
   config: SolarConfig
 }): SolarStcBreakdown {
   const { system_kw, context, config } = args
-  const zone_rating = config.zone_table[context.postcode] ?? 0
+  const zone_rating = resolveStcZoneRating(context.postcode, config)
   const deeming_years = config.deeming_schedule[context.install_year] ?? 0
   const certificates =
     zone_rating > 0 && deeming_years > 0

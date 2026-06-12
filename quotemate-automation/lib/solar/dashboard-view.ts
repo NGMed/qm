@@ -47,6 +47,13 @@ export function solarGuardrailCount(flags: unknown): number {
   return Array.isArray(flags) ? flags.length : 0
 }
 
+/** Normalise the jsonb column to a clean string[] for display — the
+ *  tradie must SEE what each open check is, not just a count. */
+export function solarGuardrailFlags(flags: unknown): string[] {
+  if (!Array.isArray(flags)) return []
+  return flags.filter((f): f is string => typeof f === 'string' && f.length > 0)
+}
+
 /** PURE — derive the lifecycle status from the raw row fields. */
 export function deriveSolarEstimateStatus(
   row: SolarEstimateStatusInput,
@@ -111,10 +118,16 @@ export type SolarEstimateViewModel = {
   netIncGst: number | null
   status: SolarEstimateStatus
   guardrailCount: number
+  /** The open checks, verbatim — rendered on flagged cards so the tradie
+   *  knows exactly what to fix before re-drafting. */
+  guardrailFlags: string[]
   routing: string | null
   createdAt: string
   /** True only when the tradie may confirm-and-release from the dashboard. */
   canConfirm: boolean
+  /** True when the estimate may be re-drafted (any unreleased estimate —
+   *  the fix loop for flagged rows, also useful after a config update). */
+  canRedraft: boolean
   /** The /q/solar/[token] public quote link. */
   quoteUrl: string
 }
@@ -141,7 +154,7 @@ export function mapSolarEstimateRow(args: {
   const netIncGst = (priceTier?.net_inc_gst ?? null) as number | null
 
   const status = deriveSolarEstimateStatus(row)
-  const guardrailCount = solarGuardrailCount(row.guardrail_flags)
+  const guardrailFlags = solarGuardrailFlags(row.guardrail_flags)
 
   return {
     token: row.public_token,
@@ -150,12 +163,16 @@ export function mapSolarEstimateRow(args: {
     systemKw,
     netIncGst,
     status,
-    guardrailCount,
+    guardrailCount: guardrailFlags.length,
+    guardrailFlags,
     routing: row.routing,
     createdAt: row.created_at,
     // Only a clean, drafted-but-unreleased estimate can be confirmed from
     // the dashboard. Flagged → must re-draft; already confirmed/paid → no-op.
     canConfirm: status === 'awaiting_confirmation',
+    // Any unreleased estimate may be re-drafted: the fix loop for flagged
+    // rows, and a refresh path after a config/rate-card update.
+    canRedraft: status === 'flagged' || status === 'awaiting_confirmation',
     quoteUrl: buildSolarQuoteUrl(appUrl, row.public_token),
   }
 }

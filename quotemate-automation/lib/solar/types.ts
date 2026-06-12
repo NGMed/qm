@@ -468,6 +468,20 @@ export type StcDeemingSchedule = Record<number, number>
 /** Postcode → CER STC zone rating. NSW spans 2–4, QLD 1–3; never state-default. */
 export type StcZoneTable = Record<string, number>
 
+/**
+ * Postcode-RANGE zone entries — the fallback when the exact table has no
+ * entry. Still postcode-based (never state-default): each range is a
+ * contiguous CER-zone block (e.g. Brisbane metro 4000–4399 = zone 3).
+ * Exact `zone_table` entries always take precedence over ranges.
+ */
+export type StcZoneRange = {
+  /** Inclusive numeric postcode bounds. */
+  from: number
+  to: number
+  /** CER zone rating for the whole range (e.g. 1.382 for zone 3). */
+  rating: number
+}
+
 /** Feed-in tariff config, keyed by network/DNSP. */
 export type SolarFeedInConfig = {
   /** Network/DNSP name → $/kWh feed-in benchmark. */
@@ -494,6 +508,9 @@ export type SolarConfig = {
   effective_date: string
   deeming_schedule: StcDeemingSchedule
   zone_table: StcZoneTable
+  /** Optional postcode-range fallback when zone_table has no exact entry.
+   *  Resolved by resolveStcZoneRating (config.ts); exact entries win. */
+  zone_ranges?: StcZoneRange[]
   /** Conservative $/STC (date-stamped, ~$38 vs $40 clearing-house cap). */
   stc_price_aud: number
   feed_in: SolarFeedInConfig

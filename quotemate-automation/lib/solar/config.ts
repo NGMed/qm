@@ -19,6 +19,7 @@ import type {
   SolarConfigValidation,
   StcDeemingSchedule,
   StcZoneTable,
+  StcZoneRange,
   SolarRateCard,
 } from './types'
 
@@ -46,6 +47,40 @@ const ZONE_TABLE: StcZoneTable = {
   '4870': 1.622, // Cairns QLD (zone 1)
 }
 
+// ── Postcode-RANGE zone fallback (config 2026-06-12) ──────────────────
+// The exact table above is a hand-curated slice; a missing postcode used
+// to silently price with 0 STCs (the 670 London Road, Chandler 4154 bug —
+// the customer was quoted with NO rebate). These contiguous CER zone-3
+// metro blocks are still postcode-based (never state-default); exact
+// table entries always win. Extend per CER's published mapping.
+const ZONE_RANGES: StcZoneRange[] = [
+  { from: 2000, to: 2249, rating: 1.382 }, // Sydney metro — zone 3
+  { from: 2555, to: 2574, rating: 1.382 }, // Macarthur/Camden NSW — zone 3
+  { from: 2745, to: 2786, rating: 1.382 }, // Penrith/Blue Mtns fringe — zone 3
+  { from: 4000, to: 4399, rating: 1.382 }, // Brisbane metro + SEQ — zone 3
+  { from: 4500, to: 4575, rating: 1.382 }, // Moreton Bay/Sunshine Coast — zone 3
+]
+
+/**
+ * PURE — resolve the CER STC zone rating for a postcode: exact table hit
+ * first, then the first matching range, else 0 (no rebate — and the
+ * stc_zone_missing guardrail flags the estimate for review rather than
+ * letting a rebate-free price publish silently).
+ */
+export function resolveStcZoneRating(
+  postcode: string,
+  config: Pick<SolarConfig, 'zone_table' | 'zone_ranges'>,
+): number {
+  const exact = config.zone_table[postcode]
+  if (typeof exact === 'number' && exact > 0) return exact
+  const n = Number.parseInt(postcode, 10)
+  if (!Number.isFinite(n)) return 0
+  for (const r of config.zone_ranges ?? []) {
+    if (n >= r.from && n <= r.to && r.rating > 0) return r.rating
+  }
+  return 0
+}
+
 // ── Shipped default solar rate card ($/kW DC installed, ex-GST) ────────
 const DEFAULT_RATE_CARD: SolarRateCard = {
   install_rate_per_kw: {
@@ -60,10 +95,11 @@ const DEFAULT_RATE_CARD: SolarRateCard = {
 }
 
 export const DEFAULT_SOLAR_CONFIG: SolarConfig = {
-  version: 'solar-config-2026-06-08',
-  effective_date: '2026-06-08',
+  version: 'solar-config-2026-06-12',
+  effective_date: '2026-06-12',
   deeming_schedule: DEEMING_SCHEDULE,
   zone_table: ZONE_TABLE,
+  zone_ranges: ZONE_RANGES,
   stc_price_aud: 38,
   feed_in: {
     by_network: {
@@ -273,7 +309,7 @@ export function validateSolarConfig(
   return { ok: true, config }
 }
 
-export const __test_only__ = { DEEMING_SCHEDULE, ZONE_TABLE, DEFAULT_RATE_CARD }
+export const __test_only__ = { DEEMING_SCHEDULE, ZONE_TABLE, ZONE_RANGES, DEFAULT_RATE_CARD }
 
 // ── DB-backed config loader ──────────────────────────────────────────────────
 // The route calls loadSolarConfig(supabase) to retrieve the active config.

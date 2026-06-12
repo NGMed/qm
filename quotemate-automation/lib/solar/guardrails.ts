@@ -124,6 +124,24 @@ export function checkRoofAreaConsistency(roof: SolarRoofFacts): string[] {
 }
 
 /**
+ * PURE — a priced tier whose STC zone never resolved (rating 0 while the
+ * SRES still deems > 0 years) is being quoted WITHOUT the rebate the
+ * customer is legally entitled to — they would overpay by the full STC
+ * value. This used to fail silently (the 670 London Road, Chandler 4154
+ * gap); now it flags for tradie review until the zone table/ranges are
+ * extended and the estimate re-drafted.
+ */
+export function checkStcZoneResolved(tier: SolarPriceTier): string[] {
+  if (tier.stc.deeming_years <= 0) return [] // SRES ended — 0 certs is correct
+  if (tier.stc.zone_rating > 0) return []
+  return [
+    `stc_zone_missing:${tier.tier}: no STC zone rating resolved for this postcode — ` +
+      'the rebate was not subtracted, so the customer would overpay. ' +
+      'Extend the STC zone table and re-draft.',
+  ]
+}
+
+/**
  * PURE — run every deterministic output check across an entire
  * SolarEstimate and return the flat list of human-readable breaches
  * (spec §7). An empty array means the estimate is clean and may publish
@@ -136,6 +154,7 @@ export function runSolarGuardrails(estimate: SolarEstimate): string[] {
   for (const tier of estimate.price.tiers) {
     flags.push(...checkNetIdentity(tier))
     flags.push(...checkGrossPerKwBounds(tier))
+    flags.push(...checkStcZoneResolved(tier))
   }
   for (const econ of estimate.economics.tiers) {
     flags.push(...checkPaybackBounds(econ))

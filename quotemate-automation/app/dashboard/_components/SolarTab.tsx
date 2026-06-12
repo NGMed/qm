@@ -15,7 +15,7 @@
 // Maintain design system: dark navy, vibrant orange accent, all-caps mono.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Copy, Check, Sun, ExternalLink } from 'lucide-react'
+import { Copy, Check, Sun, ExternalLink, RefreshCw } from 'lucide-react'
 import type {
   SolarEstimateStatus,
   SolarEstimateViewModel,
@@ -80,6 +80,10 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
   // Per-token confirm state so each card's button works independently.
   const [confirming, setConfirming] = useState<Record<string, boolean>>({})
   const [confirmError, setConfirmError] = useState<Record<string, string>>({})
+  // Per-token re-draft state (the fix loop for flagged estimates).
+  const [redrafting, setRedrafting] = useState<Record<string, boolean>>({})
+  const [redraftError, setRedraftError] = useState<Record<string, string>>({})
+  const [redraftDone, setRedraftDone] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     if (!accessToken) {
@@ -180,6 +184,57 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
       }
     },
     [accessToken],
+  )
+
+  const redraftEstimate = useCallback(
+    async (token: string) => {
+      if (!accessToken) return
+      setRedrafting((m) => ({ ...m, [token]: true }))
+      setRedraftError((m) => {
+        const next = { ...m }
+        delete next[token]
+        return next
+      })
+      setRedraftDone((m) => {
+        const next = { ...m }
+        delete next[token]
+        return next
+      })
+      try {
+        const res = await fetch(`/api/solar/redraft/${token}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        const json = (await res.json().catch(() => ({}))) as {
+          ok?: boolean
+          guardrail_flags?: string[]
+          error?: string
+        }
+        if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`)
+        const remaining = json.guardrail_flags?.length ?? 0
+        setRedraftDone((m) => ({
+          ...m,
+          [token]:
+            remaining === 0
+              ? 'Re-drafted clean — ready to release.'
+              : `Re-drafted — ${remaining} check${remaining === 1 ? '' : 's'} still open.`,
+        }))
+        // Reload the list so the card reflects the fresh numbers + status.
+        await load()
+      } catch (e) {
+        setRedraftError((m) => ({
+          ...m,
+          [token]: e instanceof Error ? e.message : String(e),
+        }))
+      } finally {
+        setRedrafting((m) => {
+          const next = { ...m }
+          delete next[token]
+          return next
+        })
+      }
+    },
+    [accessToken, load],
   )
 
   return (
@@ -307,16 +362,47 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
                   </div>
 
                   {e.status === 'flagged' && (
-                    <p className="mt-4 border border-warning/40 border-l-4 border-l-warning bg-ink-card px-4 py-3 text-sm text-warning">
-                      {e.guardrailCount} open check
-                      {e.guardrailCount === 1 ? '' : 's'} — adjust the numbers and
-                      re-draft before this can be released.
-                    </p>
+                    <div className="mt-4 border border-warning/40 border-l-4 border-l-warning bg-ink-card px-4 py-3">
+                      <p className="text-sm font-semibold text-warning">
+                        {e.guardrailCount} open check
+                        {e.guardrailCount === 1 ? '' : 's'} blocking release
+                      </p>
+                      {e.guardrailFlags?.length > 0 && (
+                        <ul className="mt-2 space-y-1.5">
+                          {e.guardrailFlags.map((flag, i) => (
+                            <li
+                              key={i}
+                              className="flex items-start gap-2 text-sm leading-relaxed text-text-sec"
+                            >
+                              <span className="mt-0.5 font-mono text-xs font-bold text-warning" aria-hidden>
+                                {String(i + 1).padStart(2, '0')}
+                              </span>
+                              {flag}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="mt-2 text-xs leading-relaxed text-text-dim">
+                        Fix the underlying data (rates, STC zone, config), then
+                        hit Re-draft below — the engine re-prices this estimate
+                        and clears any check the fix resolved.
+                      </p>
+                    </div>
                   )}
 
                   {cErr && (
                     <p className="mt-3 text-sm text-warning">
                       Couldn&apos;t release: {cErr}
+                    </p>
+                  )}
+                  {redraftError[e.token] && (
+                    <p className="mt-3 text-sm text-warning">
+                      Couldn&apos;t re-draft: {redraftError[e.token]}
+                    </p>
+                  )}
+                  {redraftDone[e.token] && (
+                    <p className="mt-3 text-sm text-emerald-300">
+                      {redraftDone[e.token]}
                     </p>
                   )}
 
@@ -339,6 +425,24 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
                         className="inline-flex items-center gap-2 bg-accent px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-accent-press disabled:opacity-60"
                       >
                         {busy ? 'Releasing…' : 'Confirm & release'}
+                      </button>
+                    )}
+                    {e.canRedraft && (
+                      <button
+                        type="button"
+                        onClick={() => void redraftEstimate(e.token)}
+                        disabled={!!redrafting[e.token]}
+                        className={`inline-flex items-center gap-2 px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-[0.14em] transition-colors disabled:opacity-60 ${
+                          e.status === 'flagged'
+                            ? 'bg-accent text-white hover:bg-accent-press'
+                            : 'border border-ink-line text-text-pri hover:border-accent hover:text-accent'
+                        }`}
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 ${redrafting[e.token] ? 'animate-spin' : ''}`}
+                          aria-hidden="true"
+                        />
+                        {redrafting[e.token] ? 'Re-drafting…' : 'Re-draft'}
                       </button>
                     )}
                   </div>
