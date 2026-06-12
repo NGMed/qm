@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildSolarPanelsAfterPrompt,
   deriveSolarLayoutFacts,
+  MARKED_REFERENCE_LABEL,
 } from './panels-after-prompt'
 import type { SolarPanelPlacement, SolarRoofPlane } from './types'
 
@@ -217,5 +218,42 @@ describe('buildSolarPanelsAfterPrompt (layout-grounded)', () => {
     })
     expect(p.user).toContain('north-facing roof plane(s)')
     expect(p.user).not.toContain('PANEL PLACEMENT')
+  })
+})
+
+describe('buildSolarPanelsAfterPrompt (panel-marked reference image)', () => {
+  it('anchors placement on the marked plan when the reference ships', () => {
+    const p = buildSolarPanelsAfterPrompt({
+      panelsCount: 25,
+      systemKwDc: 10,
+      orientation: 'north',
+      layout: deriveSolarLayoutFacts({
+        panels: gridPanels({ rows: 2, cols: 7 }),
+        planes: PLANES,
+        center: SYD,
+        panel_size_m: PANEL_SIZE,
+      }),
+      hasMarkedReference: true,
+    })
+    expect(p.user).toContain('PANEL PLACEMENT PLAN image follows this aerial')
+    expect(p.user).toContain('exactly where each orange rectangle sits')
+    expect(p.user).toContain('Render NO orange markings in the output')
+  })
+
+  it('no reference sentence when the marked image is unavailable', () => {
+    const p = buildSolarPanelsAfterPrompt({
+      panelsCount: 25,
+      systemKwDc: 10,
+      orientation: 'north',
+      hasMarkedReference: false,
+    })
+    expect(p.user).not.toContain('PANEL PLACEMENT PLAN image')
+  })
+
+  it('the reference label tells the model what the rectangles mean', () => {
+    expect(MARKED_REFERENCE_LABEL).toContain('PANEL PLACEMENT PLAN')
+    expect(MARKED_REFERENCE_LABEL).toContain('exact footprint of ONE panel')
+    expect(MARKED_REFERENCE_LABEL).toContain('Do not add panels')
+    expect(MARKED_REFERENCE_LABEL).toContain('NO orange markings')
   })
 })

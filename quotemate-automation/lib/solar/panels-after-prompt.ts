@@ -165,7 +165,25 @@ export type SolarPanelsAfterBrief = {
    * (pre-premium estimates) the brief falls back to orientation-only.
    */
   layout?: SolarPanelsLayoutFact[]
+  /**
+   * True when a panel-marked reference image accompanies the request
+   * (the same aerial with every panel rectangle drawn at its exact
+   * position). The brief then anchors placement on the markers — the
+   * strongest grounding a generative model accepts.
+   */
+  hasMarkedReference?: boolean
 }
+
+/** Label attached to the panel-marked reference image part. Exported so
+ *  the caller and tests use the identical wording. */
+export const MARKED_REFERENCE_LABEL =
+  'REFERENCE — PANEL PLACEMENT PLAN: this is the SAME aerial with every ' +
+  'panel position marked as an orange rectangle. Each orange rectangle ' +
+  'marks the exact footprint of ONE panel — its position, size, ' +
+  'orientation and tilt. Replace every orange rectangle with one ' +
+  'photorealistic solar panel in exactly that spot. Do not add panels ' +
+  'anywhere there is no rectangle. The final image must contain NO ' +
+  'orange markings of any kind.'
 
 /**
  * PURE — the system+user brief for the "panels installed" render.
@@ -184,8 +202,17 @@ export function buildSolarPanelsAfterPrompt(
     'residential solar panels on the existing roof. Everything else stays ' +
     'pixel-faithful to the source photo.'
 
-  // Placement: per-plane engineering facts when geometry exists, else
-  // the legacy orientation-only sentence.
+  // Placement: the marked reference image is the primary anchor when it
+  // exists; the per-plane facts back it up in words; the legacy
+  // orientation-only sentence is the last resort.
+  const referenceBlock = brief.hasMarkedReference
+    ? 'A PANEL PLACEMENT PLAN image follows this aerial: the same photo ' +
+      'with every panel position drawn as an orange rectangle. Place one ' +
+      'photorealistic panel exactly where each orange rectangle sits — ' +
+      'same position, same size, same orientation — and nowhere else. ' +
+      'Render NO orange markings in the output. '
+    : ''
+
   let placementBlock: string
   if (brief.layout && brief.layout.length > 0) {
     const lines = brief.layout.map((f, i) => {
@@ -220,6 +247,7 @@ export function buildSolarPanelsAfterPrompt(
     `Render this exact aerial with ${count} dark monocrystalline solar ` +
     `panels (about ${brief.systemKwDc.toFixed(1)} kW) ` +
     placementBlock +
+    referenceBlock +
     'STRICT RULES: keep the exact same building footprint, roof shape, ' +
     'ridges, valleys and number of structures; keep the ground, driveway, ' +
     'trees, pool, fences, vehicles, neighbouring buildings and the camera ' +

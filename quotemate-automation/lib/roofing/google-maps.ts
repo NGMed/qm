@@ -38,6 +38,18 @@ export type StaticMapInput = {
   scale?: 1 | 2
   /** Markers to draw — list of `{lat, lng, label}`. */
   markers?: Array<{ lat: number; lng: number; label?: string; color?: string }>
+  /**
+   * Closed/open polylines to draw (Static Maps `path` params). Used by
+   * solar's panel-marked reference image: each panel rectangle is one
+   * closed path at its exact geo position. Colors are Static-Maps hex
+   * (`0xRRGGBB` or `0xRRGGBBAA`).
+   */
+  paths?: Array<{
+    points: Array<{ lat: number; lng: number }>
+    color?: string
+    fillColor?: string
+    weight?: number
+  }>
 }
 
 export type StaticMapOpts = {
@@ -95,6 +107,19 @@ export function buildStaticMapUrl(
     const colour = m.color ?? 'orange'
     const label = m.label ? `|label:${m.label.charAt(0).toUpperCase()}` : ''
     params.append('markers', `color:${colour}${label}|${m.lat},${m.lng}`)
+  }
+
+  // Paths — one `path` query entry per polyline/polygon. 6-decimal
+  // precision (~0.1 m) keeps the URL well inside the API's 16 KB cap.
+  for (const p of input.paths ?? []) {
+    if (!p.points || p.points.length < 2) continue
+    const style = [
+      `color:${p.color ?? '0xFF5F00FF'}`,
+      ...(p.fillColor ? [`fillcolor:${p.fillColor}`] : []),
+      `weight:${p.weight ?? 1}`,
+    ].join('|')
+    const pts = p.points.map((pt) => `${pt.lat.toFixed(6)},${pt.lng.toFixed(6)}`).join('|')
+    params.append('path', `${style}|${pts}`)
   }
 
   params.set('key', opts.apiKey)

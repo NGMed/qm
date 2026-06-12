@@ -26,7 +26,9 @@ import { geminiProvider } from '@/lib/ig-engine/providers/gemini'
 import {
   buildSolarPanelsAfterPrompt,
   deriveSolarLayoutFacts,
+  MARKED_REFERENCE_LABEL,
 } from './panels-after-prompt'
+import { buildPanelMarkupPaths } from './panel-marked-map'
 import { resolveSolarOverlayCenter } from './static-map-center'
 import type { SolarEstimate } from './types'
 
@@ -129,16 +131,67 @@ export async function generateSolarPanelsImage(
         })
       : []
 
+    // PANEL-MARKED REFERENCE — the strongest grounding: the same aerial
+    // with every panel rectangle drawn at its exact geo position by
+    // Static Maps (identical shapes to the layout-overlay figure). The
+    // model copies positions from pixels far more reliably than from
+    // words. Best-effort: a fetch miss degrades to the text-only brief.
+    let markedReference: { base64: string; mime: string } | null = null
+    const markupPaths = center
+      ? buildPanelMarkupPaths({
+          panels: estimate.roof.panels ?? [],
+          planes: estimate.roof.planes,
+          panel_size_m: estimate.roof.panel_size_m ?? null,
+          panel_limit: headlineTier.panels_count,
+        })
+      : []
+    if (markupPaths.length > 0 && center) {
+      try {
+        const markedUrl = buildStaticMapUrl(
+          {
+            center,
+            zoom: 20,
+            size: { width: 640, height: 480 },
+            paths: markupPaths,
+          },
+          { apiKey: process.env.GOOGLE_MAPS_API_KEY! },
+        )
+        const markedRes = await fetch(markedUrl)
+        if (markedRes.ok) {
+          markedReference = {
+            base64: Buffer.from(await markedRes.arrayBuffer()).toString('base64'),
+            mime: markedRes.headers.get('content-type') ?? 'image/png',
+          }
+        } else {
+          console.warn('[solar/panels-after] marked-map fetch failed', markedRes.status)
+        }
+      } catch (e) {
+        console.warn(
+          '[solar/panels-after] marked-map skipped (non-fatal)',
+          e instanceof Error ? e.message : e,
+        )
+      }
+    }
+
     const prompt = buildSolarPanelsAfterPrompt({
       panelsCount: headlineTier.panels_count,
       systemKwDc: headlineTier.system_kw_dc,
       orientation: estimate.roof.primary_orientation,
       layout,
+      hasMarkedReference: markedReference != null,
     })
     const out = await geminiProvider.renderImage({
       system: prompt.system,
       user: prompt.user,
       sourceImage: { base64: satBytes.toString('base64'), mime: satMime },
+      ...(markedReference
+        ? {
+            reference: {
+              label: MARKED_REFERENCE_LABEL,
+              image: markedReference,
+            },
+          }
+        : {}),
       aspectRatio: '4:3',
     })
 
