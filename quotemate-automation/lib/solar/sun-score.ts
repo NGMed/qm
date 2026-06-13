@@ -72,27 +72,25 @@ export const SUN_SCORE_COPY: Record<SolarSunScoreLabel, string> = {
   limited: 'Limited sun',
 }
 
-/** Marker dot colour per score — shared by the quote page and the PDF
- *  so the on-roof dots and the legend always agree. */
-export const SUN_SCORE_COLORS: Record<SolarSunScoreLabel, string> = {
-  excellent: '#34d399', // emerald
-  good: '#2dd4bf', // teal
-  moderate: '#fbbf24', // amber
-  limited: '#9ca3af', // grey
+/**
+ * Marker dot colour per score — a TRAFFIC-LIGHT scale (green = best place
+ * for panels, through red = poor sun). Shared by the quote-page overlay
+ * and its legend so the on-roof dots and the key always read identically.
+ */
+export const SUN_SCORE_MARKER_COLOR: Record<SolarSunScoreLabel, string> = {
+  excellent: '#22c55e', // green  — best place for panels
+  good: '#84cc16', // lime   — strong sun
+  moderate: '#f59e0b', // amber  — usable, partly shaded
+  limited: '#ef4444', // red    — poor sun, avoid
 }
 
-/**
- * Dot/marker colour per score — shared by the quote page overlay, the
- * PDF figure and the legend, so the scale reads identically everywhere.
- * Follows the heatmap's own ramp (brighter = more sun): gold → orange →
- * teal → dim grey.
- */
-export const SUN_SCORE_COLOR: Record<SolarSunScoreLabel, string> = {
-  excellent: '#FFC83D',
-  good: '#FF7A45',
-  moderate: '#14B8A6',
-  limited: '#7A8699',
-}
+/** Legend / display order, best → worst. */
+export const SUN_SCORE_ORDER: readonly SolarSunScoreLabel[] = [
+  'excellent',
+  'good',
+  'moderate',
+  'limited',
+]
 
 /**
  * PURE — derive the sun-score view from roof facts. Returns scores with

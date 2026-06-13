@@ -17,7 +17,6 @@ import type { SolarEstimate } from './types'
 import {
   deriveSolarSunScores,
   SUN_SCORE_COPY,
-  SUN_SCORE_COLORS,
   type SolarSunScoreLabel,
 } from './sun-score'
 import { orientationLabel } from './hero-overlay'
@@ -43,7 +42,7 @@ export type SolarSunMarker = {
   orientation: string
   /** e.g. "Excellent sun". */
   score_copy: string
-  /** Raw score label — drives the dot colour (SUN_SCORE_COLOR). */
+  /** Raw score label — drives the dot colour (SUN_SCORE_MARKER_COLOR). */
   score_label: SolarSunScoreLabel
   area_m2: number
   relative_pct: number
