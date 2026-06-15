@@ -120,6 +120,22 @@ export type SolarEstimateRawRow = {
   quote_variant?: string | null
   /** Felt map provisioning record (felt-variant rows only). */
   felt?: SolarFeltRowSummary
+  /**
+   * Pylon STC cross-check, projected from estimate.context.pylon_stc_check.
+   * The /api/tenant/solar route MUST project this as a top-level alias via the
+   * arrow operator — `pylon_stc_check:estimate->context->pylon_stc_check` —
+   * exactly like the sibling `pylon_opportunity` / `opensolar_project`
+   * projections. PostgREST returns the value AT the path under the alias key,
+   * NOT a re-nested `{ context: { pylon_stc_check } }` object. (The `name(cols)`
+   * parenthesis form is foreign-table embedding and 400s against this jsonb
+   * column.) Field names mirror SolarEstimateContext.pylon_stc_check; null when
+   * the Pylon STC cross-check was disabled/unavailable.
+   */
+  pylon_stc_check?: {
+    zone_rating?: number | null
+    deeming_period?: number | null
+    verified?: boolean
+  } | null
 }
 
 /** The lean, client-safe view model the SolarTab renders per card. */
@@ -129,6 +145,17 @@ export type SolarEstimateViewModel = {
   address: string | null
   systemKw: number | null
   netIncGst: number | null
+  stcCertificates: number | null
+  /** Dollar STC rebate already subtracted from netIncGst; null when no priced
+   *  tier / no STC breakdown. Shown so the dashboard matches the SMS + customer
+   *  page ("net after STC rebate" — the rebate is already off Net). */
+  stcRebateAud: number | null
+  /** Pylon-verified STC zone rating (1.382...1.622); null when unverified. */
+  stcZoneRating: number | null
+  /** Deeming period years from the STC calc; null when unverified. */
+  stcDeemingPeriod: number | null
+  /** True when Pylon verified the STC count. */
+  stcVerified: boolean
   status: SolarEstimateStatus
   guardrailCount: number
   /** The open checks, verbatim — rendered on flagged cards so the tradie
@@ -186,6 +213,17 @@ export function mapSolarEstimateRow(args: {
     (priceTier?.system_kw_dc ?? sizingTier?.system_kw_dc ?? null) as number | null
   const netIncGst = (priceTier?.net_inc_gst ?? null) as number | null
 
+  // STC certificate count + dollar rebate come from the deterministic price
+  // tier (engine = source of truth — present whether or not Pylon is enabled).
+  // The zone rating / deeming period / verified flag come from the optional
+  // Pylon cross-check, projected to the top-level `pylon_stc_check` alias.
+  const stcCertificates = (priceTier?.stc?.certificates ?? null) as number | null
+  const stcRebateAud = (priceTier?.stc?.rebate_aud ?? null) as number | null
+  const pylonStcCheck = row.pylon_stc_check
+  const stcZoneRating = (pylonStcCheck?.zone_rating ?? null) as number | null
+  const stcDeemingPeriod = (pylonStcCheck?.deeming_period ?? null) as number | null
+  const stcVerified = pylonStcCheck?.verified ?? false
+
   const status = deriveSolarEstimateStatus(row)
   const guardrailFlags = solarGuardrailFlags(row.guardrail_flags)
 
@@ -195,6 +233,11 @@ export function mapSolarEstimateRow(args: {
     address: row.address?.trim() || null,
     systemKw,
     netIncGst,
+    stcCertificates,
+    stcRebateAud,
+    stcZoneRating,
+    stcDeemingPeriod,
+    stcVerified,
     status,
     guardrailCount: guardrailFlags.length,
     guardrailFlags,

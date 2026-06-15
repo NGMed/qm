@@ -495,7 +495,7 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
                   </div>
 
                   {/* Headline stats */}
-                  <div className="mt-4 grid grid-cols-2 gap-px border border-ink-line bg-ink-line/60 sm:grid-cols-3">
+                  <div className="mt-4 grid grid-cols-2 gap-px border border-ink-line bg-ink-line/60 sm:grid-cols-4">
                     <Stat label="System" value={fmtKw(e.systemKw)} />
                     <Stat label="Net (inc GST)" value={fmtMoney(e.netIncGst)} accent />
                     <Stat
@@ -506,6 +506,30 @@ export function SolarTab({ accessToken, tenantId, appUrl }: Props) {
                           : e.routing === 'auto_quote'
                             ? 'Auto'
                             : 'Tradie review'
+                      }
+                    />
+                    <StatWithHint
+                      label="STC rebate"
+                      value={
+                        e.stcRebateAud != null
+                          ? fmtMoney(e.stcRebateAud)
+                          : e.stcCertificates != null
+                            ? `${e.stcCertificates} certs`
+                            : '—'
+                      }
+                      hint={
+                        e.stcCertificates != null
+                          ? `${e.stcCertificates} certs · already off net`
+                          : 'Already off net'
+                      }
+                      title={
+                        e.stcZoneRating != null
+                          ? `CER zone rating ${e.stcZoneRating.toFixed(3)}${
+                              e.stcDeemingPeriod != null ? ` × ${e.stcDeemingPeriod} deeming yrs` : ''
+                            } — ${e.stcVerified ? 'verified against Pylon' : 'engine estimate (Pylon unconfirmed)'}`
+                          : e.stcVerified
+                            ? 'Verified against Pylon'
+                            : undefined
                       }
                     />
                   </div>
@@ -637,6 +661,34 @@ function Stat({
         className={`mt-1 font-mono text-base font-bold tabular-nums ${accent ? 'text-accent' : 'text-text-pri'}`}
       >
         {value}
+      </div>
+    </div>
+  )
+}
+
+function StatWithHint({
+  label,
+  value,
+  hint,
+  title,
+}: {
+  label: string
+  value: string
+  hint: string
+  /** Optional native tooltip — carries the CER zone coefficient + formula so
+   *  the on-screen hint stays plain-language. */
+  title?: string
+}) {
+  return (
+    <div className="bg-ink-deep px-4 py-3" title={title}>
+      <div className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-text-dim">
+        {label}
+      </div>
+      <div className="mt-1 font-mono text-base font-bold tabular-nums text-text-pri">
+        {value}
+      </div>
+      <div className="mt-0.5 font-mono text-[0.6rem] uppercase tracking-[0.14em] text-text-dim">
+        {hint}
       </div>
     </div>
   )

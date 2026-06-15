@@ -180,5 +180,50 @@ describe('mapSolarEstimateRow', () => {
     })
     expect(vm.systemKw).toBeNull()
     expect(vm.netIncGst).toBeNull()
+    // No price tier → no STC at all.
+    expect(vm.stcCertificates).toBeNull()
+    expect(vm.stcRebateAud).toBeNull()
+    expect(vm.stcVerified).toBe(false)
+  })
+
+  // STC certificate count + dollar rebate ride the deterministic price tier
+  // (engine = source of truth), present regardless of Pylon. The zone rating /
+  // deeming period / verified flag come from the optional Pylon cross-check,
+  // projected to the top-level `pylon_stc_check` alias by the route.
+  const stcPriceTier = {
+    tier: 'better',
+    system_kw_dc: 9.9,
+    net_inc_gst: 10500,
+    stc: { certificates: 92, rebate_aud: 4140 },
+  } as never
+
+  it('PYLON disabled: certs + rebate survive from the price tier, but unverified + zone facts null', () => {
+    const vm = mapSolarEstimateRow({
+      row: { ...baseRow, price: { tiers: [stcPriceTier] } },
+      customerName: null,
+      appUrl: 'https://example.com',
+    })
+    expect(vm.stcCertificates).toBe(92)
+    expect(vm.stcRebateAud).toBe(4140)
+    expect(vm.stcVerified).toBe(false)
+    expect(vm.stcZoneRating).toBeNull()
+    expect(vm.stcDeemingPeriod).toBeNull()
+  })
+
+  it('PYLON verified: surfaces zone rating + deeming period from the top-level pylon_stc_check alias', () => {
+    const vm = mapSolarEstimateRow({
+      row: {
+        ...baseRow,
+        price: { tiers: [stcPriceTier] },
+        pylon_stc_check: { verified: true, zone_rating: 1.382, deeming_period: 5 },
+      },
+      customerName: null,
+      appUrl: 'https://example.com',
+    })
+    expect(vm.stcCertificates).toBe(92)
+    expect(vm.stcRebateAud).toBe(4140)
+    expect(vm.stcVerified).toBe(true)
+    expect(vm.stcZoneRating).toBe(1.382)
+    expect(vm.stcDeemingPeriod).toBe(5)
   })
 })
