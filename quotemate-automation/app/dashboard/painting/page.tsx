@@ -16,6 +16,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { getBrowserSupabase } from '@/lib/supabase/client'
+import { AddressAutocomplete } from '../roofing/_components/AddressAutocomplete'
 import { PaintRatesEditor } from '../_components/PaintRatesEditor'
 import { MaterialCheck } from './_components/MaterialCheck'
 import { Paint3DTilesViewer } from './_components/Paint3DTilesViewer'
@@ -94,54 +95,74 @@ export default function PaintingEstimatePage() {
     setScopes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
   }, [])
 
+  // Core estimate run, callable without a form event so the "Recalculate"
+  // affordance (after the tradie edits their rates) can re-run it. The
+  // estimate endpoint re-reads the tenant rate overlay on every call, so a
+  // recalc with unchanged inputs returns the same area at the NEW rates.
+  const runEstimateCore = useCallback(async () => {
+    if (!token) {
+      setErrMsg('Sign in to use the estimate tool.')
+      return
+    }
+    if (!address.trim()) {
+      setErrMsg('Enter a property address.')
+      return
+    }
+    // Recalculate calls this outside the <form>, so the postcode input's
+    // native required/pattern="\d{4}" never fires — guard it here so the
+    // recalc path matches the submit path (else the server bounces it with
+    // a cryptic invalid_request).
+    if (!/^\d{4}$/.test(postcode)) {
+      setErrMsg('Enter a 4-digit postcode.')
+      return
+    }
+    if (scopes.length === 0) {
+      setErrMsg('Pick at least one surface to paint.')
+      return
+    }
+    setBusy(true)
+    setErrMsg(null)
+    setSaveState('idle')
+    setSavedId(null)
+    setSaveErr(null)
+    try {
+      const res = await fetch('/api/painting/estimate', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address: { address, postcode, state: stateCode },
+          inputs: {
+            scopes,
+            coats,
+            condition,
+            ceiling_height: ceiling,
+            storeys,
+            colour_change: colourChange,
+            manual_floor_area_m2: manualArea ? Number(manualArea) : null,
+          },
+          source: tab,
+          use_mock_provider: useMock,
+        }),
+      })
+      const json = (await res.json()) as EstimateResponse
+      setResp(json)
+      if (json.ok !== true) {
+        if ('detail' in json) setErrMsg(json.detail)
+        else if ('error' in json) setErrMsg(json.error)
+      }
+    } catch (err) {
+      setErrMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [token, address, postcode, stateCode, scopes, coats, condition, ceiling, storeys, colourChange, manualArea, tab, useMock])
+
   const runEstimate = useCallback(
-    async (e: React.FormEvent) => {
+    (e: React.FormEvent) => {
       e.preventDefault()
-      if (!token) {
-        setErrMsg('Sign in to use the estimate tool.')
-        return
-      }
-      if (scopes.length === 0) {
-        setErrMsg('Pick at least one surface to paint.')
-        return
-      }
-      setBusy(true)
-      setErrMsg(null)
-      setSaveState('idle')
-      setSavedId(null)
-      setSaveErr(null)
-      try {
-        const res = await fetch('/api/painting/estimate', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            address: { address, postcode, state: stateCode },
-            inputs: {
-              scopes,
-              coats,
-              condition,
-              ceiling_height: ceiling,
-              storeys,
-              colour_change: colourChange,
-              manual_floor_area_m2: manualArea ? Number(manualArea) : null,
-            },
-            source: tab,
-            use_mock_provider: useMock,
-          }),
-        })
-        const json = (await res.json()) as EstimateResponse
-        setResp(json)
-        if (json.ok !== true) {
-          if ('detail' in json) setErrMsg(json.detail)
-          else if ('error' in json) setErrMsg(json.error)
-        }
-      } catch (err) {
-        setErrMsg(err instanceof Error ? err.message : String(err))
-      } finally {
-        setBusy(false)
-      }
+      void runEstimateCore()
     },
-    [token, address, postcode, stateCode, scopes, coats, condition, ceiling, storeys, colourChange, manualArea, tab, useMock],
+    [runEstimateCore],
   )
 
   const estimate = resp && resp.ok === true ? resp.estimate : null
@@ -232,7 +253,25 @@ export default function PaintingEstimatePage() {
         <form onSubmit={runEstimate} className="mt-5 grid gap-7 border border-ink-line bg-ink-card p-7 sm:p-9 md:grid-cols-2">
           <div className="md:col-span-2">
             <Label>Property address</Label>
-            <input required value={address} onChange={(e) => setAddress(e.target.value)} placeholder="28 Greens Rd, Coorparoo" className={INPUT} />
+            <AddressAutocomplete
+              accessToken={token}
+              value={address}
+              onChange={setAddress}
+              onSelect={(s) => {
+                setAddress(s.address)
+                // Only accept a well-formed postcode/state from the
+                // suggestion (symmetric guards) — a malformed provider value
+                // is ignored, leaving whatever the tradie typed.
+                if (s.postcode && /^\d{4}$/.test(s.postcode)) setPostcode(s.postcode)
+                if (s.state && (STATES as readonly string[]).includes(s.state)) {
+                  setStateCode(s.state as (typeof STATES)[number])
+                }
+              }}
+              placeholder="Start typing — e.g. 28 Greens Rd, Coorparoo"
+            />
+            <p className="mt-1.5 font-mono text-[0.7rem] uppercase tracking-[0.12em] text-text-dim">
+              Pick a suggestion to auto-fill postcode &amp; state
+            </p>
           </div>
 
           <div>
@@ -319,7 +358,13 @@ export default function PaintingEstimatePage() {
       </section>
 
       {/* ── Result ────────────────────────────────────────────────── */}
-      {estimate && <ResultBlock estimate={estimate} />}
+      {estimate && (
+        <ResultBlock
+          estimate={estimate}
+          onRecalculate={() => void runEstimateCore()}
+          recalculating={busy}
+        />
+      )}
 
       {/* ── Exterior wall material (Street View) ──────────────────── */}
       {estimate && (
@@ -380,6 +425,19 @@ export default function PaintingEstimatePage() {
             <div className="border-t border-ink-line p-2 sm:p-4">
               <PaintRatesEditor accessToken={token} />
             </div>
+            {estimate && (
+              <div className="flex flex-wrap items-center gap-4 border-t border-ink-line bg-ink-deep px-5 py-5 sm:px-6">
+                <button
+                  type="button"
+                  onClick={() => void runEstimateCore()}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 bg-accent px-6 py-3 font-mono text-sm font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-accent-press disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (<><Spinner /> Recalculating…</>) : (<><span aria-hidden="true">↻</span> Recalculate estimate with these rates</>)}
+                </button>
+                <span className="text-sm text-text-dim">Re-runs the estimate above with your saved rates — no need to re-enter the address.</span>
+              </div>
+            )}
           </details>
         </section>
       )}
@@ -393,13 +451,30 @@ export default function PaintingEstimatePage() {
 
 // ─── Result panel ────────────────────────────────────────────────────
 
-function ResultBlock({ estimate }: { estimate: PaintingEstimate }) {
+function ResultBlock({
+  estimate,
+  onRecalculate,
+  recalculating,
+}: {
+  estimate: PaintingEstimate
+  onRecalculate: () => void
+  recalculating: boolean
+}) {
   const { facts, measurement, price, warnings, provider } = estimate
   return (
     <section className="relative z-10 mx-auto mt-10 max-w-6xl px-6 pb-4 sm:px-10">
       <div className="flex flex-wrap items-center gap-3">
         <span className="font-mono text-[0.8rem] font-semibold uppercase tracking-[0.18em] text-accent">Estimate from {provider}</span>
         <ConfidenceBadge confidence={price.confidence} />
+        <button
+          type="button"
+          onClick={onRecalculate}
+          disabled={recalculating}
+          title="Re-run this estimate with your current saved rates"
+          className="ml-auto inline-flex items-center gap-2 border border-ink-line px-4 py-2 font-mono text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-text-pri transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {recalculating ? (<><Spinner /> Recalculating…</>) : (<><span aria-hidden="true">↻</span> Recalculate</>)}
+        </button>
       </div>
 
       <RoutingStrip routing={price.routing} />
